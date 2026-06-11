@@ -1,6 +1,9 @@
 //! The `wisp` binary: `run`, `check`, `repl`, `lsp` (PRD §8).
 
 mod diag_render;
+mod lsp;
+mod manifest;
+mod repl;
 
 use std::process::ExitCode;
 
@@ -26,14 +29,8 @@ fn main() -> ExitCode {
             };
             cmd_check(file)
         }
-        Some("repl") => {
-            eprintln!("wisp repl lands with milestone M6");
-            ExitCode::from(2)
-        }
-        Some("lsp") => {
-            eprintln!("wisp lsp lands with milestone M6");
-            ExitCode::from(2)
-        }
+        Some("repl") => repl::run(default_context(Vec::new())),
+        Some("lsp") => lsp::run(default_context(Vec::new())),
         Some("--version") | Some("-V") => {
             println!("wisp {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -109,7 +106,13 @@ fn cmd_check(path: &str) -> ExitCode {
         Ok(s) => s,
         Err(c) => return c,
     };
-    let ctx = default_context(Vec::new());
+    let mut ctx = default_context(Vec::new());
+    // `wisp check` honors wisp.toml's .wispi interfaces (PRD §8/§9.1).
+    if let Some(m) = manifest::find(std::path::Path::new(path)) {
+        let mut reg = ctx.registry().clone();
+        manifest::load_interfaces(&m, &mut reg);
+        ctx = wisp::Context::from_registry(reg);
+    }
     match ctx.compile_verbose(&source) {
         Ok((_unit, warnings)) => {
             diag_render::render(path, &source, &warnings);

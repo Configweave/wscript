@@ -41,6 +41,12 @@ pub use wisp_vm::RuntimeError;
 #[doc(hidden)]
 pub use wisp_core as core;
 
+// Re-exports per PRD §2: the umbrella exposes compiler, vm and std.
+pub use wisp_compiler as compiler;
+#[cfg(feature = "std")]
+pub use wisp_std as std_modules;
+pub use wisp_vm as vm;
+
 /// Everything that can go wrong embedding wisp.
 #[derive(Debug)]
 pub enum Error {
@@ -123,6 +129,14 @@ impl Context {
 
     pub fn registry(&self) -> &Registry {
         &self.registry
+    }
+
+    /// Build a context from an already-assembled registry (used by tools
+    /// that merge `.wispi` interface registrations).
+    pub fn from_registry(registry: Registry) -> Context {
+        Context {
+            registry: Arc::new(registry),
+        }
     }
 
     /// Render every registered module / function / type / const signature

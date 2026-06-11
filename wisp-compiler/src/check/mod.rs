@@ -243,6 +243,12 @@ pub struct CheckResult {
     pub vtables: Vec<Vec<u32>>,
     pub impl_maps: ImplMaps,
     pub exports: HashMap<String, (u32, FnSig)>,
+    /// Reference → definition span (locals and script functions), for the
+    /// LSP's goto-definition.
+    pub def_spans: HashMap<NodeId, Span>,
+    /// Script methods per type (inherent + trait impls), for the LSP's
+    /// completion.
+    pub methods_by_type: HashMap<DefId, Vec<(String, FnSig)>>,
 }
 
 // ----------------------------------------------------------------- scope
@@ -378,6 +384,7 @@ impl<'a> Checker<'a> {
         self.collect_type_names();
         self.fill_type_defs();
         self.collect_fns();
+        self.collect_methods_by_type();
         self.validate_derives();
         self.check_bodies();
         self.collect_exports();
@@ -1052,6 +1059,31 @@ impl<'a> Checker<'a> {
         FnSig::new(params, ret)
     }
 
+    fn collect_methods_by_type(&mut self) {
+        for (&def, table) in &self.inherent {
+            let entry = self.out.methods_by_type.entry(def).or_default();
+            for (name, &proto) in table {
+                entry.push((name.clone(), self.out.fn_infos[proto as usize].sig.clone()));
+            }
+        }
+        for (&(def, _trait_id), protos) in &self.trait_impls {
+            let entry = self.out.methods_by_type.entry(def).or_default();
+            for &proto in protos {
+                let info = &self.out.fn_infos[proto as usize];
+                let name = info
+                    .name
+                    .rsplit("::")
+                    .next()
+                    .unwrap_or(&info.name)
+                    .to_string();
+                entry.push((name, info.sig.clone()));
+            }
+        }
+        for methods in self.out.methods_by_type.values_mut() {
+            methods.sort_by(|a, b| a.0.cmp(&b.0));
+        }
+    }
+
     fn validate_derives(&mut self) {
         let entries: Vec<(DefId, Derives)> =
             self.derives.iter().map(|(k, v)| (*k, *v)).collect();
@@ -1543,7 +1575,6 @@ impl<'a> Checker<'a> {
     }
 
     /// Span of a local's definition (for LSP goto-definition).
-    #[allow(dead_code)] // consumed by the LSP (M6)
     pub(crate) fn lookup_var_span(&self, name: &str) -> Option<Span> {
         for scope in self.scopes.iter().rev() {
             if let Some(b) = scope.bindings.get(name) {

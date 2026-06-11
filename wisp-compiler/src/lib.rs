@@ -7,6 +7,7 @@ pub mod emit;
 pub mod lexer;
 pub mod parser;
 pub mod token;
+pub mod wispi;
 
 use wisp_core::bytecode::CompiledUnit;
 use wisp_core::diag::{Diagnostic, Severity};

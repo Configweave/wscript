@@ -247,3 +247,13 @@ fn weak_refs() {
 fn no_impls_for_builtins_or_host() {
     fails_with("impl Option { fn f(self) {} }\nfn main() {}", "E0206");
 }
+
+#[test]
+fn annotated_let_checks_init() {
+    fails_with("fn main() { let x: string = 5 }", "E0220");
+    ok("fn main() { let x: float = 1.5 }");
+    // dyn coercion at annotated-let boundaries
+    ok("trait T { fn f(self) -> int }\nstruct S { v: int }\n\
+        impl T for S { fn f(self) -> int { self.v } }\n\
+        fn main() { let d: dyn T = S { v: 1 }\n d.f(); }");
+}

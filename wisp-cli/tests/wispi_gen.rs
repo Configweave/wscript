@@ -50,3 +50,33 @@ fn std_wispi_parses_with_the_script_parser() {
         parsed.diags
     );
 }
+
+#[test]
+fn scripts_typecheck_against_wispi_alone() {
+    // PRD §9.1: the LSP/check can typecheck against interfaces with no
+    // live host functions at all.
+    let text = current_interface();
+    let mut reg = wisp::Registry::new();
+    let (diags, _index) = wisp_compiler::wispi::load(&text, &mut reg);
+    assert!(diags.is_empty(), "{diags:?}");
+
+    let ok = wisp_compiler::compile(
+        "use math\nuse json\nfn main() -> float { \
+             let v = json::parse(\"1\").unwrap()\n \
+             math::abs(v.as_float().unwrap_or(0.0)) }",
+        &reg,
+    );
+    assert!(ok.is_ok());
+
+    // Misuse is still a type error.
+    let err = wisp_compiler::compile("use math\nfn main() { math::abs(\"x\"); }", &reg);
+    assert!(err.is_err());
+
+    // Running against stubs faults rather than panicking.
+    let unit = wisp_compiler::compile("use math\nfn main() -> float { math::abs(-1.0) }", &reg)
+        .unwrap()
+        .unit;
+    let mut vm = wisp_vm::Vm::new(&reg);
+    let result = vm.call_name(&unit, "main", vec![]);
+    assert!(result.is_err());
+}

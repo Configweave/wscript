@@ -197,10 +197,13 @@ impl DefTable {
     }
 
     pub fn name_of(&self, id: DefId) -> &str {
-        match &self.defs[id.index()] {
-            DefKind::Struct(s) => &s.name,
-            DefKind::Enum(e) => &e.name,
-            DefKind::Trait(t) => &t.name,
+        match self.defs.get(id.index()) {
+            Some(DefKind::Struct(s)) => &s.name,
+            Some(DefKind::Enum(e)) => &e.name,
+            Some(DefKind::Trait(t)) => &t.name,
+            // Defensive: values can outlive the table that defined them
+            // (e.g. REPL lines); never panic while rendering.
+            None => "<unknown type>",
         }
     }
 

@@ -29,9 +29,17 @@ impl<'a> Checker<'a> {
                     id,
                 } => {
                     let ann = ty.as_ref().map(|t| self.resolve_type(t));
-                    let init_ty = self.check_expr(init, ann.as_ref());
+                    let init_ty = match &ann {
+                        Some(expected) => {
+                            // Annotation is the source of truth; the
+                            // initializer must fit it (incl. dyn coercion).
+                            self.check_coerce(init, expected);
+                            expected.clone()
+                        }
+                        None => self.check_expr(init, None),
+                    };
                     let var_ty = ann.unwrap_or(init_ty.clone());
-                    if matches!(init_ty, Type::Never) {
+                    if matches!(self.resolve(&init_ty), Type::Never) {
                         diverged = true;
                     }
                     let local = self.declare_local(name, var_ty.clone());
@@ -360,6 +368,9 @@ impl<'a> Checker<'a> {
             [single] => {
                 if let Some((res, ty)) = self.lookup_var(&single.name) {
                     self.out.var_refs.insert(e.id, res);
+                    if let Some(span) = self.lookup_var_span(&single.name) {
+                        self.out.def_spans.insert(e.id, span);
+                    }
                     return ty;
                 }
                 if single.name == "self" {
@@ -388,7 +399,9 @@ impl<'a> Checker<'a> {
                 }
                 if let Some(proto) = self.fn_by_name(&single.name) {
                     self.out.paths.insert(e.id, PathRes::FnValue(proto));
-                    let sig = self.out.fn_infos[proto as usize].sig.clone();
+                    let info = &self.out.fn_infos[proto as usize];
+                    self.out.def_spans.insert(e.id, info.span);
+                    let sig = info.sig.clone();
                     return Type::Fn(Box::new(sig));
                 }
                 if single.name == "None" {
@@ -1072,6 +1085,9 @@ impl<'a> Checker<'a> {
                 // Locals (closure values) shadow functions.
                 if let Some((res, ty)) = self.lookup_var(&single.name) {
                     self.out.var_refs.insert(callee.id, res);
+                    if let Some(span) = self.lookup_var_span(&single.name) {
+                        self.out.def_spans.insert(callee.id, span);
+                    }
                     self.record_type(callee.id, ty.clone());
                     let ret = self.check_value_call(e, &ty, callee.span, args);
                     return Some((CallKind::Value, ret));
@@ -1084,7 +1100,9 @@ impl<'a> Checker<'a> {
                     return Some((CallKind::Host(idx), sig.ret));
                 }
                 if let Some(proto) = self.fn_by_name(&single.name) {
-                    let sig = self.out.fn_infos[proto as usize].sig.clone();
+                    let info = &self.out.fn_infos[proto as usize];
+                    self.out.def_spans.insert(callee.id, info.span);
+                    let sig = info.sig.clone();
                     self.check_args(e.span, &format!("`{}`", single.name), &sig.params, args);
                     return Some((CallKind::Proto(proto), sig.ret));
                 }

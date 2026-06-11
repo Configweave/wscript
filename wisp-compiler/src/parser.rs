@@ -1244,8 +1244,19 @@ impl Parser {
                     let name = match self.expect_ident("method or field name after `.`") {
                         Some(n) => n,
                         None => {
+                            // Keep the receiver in the tree — the LSP needs
+                            // its type for `.` completions mid-typing.
                             let span = expr.span;
-                            return self.mk(ExprKind::Error, span);
+                            return self.mk(
+                                ExprKind::Field {
+                                    obj: Box::new(expr),
+                                    name: Ident {
+                                        name: String::new(),
+                                        span,
+                                    },
+                                },
+                                span,
+                            );
                         }
                     };
                     if self.eat(&TokenKind::LParen) {
