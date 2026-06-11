@@ -48,6 +48,9 @@ pub struct StructDef {
     pub opaque: bool,
     /// Registered by the host rather than declared in script.
     pub host: bool,
+    /// For host-registered types: the Rust `TypeId`, so conversions can
+    /// locate the def for their type in any context.
+    pub rust_type: Option<std::any::TypeId>,
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +58,7 @@ pub struct EnumDef {
     pub name: String,
     pub variants: Vec<VariantDef>,
     pub host: bool,
+    pub rust_type: Option<std::any::TypeId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +121,7 @@ impl DefTable {
                 },
             ],
             host: false,
+            rust_type: None,
         }));
         defs.push(DefKind::Enum(EnumDef {
             name: "Result".into(),
@@ -133,6 +138,7 @@ impl DefTable {
                 },
             ],
             host: false,
+            rust_type: None,
         }));
         // Operator traits (PRD §3.7). `Self` is Param(0) in these signatures;
         // impls provide concrete types which the checker shape-checks.
@@ -221,6 +227,16 @@ impl DefTable {
             DefKind::Trait(t) => Some(t),
             _ => None,
         }
+    }
+
+    /// Find a host-registered def by its Rust `TypeId`.
+    pub fn by_rust_type(&self, ty: std::any::TypeId) -> Option<DefId> {
+        self.defs.iter().position(|d| match d {
+            DefKind::Struct(s) => s.rust_type == Some(ty),
+            DefKind::Enum(e) => e.rust_type == Some(ty),
+            DefKind::Trait(_) => false,
+        })
+        .map(|i| DefId(i as u32))
     }
 
     pub fn len(&self) -> usize {

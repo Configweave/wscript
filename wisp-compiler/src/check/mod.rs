@@ -475,6 +475,7 @@ impl<'a> Checker<'a> {
                         fields: vec![],
                         opaque: false,
                         host: false,
+                        rust_type: None,
                     }),
                 ),
                 Item::Enum(e) => (
@@ -484,6 +485,7 @@ impl<'a> Checker<'a> {
                         name: e.name.name.clone(),
                         variants: vec![],
                         host: false,
+                        rust_type: None,
                     }),
                 ),
                 Item::Trait(t) => (
