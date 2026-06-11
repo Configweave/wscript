@@ -17,7 +17,10 @@ fn codes(src: &str) -> Vec<&'static str> {
 
 fn ok(src: &str) {
     let result = codes(src);
-    assert!(result.is_empty(), "expected clean compile, got {result:?}\n--- src ---\n{src}");
+    assert!(
+        result.is_empty(),
+        "expected clean compile, got {result:?}\n--- src ---\n{src}"
+    );
 }
 
 fn fails_with(src: &str, code: &str) {
@@ -77,11 +80,22 @@ fn call_arity_and_types() {
 #[test]
 fn struct_literals() {
     let s = "struct P { x: int, y: int }\n";
-    ok(&format!("{s}fn main() -> int {{ let p = P {{ x: 1, y: 2 }}\n p.x }}"));
+    ok(&format!(
+        "{s}fn main() -> int {{ let p = P {{ x: 1, y: 2 }}\n p.x }}"
+    ));
     fails_with(&format!("{s}fn main() {{ P {{ x: 1 }} }}"), "E0247");
-    fails_with(&format!("{s}fn main() {{ P {{ x: 1, y: 2, z: 3 }} }}"), "E0247");
-    fails_with(&format!("{s}fn main() {{ P {{ x: 1, y: \"s\" }} }}"), "E0220");
-    fails_with(&format!("{s}fn main() {{ let p = P {{ x: 1, y: 2 }}\n p.z }}"), "E0244");
+    fails_with(
+        &format!("{s}fn main() {{ P {{ x: 1, y: 2, z: 3 }} }}"),
+        "E0247",
+    );
+    fails_with(
+        &format!("{s}fn main() {{ P {{ x: 1, y: \"s\" }} }}"),
+        "E0220",
+    );
+    fails_with(
+        &format!("{s}fn main() {{ let p = P {{ x: 1, y: 2 }}\n p.z }}"),
+        "E0244",
+    );
 }
 
 #[test]
@@ -97,7 +111,9 @@ fn enums_and_match() {
     );
     // Guards never count toward exhaustiveness.
     fails_with(
-        &format!("{e}fn main() {{ match E::A {{ E::A => (), E::B(_) => (), E::C {{ .. }} if true => () }} }}"),
+        &format!(
+            "{e}fn main() {{ match E::A {{ E::A => (), E::B(_) => (), E::C {{ .. }} if true => () }} }}"
+        ),
         "E0260",
     );
     // Unknown variant.
@@ -125,9 +141,14 @@ fn nested_exhaustiveness() {
 #[test]
 fn option_result_and_try() {
     ok("fn f() -> Option[int] { Some(1) }\nfn g() -> Option[int] { Some(f()? + 1) }\nfn main() {}");
-    ok("fn f() -> Result[int, string] { Ok(1) }\nfn g() -> Result[int, string] { Ok(f()? + 1) }\nfn main() {}");
+    ok(
+        "fn f() -> Result[int, string] { Ok(1) }\nfn g() -> Result[int, string] { Ok(f()? + 1) }\nfn main() {}",
+    );
     // ? requires matching return type.
-    fails_with("fn f() -> Option[int] { Some(1) }\nfn g() -> int { f()? }\nfn main() {}", "E0249");
+    fails_with(
+        "fn f() -> Option[int] { Some(1) }\nfn g() -> int { f()? }\nfn main() {}",
+        "E0249",
+    );
     // Error types must line up.
     fails_with(
         "fn f() -> Result[int, string] { Ok(1) }\nfn g() -> Result[int, int] { Ok(f()?) }\nfn main() {}",
@@ -154,7 +175,10 @@ fn strings_not_indexable() {
 #[test]
 fn let_else_must_diverge() {
     ok("fn main() -> int { let Some(x) = Some(1) else { return 0 }\n x }");
-    fails_with("fn main() -> int { let Some(x) = Some(1) else { }\n x }", "E0222");
+    fails_with(
+        "fn main() -> int { let Some(x) = Some(1) else { }\n x }",
+        "E0222",
+    );
 }
 
 #[test]
@@ -173,7 +197,10 @@ fn closure_param_inference() {
 
 #[test]
 fn no_user_generics() {
-    fails_with("struct Box { v: int }\nfn main() { let b: Box[int] = Box { v: 1 } }", "E0215");
+    fails_with(
+        "struct Box { v: int }\nfn main() { let b: Box[int] = Box { v: 1 } }",
+        "E0215",
+    );
 }
 
 #[test]
@@ -228,7 +255,10 @@ fn eq_requires_impl_or_derive() {
 
 #[test]
 fn derives_validated() {
-    fails_with("#[derive(Hash)]\nstruct P { x: int }\nfn main() {}", "E0204");
+    fails_with(
+        "#[derive(Hash)]\nstruct P { x: int }\nfn main() {}",
+        "E0204",
+    );
     fails_with("#[derive(Ord)]\nstruct P { x: int }\nfn main() {}", "E0204"); // Ord needs Eq
     fails_with(
         "#[derive(Eq)]\nstruct P { f: fn() -> int }\nfn main() {}",
@@ -238,7 +268,9 @@ fn derives_validated() {
 
 #[test]
 fn weak_refs() {
-    ok("struct N { v: int }\nfn main() { let n = N { v: 1 }\n let w: weak[N] = weak(n)\n w.upgrade(); }");
+    ok(
+        "struct N { v: int }\nfn main() { let n = N { v: 1 }\n let w: weak[N] = weak(n)\n w.upgrade(); }",
+    );
     fails_with("fn main() { weak(5); }", "E0213");
     fails_with("fn main() { let w: weak[int] = weak(5) }", "E0213");
 }

@@ -31,10 +31,7 @@ struct Element {
     text: String,
 }
 
-fn parse_children(
-    reader: &mut Reader<&[u8]>,
-    parent: &mut Element,
-) -> Result<(), String> {
+fn parse_children(reader: &mut Reader<&[u8]>, parent: &mut Element) -> Result<(), String> {
     loop {
         match reader.read_event().map_err(|e| e.to_string())? {
             Event::Start(start) => {
@@ -53,9 +50,7 @@ fn parse_children(
                 parent.text.push_str(&text);
             }
             Event::CData(c) => {
-                parent
-                    .text
-                    .push_str(&String::from_utf8_lossy(c.as_ref()));
+                parent.text.push_str(&String::from_utf8_lossy(c.as_ref()));
             }
             Event::End(_) => return Ok(()),
             Event::Eof => return Ok(()),
@@ -71,7 +66,9 @@ fn element_from_start(start: &quick_xml::events::BytesStart) -> Result<Element, 
         let attr = attr.map_err(|e| e.to_string())?;
         attrs.push((
             String::from_utf8_lossy(attr.key.as_ref()).into_owned(),
-            attr.unescape_value().map_err(|e| e.to_string())?.into_owned(),
+            attr.unescape_value()
+                .map_err(|e| e.to_string())?
+                .into_owned(),
         ));
     }
     Ok(Element {
@@ -155,7 +152,11 @@ fn write_element(
     indent: usize,
     pretty: bool,
 ) -> Result<(), String> {
-    let pad = if pretty { "  ".repeat(indent) } else { String::new() };
+    let pad = if pretty {
+        "  ".repeat(indent)
+    } else {
+        String::new()
+    };
     let nl = if pretty { "\n" } else { "" };
     match v {
         DynValue::List(items) => {
@@ -275,8 +276,9 @@ pub fn xml() -> Module {
     m.fn_("to_string", |v: DynValue| -> Result<String, String> {
         value_to_xml(&v, false)
     });
-    m.fn_("to_string_pretty", |v: DynValue| -> Result<String, String> {
-        value_to_xml(&v, true)
-    });
+    m.fn_(
+        "to_string_pretty",
+        |v: DynValue| -> Result<String, String> { value_to_xml(&v, true) },
+    );
     m
 }

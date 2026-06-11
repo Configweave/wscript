@@ -24,15 +24,18 @@ pub fn fs() -> Module {
     m.fn_("write", |path: &str, content: &str| -> Result<(), String> {
         std::fs::write(path, content).map_err(err_str)
     });
-    m.fn_("append", |path: &str, content: &str| -> Result<(), String> {
-        use std::io::Write;
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .and_then(|mut f| f.write_all(content.as_bytes()))
-            .map_err(err_str)
-    });
+    m.fn_(
+        "append",
+        |path: &str, content: &str| -> Result<(), String> {
+            use std::io::Write;
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .and_then(|mut f| f.write_all(content.as_bytes()))
+                .map_err(err_str)
+        },
+    );
     m.fn_("exists", |path: &str| Path::new(path).exists());
     m.fn_("is_file", |path: &str| Path::new(path).is_file());
     m.fn_("is_dir", |path: &str| Path::new(path).is_dir());

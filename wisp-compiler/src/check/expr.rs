@@ -453,8 +453,7 @@ impl<'a> Checker<'a> {
             [first, second, third] => {
                 // module::Enum::Variant — types are ambient, so the module
                 // qualifier is accepted but the enum resolves by name.
-                if self.module_idx(&first.name).is_some()
-                    || self.module_is_registered(&first.name)
+                if self.module_idx(&first.name).is_some() || self.module_is_registered(&first.name)
                 {
                     if let Some(def) = self.enum_by_name(&second.name) {
                         return self.unit_variant_value(e, def, third);
@@ -756,7 +755,9 @@ impl<'a> Checker<'a> {
                 };
                 if let Some(protos) = self.trait_impls.get(&(def, trait_id)) {
                     let proto = protos[0];
-                    self.out.bin_ops.insert(e.id, BinOpKind::ArithCall { proto });
+                    self.out
+                        .bin_ops
+                        .insert(e.id, BinOpKind::ArithCall { proto });
                     Type::Named(def)
                 } else {
                     let name = self.out.defs.name_of(def).to_string();
@@ -900,7 +901,9 @@ impl<'a> Checker<'a> {
             _ => None,
         };
         if let Some(kind) = kind {
-            self.out.bin_ops.insert(e.id, BinOpKind::CmpPrim { kind, op });
+            self.out
+                .bin_ops
+                .insert(e.id, BinOpKind::CmpPrim { kind, op });
             return Type::Bool;
         }
         match &t {
@@ -921,7 +924,9 @@ impl<'a> Checker<'a> {
             Type::Named(def) => {
                 let def = *def;
                 if let Some(&proto) = self.out.impl_maps.cmp.get(&def.0) {
-                    self.out.bin_ops.insert(e.id, BinOpKind::CmpCall { proto, op });
+                    self.out
+                        .bin_ops
+                        .insert(e.id, BinOpKind::CmpCall { proto, op });
                     Type::Bool
                 } else if self.derives.get(&def).is_some_and(|d| d.ord) {
                     self.out.bin_ops.insert(e.id, BinOpKind::CmpValue { op });
@@ -1215,9 +1220,10 @@ impl<'a> Checker<'a> {
             [first, second, third] => {
                 if (self.module_idx(&first.name).is_some()
                     || self.module_is_registered(&first.name))
-                    && let Some(def) = self.enum_by_name(&second.name) {
-                        return self.check_variant_ctor(e, def, third, args);
-                    }
+                    && let Some(def) = self.enum_by_name(&second.name)
+                {
+                    return self.check_variant_ctor(e, def, third, args);
+                }
                 let name = first.name.clone();
                 self.error_unknown_value(first.span, &name);
                 None
@@ -1239,9 +1245,11 @@ impl<'a> Checker<'a> {
         let Some((tag, kind, _)) = self.variant_info(def, &variant.name) else {
             let enum_name = self.out.defs.name_of(def).to_string();
             let vname = variant.name.clone();
-            self.error("E0232", variant.span, format!(
-                "enum `{enum_name}` has no variant `{vname}`"
-            ));
+            self.error(
+                "E0232",
+                variant.span,
+                format!("enum `{enum_name}` has no variant `{vname}`"),
+            );
             return None;
         };
         match kind {
@@ -1262,7 +1270,10 @@ impl<'a> Checker<'a> {
                     "E0233",
                     e.span,
                     format!("variant `{vname}` takes no payload"),
-                    format!("write `{}::{vname}` without parentheses", self.out.defs.name_of(def)),
+                    format!(
+                        "write `{}::{vname}` without parentheses",
+                        self.out.defs.name_of(def)
+                    ),
                 );
                 None
             }
@@ -1272,7 +1283,10 @@ impl<'a> Checker<'a> {
                     "E0233",
                     e.span,
                     format!("variant `{vname}` has named fields"),
-                    format!("write `{}::{vname} {{ field: value, ... }}`", self.out.defs.name_of(def)),
+                    format!(
+                        "write `{}::{vname} {{ field: value, ... }}`",
+                        self.out.defs.name_of(def)
+                    ),
                 );
                 None
             }
@@ -1291,7 +1305,11 @@ impl<'a> Checker<'a> {
         };
         match p {
             PreludeFn::Print | PreludeFn::Str => {
-                let name = if p == PreludeFn::Print { "print" } else { "str" };
+                let name = if p == PreludeFn::Print {
+                    "print"
+                } else {
+                    "str"
+                };
                 if args.len() != 1 {
                     arity_err(self, name, "exactly one argument");
                 }
@@ -1342,7 +1360,11 @@ impl<'a> Checker<'a> {
                                  but {} argument{} given",
                                 if placeholders == 1 { "" } else { "s" },
                                 args.len() - 1,
-                                if args.len() - 1 == 1 { " was" } else { "s were" }
+                                if args.len() - 1 == 1 {
+                                    " was"
+                                } else {
+                                    "s were"
+                                }
                             ),
                             "each `{}` consumes one argument; escape literal braces as \
                              `{{` and `}}`",
@@ -1449,7 +1471,9 @@ impl<'a> Checker<'a> {
             other => {
                 // Builtin container/string/Option/Result/weak methods.
                 match methods::builtin_method(other, &name.name) {
-                    Some(scheme) => self.apply_scheme(e, other, &name.name, scheme, name.span, args),
+                    Some(scheme) => {
+                        self.apply_scheme(e, other, &name.name, scheme, name.span, args)
+                    }
                     None => {
                         let ts = self.ty_str(other);
                         let mname = name.name.clone();
@@ -1504,7 +1528,10 @@ impl<'a> Checker<'a> {
             let ok = match c {
                 SchemeConstraint::EqElem => self.eq_able(&elem),
                 SchemeConstraint::OrdElem => {
-                    matches!(elem, Type::Int | Type::Float | Type::Char | Type::Str | Type::Error)
+                    matches!(
+                        elem,
+                        Type::Int | Type::Float | Type::Char | Type::Str | Type::Error
+                    )
                 }
                 SchemeConstraint::StrElem => {
                     matches!(elem, Type::Str | Type::Error) || matches!(elem, Type::Var(_))
@@ -1626,8 +1653,14 @@ impl<'a> Checker<'a> {
                 "E0241",
                 name.span,
                 format!("no method `{mname}` on `dyn {tr}`"),
-                format!("trait `{tr}` declares: {}",
-                    td.methods.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")),
+                format!(
+                    "trait `{tr}` declares: {}",
+                    td.methods
+                        .iter()
+                        .map(|(n, _)| n.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
             );
             for a in args {
                 self.check_expr(a, None);
@@ -1655,7 +1688,9 @@ impl<'a> Checker<'a> {
                         self.error_help(
                             "E0244",
                             name.span,
-                            format!("`{ty_name}` is an opaque host type: fields are not accessible"),
+                            format!(
+                                "`{ty_name}` is an opaque host type: fields are not accessible"
+                            ),
                             "opaque types expose methods only (PRD §6.2)",
                         );
                         return Type::Error;
@@ -1769,11 +1804,7 @@ impl<'a> Checker<'a> {
             }
             other => {
                 let ts = self.ty_str(other);
-                self.error(
-                    "E0245",
-                    e.span,
-                    format!("`{ts}` does not support indexing"),
-                );
+                self.error("E0245", e.span, format!("`{ts}` does not support indexing"));
                 self.check_expr(idx, None);
                 Type::Error
             }
@@ -1829,8 +1860,10 @@ impl<'a> Checker<'a> {
                             self.error_help(
                                 "E0246",
                                 e.span,
-                                format!("`{name}` is an opaque host type and cannot be \
-                                     constructed in script"),
+                                format!(
+                                    "`{name}` is an opaque host type and cannot be \
+                                     constructed in script"
+                                ),
                                 "opaque values are created by host functions (PRD §6.2)",
                             );
                             self.check_lit_fields_poison(fields);
@@ -1890,11 +1923,8 @@ impl<'a> Checker<'a> {
                         .map(|ed| ed.variants[tag as usize].fields.clone())
                         .unwrap_or_default();
                     let payload = self.variant_payload_types(def, tag, &result_ty);
-                    let decl: Vec<(String, Type)> = names
-                        .iter()
-                        .map(|(n, _)| n.clone())
-                        .zip(payload)
-                        .collect();
+                    let decl: Vec<(String, Type)> =
+                        names.iter().map(|(n, _)| n.clone()).zip(payload).collect();
                     (decl, StructLitRes::Variant { def, tag }, result_ty)
                 }
             };
@@ -1916,8 +1946,7 @@ impl<'a> Checker<'a> {
                 None => {
                     let n = fname.name.clone();
                     let ty_name = self.out.defs.name_of(def).to_string();
-                    let avail: Vec<String> =
-                        decl_fields.iter().map(|(n, _)| n.clone()).collect();
+                    let avail: Vec<String> = decl_fields.iter().map(|(n, _)| n.clone()).collect();
                     self.error_help(
                         "E0247",
                         fname.span,
@@ -1940,7 +1969,10 @@ impl<'a> Checker<'a> {
             self.error_help(
                 "E0247",
                 e.span,
-                format!("missing fields in `{ty_name}` literal: {}", missing.join(", ")),
+                format!(
+                    "missing fields in `{ty_name}` literal: {}",
+                    missing.join(", ")
+                ),
                 "every field must be initialized",
             );
         }
@@ -2150,9 +2182,7 @@ impl<'a> Checker<'a> {
             }
         }
 
-        self.out
-            .closures
-            .insert(e.id, super::ClosureRes { proto });
+        self.out.closures.insert(e.id, super::ClosureRes { proto });
         Type::Fn(Box::new(FnSig::new(param_tys, self.resolve(&ret_ty))))
     }
 }

@@ -273,12 +273,16 @@ impl<'a> Loader<'a> {
                     name: format!("{}::{}", im.ty_name.name, f.name.name),
                 }),
             });
-            self.reg.methods.entry(def_id).or_default().push(HostMethod {
-                name: f.name.name.clone(),
-                sig,
-                host_idx: idx,
-                doc: f.doc.clone(),
-            });
+            self.reg
+                .methods
+                .entry(def_id)
+                .or_default()
+                .push(HostMethod {
+                    name: f.name.name.clone(),
+                    sig,
+                    host_idx: idx,
+                    doc: f.doc.clone(),
+                });
         }
     }
 
@@ -334,8 +338,7 @@ impl<'a> Loader<'a> {
                 },
             },
             TypeExprKind::App(ident, args) => {
-                let mut resolved: Vec<Type> =
-                    args.iter().map(|a| self.resolve_type(a)).collect();
+                let mut resolved: Vec<Type> = args.iter().map(|a| self.resolve_type(a)).collect();
                 resolved.resize(2, Type::Error);
                 let b = Box::new(resolved.remove(1));
                 let a = Box::new(resolved.remove(0));

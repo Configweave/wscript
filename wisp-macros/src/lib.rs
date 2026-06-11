@@ -56,9 +56,8 @@ fn parse_options(input: &DeriveInput) -> syn::Result<Options> {
                 opts.name = Some(lit.value());
                 Ok(())
             } else {
-                Err(meta.error(
-                    "unknown #[script(...)] option; supported: opaque, crate_path, name",
-                ))
+                Err(meta
+                    .error("unknown #[script(...)] option; supported: opaque, crate_path, name"))
             }
         })?;
     }
@@ -143,8 +142,11 @@ fn expand_struct(
              (tuple structs are not representable in wisp; use #[script(opaque)])",
         ));
     };
-    let field_idents: Vec<&syn::Ident> =
-        fields.named.iter().map(|f| f.ident.as_ref().unwrap()).collect();
+    let field_idents: Vec<&syn::Ident> = fields
+        .named
+        .iter()
+        .map(|f| f.ident.as_ref().unwrap())
+        .collect();
     let field_names: Vec<String> = field_idents.iter().map(|i| i.to_string()).collect();
     let field_tys: Vec<&syn::Type> = fields.named.iter().map(|f| &f.ty).collect();
     let indices: Vec<usize> = (0..field_idents.len()).collect();
@@ -287,8 +289,11 @@ fn expand_enum(
                 });
             }
             Fields::Named(fields) => {
-                let f_idents: Vec<&syn::Ident> =
-                    fields.named.iter().map(|f| f.ident.as_ref().unwrap()).collect();
+                let f_idents: Vec<&syn::Ident> = fields
+                    .named
+                    .iter()
+                    .map(|f| f.ident.as_ref().unwrap())
+                    .collect();
                 let f_names: Vec<String> = f_idents.iter().map(|i| i.to_string()).collect();
                 let f_tys: Vec<&syn::Type> = fields.named.iter().map(|f| &f.ty).collect();
                 let indices: Vec<usize> = (0..f_idents.len()).collect();

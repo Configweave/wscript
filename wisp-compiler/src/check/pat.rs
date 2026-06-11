@@ -37,8 +37,10 @@ impl<'a> Checker<'a> {
                             self.error_help(
                                 "E0261",
                                 pat.span,
-                                format!("variant `{vname}` has a payload of {n} field{}",
-                                    if n == 1 { "" } else { "s" }),
+                                format!(
+                                    "variant `{vname}` has a payload of {n} field{}",
+                                    if n == 1 { "" } else { "s" }
+                                ),
                                 "destructure the payload, or use `_` to ignore it",
                             );
                             return;
@@ -201,11 +203,7 @@ impl<'a> Checker<'a> {
             }
             (VariantKind::Unit, _) => {
                 let n = vname.name.clone();
-                self.error(
-                    "E0264",
-                    pat.span,
-                    format!("variant `{n}` has no payload"),
-                );
+                self.error("E0264", pat.span, format!("variant `{n}` has no payload"));
             }
             (VariantKind::Tuple, _) => {
                 let n = vname.name.clone();
@@ -261,11 +259,7 @@ impl<'a> Checker<'a> {
             }
             _ => {
                 let n = ty_ident.name.clone();
-                self.error(
-                    "E0263",
-                    pat.span,
-                    format!("`{n}` is not a struct"),
-                );
+                self.error("E0263", pat.span, format!("`{n}` is not a struct"));
                 return;
             }
         };
@@ -310,7 +304,10 @@ impl<'a> Checker<'a> {
                         format!("`{what}` has no field `{n}`"),
                         format!(
                             "available fields: {}",
-                            decl.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>().join(", ")
+                            decl.iter()
+                                .map(|(n, _)| n.clone())
+                                .collect::<Vec<_>>()
+                                .join(", ")
                         ),
                     );
                     order.push(u16::MAX);
@@ -415,7 +412,9 @@ impl<'a> Checker<'a> {
             self.check_pattern(&arm.pat, &scrut_ty);
             let row = vec![self.lower_pattern(&arm.pat)];
             if !unguarded.is_empty()
-                && self.is_useful(&unguarded, &row, std::slice::from_ref(&rt)).is_none()
+                && self
+                    .is_useful(&unguarded, &row, std::slice::from_ref(&rt))
+                    .is_none()
             {
                 self.warn(
                     "W0002",
@@ -454,20 +453,22 @@ impl<'a> Checker<'a> {
         }
         // Exhaustiveness (PRD §3.4: compile error on missing variants).
         if !matches!(rt, Type::Error)
-            && let Some(witness) = self.is_useful(&unguarded, &[DPat::Wild], std::slice::from_ref(&rt)) {
-                let w = witness.first().cloned().unwrap_or_else(|| "_".into());
-                let ts = self.ty_str(&rt);
-                self.error_help(
-                    "E0260",
-                    e.span,
-                    format!("non-exhaustive match: pattern `{w}` is not covered"),
-                    format!(
-                        "add an arm matching `{w}`, or a trailing `_ => ...` arm; note \
+            && let Some(witness) =
+                self.is_useful(&unguarded, &[DPat::Wild], std::slice::from_ref(&rt))
+        {
+            let w = witness.first().cloned().unwrap_or_else(|| "_".into());
+            let ts = self.ty_str(&rt);
+            self.error_help(
+                "E0260",
+                e.span,
+                format!("non-exhaustive match: pattern `{w}` is not covered"),
+                format!(
+                    "add an arm matching `{w}`, or a trailing `_ => ...` arm; note \
                          that arms with `if` guards never count toward exhaustiveness \
                          (matching on `{ts}`)"
-                    ),
-                );
-            }
+                ),
+            );
+        }
         result.unwrap_or(Type::Never)
     }
 
@@ -540,9 +541,7 @@ impl<'a> Checker<'a> {
                 }
                 DPat::Ctor(Ctor::Struct { def, arity }, sub)
             }
-            PatternKind::Or(alts) => {
-                DPat::Or(alts.iter().map(|a| self.lower_pattern(a)).collect())
-            }
+            PatternKind::Or(alts) => DPat::Or(alts.iter().map(|a| self.lower_pattern(a)).collect()),
         }
     }
 

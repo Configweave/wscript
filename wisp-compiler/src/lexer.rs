@@ -114,12 +114,18 @@ impl<'s> Lexer<'s> {
 
     /// Newlines are statement-significant except inside `(` / `[`.
     fn newline_significant(&self) -> bool {
-        !matches!(self.delims.last(), Some(Delim::Paren) | Some(Delim::Bracket))
+        !matches!(
+            self.delims.last(),
+            Some(Delim::Paren) | Some(Delim::Bracket)
+        )
     }
 
     fn emit_newline(&mut self, start: usize) {
         if self.newline_significant()
-            && !matches!(self.tokens.last().map(|t| &t.kind), Some(TokenKind::Newline))
+            && !matches!(
+                self.tokens.last().map(|t| &t.kind),
+                Some(TokenKind::Newline)
+            )
         {
             self.push(TokenKind::Newline, start);
         }
@@ -165,8 +171,12 @@ impl<'s> Lexer<'s> {
             match self.bytes.get(self.pos) {
                 None | Some(b'\n') => {
                     self.diags.push(
-                        Diagnostic::error("E0002", self.span_from(start), "unterminated string literal")
-                            .with_help("close the string with `\"` before the end of the line"),
+                        Diagnostic::error(
+                            "E0002",
+                            self.span_from(start),
+                            "unterminated string literal",
+                        )
+                        .with_help("close the string with `\"` before the end of the line"),
                     );
                     break;
                 }
@@ -379,8 +389,12 @@ impl<'s> Lexer<'s> {
                 Ok(n) => self.push(TokenKind::Int(n), start),
                 Err(_) => {
                     self.diags.push(
-                        Diagnostic::error("E0006", self.span_from(start), "integer literal too large")
-                            .with_help("`int` is a signed 64-bit integer"),
+                        Diagnostic::error(
+                            "E0006",
+                            self.span_from(start),
+                            "integer literal too large",
+                        )
+                        .with_help("`int` is a signed 64-bit integer"),
                     );
                     self.push(TokenKind::Int(0), start);
                 }
@@ -530,9 +544,6 @@ mod tests {
 
     #[test]
     fn string_escapes() {
-        assert_eq!(
-            kinds(r#""a\nb\u{41}""#)[0],
-            TokenKind::Str("a\nbA".into())
-        );
+        assert_eq!(kinds(r#""a\nb\u{41}""#)[0], TokenKind::Str("a\nbA".into()));
     }
 }

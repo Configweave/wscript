@@ -68,7 +68,10 @@ pub enum CallKind {
     Host(u32),
     Prelude(PreludeFn),
     /// Enum variant constructor: `Some(x)`, `Event::Key(c)`.
-    Variant { def: DefId, tag: u32 },
+    Variant {
+        def: DefId,
+        tag: u32,
+    },
     /// Calling a function value: callee is evaluated.
     Value,
 }
@@ -79,7 +82,9 @@ pub enum MethodRes {
     Host(u32),
     Builtin(wisp_core::Builtin),
     /// `dyn Trait` dispatch through the receiver's vtable.
-    Virtual { slot: u16 },
+    Virtual {
+        slot: u16,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -93,7 +98,9 @@ pub enum IndexKind {
     List,
     Map,
     /// User `Index` trait impl.
-    UserGet { proto: u32 },
+    UserGet {
+        proto: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,19 +120,37 @@ pub enum BinOpKind {
     Concat,
     And,
     Or,
-    EqPrim { kind: PrimKind, negate: bool },
+    EqPrim {
+        kind: PrimKind,
+        negate: bool,
+    },
     /// `< <= > >=` on primitives.
-    CmpPrim { kind: PrimKind, op: BinOp },
+    CmpPrim {
+        kind: PrimKind,
+        op: BinOp,
+    },
     /// Structural equality (derived `Eq`, containers).
-    EqValue { negate: bool },
+    EqValue {
+        negate: bool,
+    },
     /// Custom `Eq` impl: direct call.
-    EqCall { proto: u32, negate: bool },
+    EqCall {
+        proto: u32,
+        negate: bool,
+    },
     /// Structural comparison (derived `Ord`).
-    CmpValue { op: BinOp },
+    CmpValue {
+        op: BinOp,
+    },
     /// Custom `Ord` impl: call `cmp`, compare result with 0.
-    CmpCall { proto: u32, op: BinOp },
+    CmpCall {
+        proto: u32,
+        op: BinOp,
+    },
     /// Arithmetic operator trait impl (`Add`…`Rem`).
-    ArithCall { proto: u32 },
+    ArithCall {
+        proto: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -499,8 +524,7 @@ impl<'a> Checker<'a> {
                 .iter()
                 .position(|m| m.name == u.module.name)
             else {
-                let known: Vec<&str> =
-                    self.reg.modules.iter().map(|m| m.name.as_str()).collect();
+                let known: Vec<&str> = self.reg.modules.iter().map(|m| m.name.as_str()).collect();
                 let span = u.module.span;
                 let name = u.module.name.clone();
                 self.error_help(
@@ -517,8 +541,7 @@ impl<'a> Checker<'a> {
             };
             match &u.item {
                 None => {
-                    self.modules_in_scope
-                        .insert(u.module.name.clone(), mod_idx);
+                    self.modules_in_scope.insert(u.module.name.clone(), mod_idx);
                 }
                 Some(item_name) => {
                     let module = &self.reg.modules[mod_idx];
@@ -590,8 +613,17 @@ impl<'a> Checker<'a> {
             if self.type_names.contains_key(&name.name)
                 || matches!(
                     name.name.as_str(),
-                    "int" | "float" | "bool" | "char" | "unit" | "string" | "List" | "Map"
-                        | "Option" | "Result" | "weak"
+                    "int"
+                        | "float"
+                        | "bool"
+                        | "char"
+                        | "unit"
+                        | "string"
+                        | "List"
+                        | "Map"
+                        | "Option"
+                        | "Result"
+                        | "weak"
                 )
             {
                 let span = name.span;
@@ -670,8 +702,7 @@ impl<'a> Checker<'a> {
                                 for f in fs {
                                     if !fseen.insert(f.name.name.clone()) {
                                         let span = f.name.span;
-                                        let msg =
-                                            format!("duplicate field `{}`", f.name.name);
+                                        let msg = format!("duplicate field `{}`", f.name.name);
                                         self.error("E0203", span, msg);
                                         continue;
                                     }
@@ -830,7 +861,12 @@ impl<'a> Checker<'a> {
             DefKind::Trait(_) => {
                 let span = im.ty_name.span;
                 let msg = format!("cannot write an impl block for trait `{}`", im.ty_name.name);
-                self.error_help("E0206", span, msg, "impl blocks target struct or enum types");
+                self.error_help(
+                    "E0206",
+                    span,
+                    msg,
+                    "impl blocks target struct or enum types",
+                );
                 return;
             }
             _ => {
@@ -975,9 +1011,7 @@ impl<'a> Checker<'a> {
                     if actual_params != exp_params.as_slice() || actual.ret != exp_ret {
                         let span = f.sig_span;
                         let exp_str = FnSig::new(exp_params.clone(), exp_ret.clone());
-                        let msg = format!(
-                            "method `{name}` does not match the trait signature"
-                        );
+                        let msg = format!("method `{name}` does not match the trait signature");
                         let help = format!(
                             "trait `{}` declares `fn {name}({}){}`",
                             trait_ident.name,
@@ -1085,8 +1119,7 @@ impl<'a> Checker<'a> {
     }
 
     fn validate_derives(&mut self) {
-        let entries: Vec<(DefId, Derives)> =
-            self.derives.iter().map(|(k, v)| (*k, *v)).collect();
+        let entries: Vec<(DefId, Derives)> = self.derives.iter().map(|(k, v)| (*k, *v)).collect();
         for (id, d) in entries {
             let span = self.def_decl_span(id);
             if d.eq && !self.fields_satisfy(id, |c, t| c.eq_able(t)) {
@@ -1161,8 +1194,7 @@ impl<'a> Checker<'a> {
     }
 
     pub(crate) fn named_has_eq(&self, id: DefId) -> bool {
-        if self.derives.get(&id).is_some_and(|d| d.eq)
-            || self.out.impl_maps.eq.contains_key(&id.0)
+        if self.derives.get(&id).is_some_and(|d| d.eq) || self.out.impl_maps.eq.contains_key(&id.0)
         {
             return true;
         }
@@ -1238,8 +1270,7 @@ impl<'a> Checker<'a> {
                     Some(&id) => match self.out.defs.get(id) {
                         DefKind::Trait(_) => {
                             let span = ident.span;
-                            let msg =
-                                format!("trait `{other}` cannot be used as a type directly");
+                            let msg = format!("trait `{other}` cannot be used as a type directly");
                             self.error_help(
                                 "E0211",
                                 span,
@@ -1310,14 +1341,8 @@ impl<'a> Checker<'a> {
                             k,
                             Type::Int | Type::Bool | Type::Char | Type::Str | Type::Error
                         ) {
-                            let span = args
-                                .first()
-                                .map(|a| a.span)
-                                .unwrap_or(t.span);
-                            let msg = format!(
-                                "`{}` cannot be a map key",
-                                self.ty_str(&k)
-                            );
+                            let span = args.first().map(|a| a.span).unwrap_or(t.span);
+                            let msg = format!("`{}` cannot be a map key", self.ty_str(&k));
                             self.error_help(
                                 "E0214",
                                 span,
@@ -1359,10 +1384,8 @@ impl<'a> Checker<'a> {
                 Some(&id) if self.out.defs.as_trait(id).is_some() => {
                     if self.out.defs.as_trait(id).is_some_and(|t| t.operator) {
                         let span = ident.span;
-                        let msg = format!(
-                            "operator trait `{}` cannot be used as `dyn`",
-                            ident.name
-                        );
+                        let msg =
+                            format!("operator trait `{}` cannot be used as `dyn`", ident.name);
                         self.error("E0211", span, msg);
                         return Type::Error;
                     }
@@ -1656,13 +1679,18 @@ impl<'a> Checker<'a> {
     }
 
     pub(crate) fn current_ret(&self) -> Type {
-        self.fn_states.last().map(|s| s.ret.clone()).unwrap_or(Type::Error)
+        self.fn_states
+            .last()
+            .map(|s| s.ret.clone())
+            .unwrap_or(Type::Error)
     }
 
     pub(crate) fn enter_loop(&mut self) {
-        self.fn_states.last_mut().unwrap().loops.push(LoopCtx {
-            has_break: false,
-        });
+        self.fn_states
+            .last_mut()
+            .unwrap()
+            .loops
+            .push(LoopCtx { has_break: false });
     }
 
     /// Returns whether the loop contained a `break`.
@@ -1690,9 +1718,7 @@ impl<'a> Checker<'a> {
     }
 
     pub(crate) fn in_loop(&self) -> bool {
-        self.fn_states
-            .last()
-            .is_some_and(|s| !s.loops.is_empty())
+        self.fn_states.last().is_some_and(|s| !s.loops.is_empty())
     }
 
     // -------------------------------------------------- closure checking

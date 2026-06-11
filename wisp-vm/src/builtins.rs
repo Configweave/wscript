@@ -147,9 +147,9 @@ impl Vm {
                                     out.push_str(&self.display_value(&v)?);
                                 }
                                 None => {
-                                    return Err(self.fault(
-                                        "fmt: more `{}` placeholders than arguments",
-                                    ));
+                                    return Err(
+                                        self.fault("fmt: more `{}` placeholders than arguments")
+                                    );
                                 }
                             }
                             arg_i += 1;
@@ -180,10 +180,9 @@ impl Vm {
                     None => none(),
                 },
                 other => {
-                    return Err(self.fault(format!(
-                        "type confusion: upgrade on {}",
-                        other.kind_name()
-                    )));
+                    return Err(
+                        self.fault(format!("type confusion: upgrade on {}", other.kind_name()))
+                    );
                 }
             },
             Builtin::IntCast => match &args[0] {
@@ -191,20 +190,18 @@ impl Vm {
                 Value::Float(f) => Value::Int(*f as i64),
                 Value::Char(c) => Value::Int(*c as u32 as i64),
                 other => {
-                    return Err(self.fault(format!(
-                        "int() cannot convert from {}",
-                        other.kind_name()
-                    )));
+                    return Err(
+                        self.fault(format!("int() cannot convert from {}", other.kind_name()))
+                    );
                 }
             },
             Builtin::FloatCast => match &args[0] {
                 Value::Int(n) => Value::Float(*n as f64),
                 Value::Float(f) => Value::Float(*f),
                 other => {
-                    return Err(self.fault(format!(
-                        "float() cannot convert from {}",
-                        other.kind_name()
-                    )));
+                    return Err(
+                        self.fault(format!("float() cannot convert from {}", other.kind_name()))
+                    );
                 }
             },
             Builtin::ValueEq => {
@@ -229,9 +226,7 @@ impl Vm {
                         .map(|c| Value::Str(Rc::from(c.to_string().as_str())))
                         .collect()
                 } else {
-                    s.split(&*sep)
-                        .map(|p| Value::Str(Rc::from(p)))
-                        .collect()
+                    s.split(&*sep).map(|p| Value::Str(Rc::from(p))).collect()
                 };
                 Value::new_list(parts)
             }
@@ -240,9 +235,7 @@ impl Vm {
             Builtin::StrTrimEnd => Value::Str(Rc::from(str_arg!(0).trim_end())),
             Builtin::StrToUpper => Value::Str(Rc::from(str_arg!(0).to_uppercase().as_str())),
             Builtin::StrToLower => Value::Str(Rc::from(str_arg!(0).to_lowercase().as_str())),
-            Builtin::StrStartsWith => {
-                Value::Bool(str_arg!(0).starts_with(&*str_arg!(1)))
-            }
+            Builtin::StrStartsWith => Value::Bool(str_arg!(0).starts_with(&*str_arg!(1))),
             Builtin::StrEndsWith => Value::Bool(str_arg!(0).ends_with(&*str_arg!(1))),
             Builtin::StrContains => Value::Bool(str_arg!(0).contains(&*str_arg!(1))),
             Builtin::StrFind => {
@@ -279,8 +272,7 @@ impl Vm {
                 if cur >= width {
                     Value::Str(s)
                 } else {
-                    let fill: String =
-                        std::iter::repeat_n(pad_char, width - cur).collect();
+                    let fill: String = std::iter::repeat_n(pad_char, width - cur).collect();
                     let result = if b == Builtin::StrPadLeft {
                         format!("{fill}{s}")
                     } else {
@@ -349,9 +341,7 @@ impl Vm {
                 if i < 0 || i as usize >= items.len() {
                     let len = items.len();
                     drop(items);
-                    return Err(self.fault(format!(
-                        "list index {i} out of bounds (len {len})"
-                    )));
+                    return Err(self.fault(format!("list index {i} out of bounds (len {len})")));
                 }
                 items[i as usize] = args[2].clone();
                 Value::Unit
@@ -363,9 +353,7 @@ impl Vm {
                 if i < 0 || i as usize > items.len() {
                     let len = items.len();
                     drop(items);
-                    return Err(self.fault(format!(
-                        "insert index {i} out of bounds (len {len})"
-                    )));
+                    return Err(self.fault(format!("insert index {i} out of bounds (len {len})")));
                 }
                 items.insert(i as usize, args[2].clone());
                 Value::Unit
@@ -377,9 +365,7 @@ impl Vm {
                 if i < 0 || i as usize >= items.len() {
                     let len = items.len();
                     drop(items);
-                    return Err(self.fault(format!(
-                        "remove index {i} out of bounds (len {len})"
-                    )));
+                    return Err(self.fault(format!("remove index {i} out of bounds (len {len})")));
                 }
                 items.remove(i as usize)
             }

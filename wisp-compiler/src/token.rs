@@ -44,17 +44,17 @@ pub enum TokenKind {
     RBrace,
     LBracket,
     RBracket,
-    HashBrace,   // `#{` — map literal
-    Hash,        // `#` — attributes
+    HashBrace, // `#{` — map literal
+    Hash,      // `#` — attributes
     Comma,
     Dot,
-    DotDot,      // `..`
-    DotDotEq,    // `..=`
+    DotDot,   // `..`
+    DotDotEq, // `..=`
     Colon,
     ColonColon,
     Semi,
-    Arrow,       // `->`
-    FatArrow,    // `=>`
+    Arrow,    // `->`
+    FatArrow, // `=>`
     Eq,
     EqEq,
     NotEq,

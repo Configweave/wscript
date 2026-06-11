@@ -160,106 +160,317 @@ pub enum FaultCode {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Instr {
     // ---- constants & moves ----
-    LoadConst { dst: u16, k: u32 },
-    LoadUnit { dst: u16 },
-    LoadBool { dst: u16, v: bool },
+    LoadConst {
+        dst: u16,
+        k: u32,
+    },
+    LoadUnit {
+        dst: u16,
+    },
+    LoadBool {
+        dst: u16,
+        v: bool,
+    },
     /// Small integer immediate (larger ints go through the const table).
-    LoadInt { dst: u16, v: i32 },
-    Move { dst: u16, src: u16 },
+    LoadInt {
+        dst: u16,
+        v: i32,
+    },
+    Move {
+        dst: u16,
+        src: u16,
+    },
 
     // ---- integer arithmetic (wrapping; div/rem fault on zero) ----
-    AddI { dst: u16, a: u16, b: u16 },
-    SubI { dst: u16, a: u16, b: u16 },
-    MulI { dst: u16, a: u16, b: u16 },
-    DivI { dst: u16, a: u16, b: u16 },
-    RemI { dst: u16, a: u16, b: u16 },
-    NegI { dst: u16, src: u16 },
+    AddI {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
+    SubI {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
+    MulI {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
+    DivI {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
+    RemI {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
+    NegI {
+        dst: u16,
+        src: u16,
+    },
 
     // ---- float arithmetic ----
-    AddF { dst: u16, a: u16, b: u16 },
-    SubF { dst: u16, a: u16, b: u16 },
-    MulF { dst: u16, a: u16, b: u16 },
-    DivF { dst: u16, a: u16, b: u16 },
-    RemF { dst: u16, a: u16, b: u16 },
-    NegF { dst: u16, src: u16 },
+    AddF {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
+    SubF {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
+    MulF {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
+    DivF {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
+    RemF {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
+    NegF {
+        dst: u16,
+        src: u16,
+    },
 
     // ---- string ----
-    ConcatStr { dst: u16, a: u16, b: u16 },
+    ConcatStr {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
 
     // ---- bool ----
-    Not { dst: u16, src: u16 },
+    Not {
+        dst: u16,
+        src: u16,
+    },
 
     // ---- comparisons (Gt/Ge are emitted as swapped Lt/Le) ----
-    EqI { dst: u16, a: u16, b: u16 },
-    EqF { dst: u16, a: u16, b: u16 },
-    EqBool { dst: u16, a: u16, b: u16 },
-    EqChar { dst: u16, a: u16, b: u16 },
-    EqStr { dst: u16, a: u16, b: u16 },
-    LtI { dst: u16, a: u16, b: u16 },
-    LeI { dst: u16, a: u16, b: u16 },
-    LtF { dst: u16, a: u16, b: u16 },
-    LeF { dst: u16, a: u16, b: u16 },
-    LtChar { dst: u16, a: u16, b: u16 },
-    LeChar { dst: u16, a: u16, b: u16 },
-    LtStr { dst: u16, a: u16, b: u16 },
-    LeStr { dst: u16, a: u16, b: u16 },
+    EqI {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
+    EqF {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
+    EqBool {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
+    EqChar {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
+    EqStr {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
+    LtI {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
+    LeI {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
+    LtF {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
+    LeF {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
+    LtChar {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
+    LeChar {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
+    LtStr {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
+    LeStr {
+        dst: u16,
+        a: u16,
+        b: u16,
+    },
 
     // ---- control flow ----
-    Jump { off: i32 },
-    JumpIfFalse { cond: u16, off: i32 },
-    JumpIfTrue { cond: u16, off: i32 },
+    Jump {
+        off: i32,
+    },
+    JumpIfFalse {
+        cond: u16,
+        off: i32,
+    },
+    JumpIfTrue {
+        cond: u16,
+        off: i32,
+    },
 
     // ---- calls ----
     /// Call a statically-resolved target with args in `base..base+nargs`.
-    Call { dst: u16, base: u16, nargs: u16, target: CallTarget },
+    Call {
+        dst: u16,
+        base: u16,
+        nargs: u16,
+        target: CallTarget,
+    },
     /// Call a function value (closure) held in register `f`.
-    CallValue { dst: u16, f: u16, base: u16, nargs: u16 },
+    CallValue {
+        dst: u16,
+        f: u16,
+        base: u16,
+        nargs: u16,
+    },
     /// Dynamic dispatch: receiver (a `dyn` value) in `base`, method `slot`
     /// looked up in its vtable.
-    CallVirtual { dst: u16, base: u16, nargs: u16, slot: u16 },
-    Ret { src: u16 },
+    CallVirtual {
+        dst: u16,
+        base: u16,
+        nargs: u16,
+        slot: u16,
+    },
+    Ret {
+        src: u16,
+    },
     RetUnit,
 
     // ---- structs & enums ----
     /// Construct a struct of `def` from `n` field values at `base..`.
-    NewStruct { dst: u16, def: u32, base: u16, n: u16 },
-    GetField { dst: u16, obj: u16, idx: u16 },
-    SetField { obj: u16, idx: u16, src: u16 },
+    NewStruct {
+        dst: u16,
+        def: u32,
+        base: u16,
+        n: u16,
+    },
+    GetField {
+        dst: u16,
+        obj: u16,
+        idx: u16,
+    },
+    SetField {
+        obj: u16,
+        idx: u16,
+        src: u16,
+    },
     /// Construct an enum value of `def`/`tag` from `n` payload values.
-    NewEnum { dst: u16, def: u32, tag: u16, base: u16, n: u16 },
+    NewEnum {
+        dst: u16,
+        def: u32,
+        tag: u16,
+        base: u16,
+        n: u16,
+    },
     /// Load an enum value's tag as an int.
-    GetTag { dst: u16, obj: u16 },
+    GetTag {
+        dst: u16,
+        obj: u16,
+    },
 
     // ---- containers ----
-    NewList { dst: u16, base: u16, n: u16 },
+    NewList {
+        dst: u16,
+        base: u16,
+        n: u16,
+    },
     /// `n` is the number of key/value *pairs*; 2n registers at `base..`.
-    NewMap { dst: u16, base: u16, n: u16 },
+    NewMap {
+        dst: u16,
+        base: u16,
+        n: u16,
+    },
     /// `list[i]` — faults on out-of-bounds (use `.get` for `Option`).
-    ListIndexGet { dst: u16, list: u16, idx: u16 },
-    ListIndexSet { list: u16, idx: u16, src: u16 },
+    ListIndexGet {
+        dst: u16,
+        list: u16,
+        idx: u16,
+    },
+    ListIndexSet {
+        list: u16,
+        idx: u16,
+        src: u16,
+    },
     /// `map[k]` — faults on missing key (use `.get` for `Option`).
-    MapIndexGet { dst: u16, map: u16, key: u16 },
+    MapIndexGet {
+        dst: u16,
+        map: u16,
+        key: u16,
+    },
     /// `map[k] = v` — inserts or overwrites.
-    MapIndexSet { map: u16, key: u16, src: u16 },
+    MapIndexSet {
+        map: u16,
+        key: u16,
+        src: u16,
+    },
 
     // ---- closures & capture cells ----
     /// Box a value into a fresh mutable cell (for captured locals).
-    NewCell { dst: u16, src: u16 },
-    CellGet { dst: u16, cell: u16 },
-    CellSet { cell: u16, src: u16 },
+    NewCell {
+        dst: u16,
+        src: u16,
+    },
+    CellGet {
+        dst: u16,
+        cell: u16,
+    },
+    CellSet {
+        cell: u16,
+        src: u16,
+    },
     /// Instantiate a closure over `proto`, snapshotting the capture list
     /// described by `FnProto::captures`.
-    MakeClosure { dst: u16, proto: u32 },
+    MakeClosure {
+        dst: u16,
+        proto: u32,
+    },
     /// Load capture cell `slot` of the currently executing closure into a
     /// register (emitted in closure prologues).
-    LoadCapture { dst: u16, slot: u16 },
+    LoadCapture {
+        dst: u16,
+        slot: u16,
+    },
 
     // ---- traits ----
     /// Coerce a concrete value to `dyn Trait` by attaching vtable `vt`.
-    MakeDyn { dst: u16, src: u16, vt: u32 },
+    MakeDyn {
+        dst: u16,
+        src: u16,
+        vt: u32,
+    },
 
     // ---- misc ----
-    Fault { code: FaultCode },
+    Fault {
+        code: FaultCode,
+    },
     Nop,
 }
 

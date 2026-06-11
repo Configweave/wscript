@@ -479,10 +479,9 @@ impl Vm {
                             )?;
                         }
                         other => {
-                            return Err(self.fault(format!(
-                                "cannot call a {} value",
-                                other.kind_name()
-                            )));
+                            return Err(
+                                self.fault(format!("cannot call a {} value", other.kind_name()))
+                            );
                         }
                     }
                 }
@@ -500,8 +499,8 @@ impl Vm {
                             recv.kind_name()
                         )));
                     };
-                    let target = self.units[self.cur_unit].unit.vtables[d.vtable as usize]
-                        .targets[slot as usize];
+                    let target = self.units[self.cur_unit].unit.vtables[d.vtable as usize].targets
+                        [slot as usize];
                     let CallTarget::Proto(p) = target else {
                         return Err(self.fault("invalid vtable entry"));
                     };
@@ -620,10 +619,9 @@ impl Vm {
                         let k = self.stack[base + abase as usize + i * 2].clone();
                         let v = self.stack[base + abase as usize + i * 2 + 1].clone();
                         let Some(key) = Key::from_value(&k) else {
-                            return Err(self.fault(format!(
-                                "invalid map key of type {}",
-                                k.kind_name()
-                            )));
+                            return Err(
+                                self.fault(format!("invalid map key of type {}", k.kind_name()))
+                            );
                         };
                         map.insert(key, v);
                     }
@@ -637,9 +635,9 @@ impl Vm {
                             if i < 0 || i as usize >= items.len() {
                                 let len = items.len();
                                 drop(items);
-                                return Err(self.fault(format!(
-                                    "list index {i} out of bounds (len {len})"
-                                )));
+                                return Err(
+                                    self.fault(format!("list index {i} out of bounds (len {len})"))
+                                );
                             }
                             items[i as usize].clone()
                         }
@@ -661,9 +659,9 @@ impl Vm {
                             if i < 0 || i as usize >= items.len() {
                                 let len = items.len();
                                 drop(items);
-                                return Err(self.fault(format!(
-                                    "list index {i} out of bounds (len {len})"
-                                )));
+                                return Err(
+                                    self.fault(format!("list index {i} out of bounds (len {len})"))
+                                );
                             }
                             items[i as usize] = v;
                         }
@@ -771,8 +769,9 @@ impl Vm {
                                 match &frame.closure {
                                     Some(c) => captures.push(c.captures[i as usize].clone()),
                                     None => {
-                                        return Err(self
-                                            .fault("type confusion: capture outside closure"));
+                                        return Err(
+                                            self.fault("type confusion: capture outside closure")
+                                        );
                                     }
                                 }
                             }

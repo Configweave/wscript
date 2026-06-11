@@ -234,9 +234,27 @@ fn node_ending_at(index: &[(wisp::Span, ast::NodeId)], offset: usize) -> Option<
 // ---------------------------------------------------- builtin methods
 
 const STR_METHODS: &[&str] = &[
-    "len", "bytes_len", "is_empty", "split", "trim", "trim_start", "trim_end", "to_upper",
-    "to_lower", "starts_with", "ends_with", "contains", "find", "replace", "repeat",
-    "pad_left", "pad_right", "chars", "slice", "parse_int", "parse_float",
+    "len",
+    "bytes_len",
+    "is_empty",
+    "split",
+    "trim",
+    "trim_start",
+    "trim_end",
+    "to_upper",
+    "to_lower",
+    "starts_with",
+    "ends_with",
+    "contains",
+    "find",
+    "replace",
+    "repeat",
+    "pad_left",
+    "pad_right",
+    "chars",
+    "slice",
+    "parse_int",
+    "parse_float",
 ];
 const LIST_METHODS: &[&str] = &[
     "len", "is_empty", "push", "pop", "get", "set", "insert", "remove", "clear", "contains",
@@ -244,16 +262,29 @@ const LIST_METHODS: &[&str] = &[
     "concat", "clone",
 ];
 const MAP_METHODS: &[&str] = &[
-    "len", "is_empty", "insert", "remove", "get", "contains_key", "keys", "values", "clear",
+    "len",
+    "is_empty",
+    "insert",
+    "remove",
+    "get",
+    "contains_key",
+    "keys",
+    "values",
+    "clear",
     "clone",
 ];
 const OPTION_METHODS: &[&str] = &["is_some", "is_none", "unwrap", "unwrap_or", "expect"];
 const RESULT_METHODS: &[&str] = &[
-    "is_ok", "is_err", "unwrap", "unwrap_or", "unwrap_err", "expect",
+    "is_ok",
+    "is_err",
+    "unwrap",
+    "unwrap_or",
+    "unwrap_err",
+    "expect",
 ];
 const KEYWORDS: &[&str] = &[
-    "let", "fn", "struct", "enum", "trait", "impl", "for", "in", "while", "loop", "if",
-    "else", "match", "return", "break", "continue", "use", "true", "false", "dyn", "self",
+    "let", "fn", "struct", "enum", "trait", "impl", "for", "in", "while", "loop", "if", "else",
+    "match", "return", "break", "continue", "use", "true", "false", "dyn", "self",
 ];
 const PRELUDE: &[&str] = &[
     "print", "println", "str", "fmt", "same", "weak", "int", "float",
@@ -266,10 +297,7 @@ impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> LspResult<InitializeResult> {
         // Load wisp.toml interfaces from the workspace root (PRD §9.1).
         #[allow(deprecated)]
-        let root = params
-            .root_uri
-            .as_ref()
-            .and_then(|u| u.to_file_path().ok());
+        let root = params.root_uri.as_ref().and_then(|u| u.to_file_path().ok());
         if let Some(root) = root
             && let Some(m) = manifest::find(&root)
         {
@@ -351,21 +379,24 @@ impl LanguageServer for Backend {
         };
         let mut lines = Vec::new();
         if let Some(ty) = analysis.check.types.get(&node) {
-            lines.push(format!("```wisp\n{}\n```", ty.display(&analysis.check.defs)));
+            lines.push(format!(
+                "```wisp\n{}\n```",
+                ty.display(&analysis.check.defs)
+            ));
         }
         // Host call info: signature + docs (PRD §9 feature 2).
         if let Some(wisp_compiler::check::CallKind::Host(idx)) = analysis.check.calls.get(&node)
-            && let Some((module, name, sig, doc)) = host_fn_info(&registry, *idx) {
-                lines.push(format!(
-                    "`{module}::{name}{}`",
-                    render_sig(&sig, &analysis.check.defs)
-                ));
-                if let Some(doc) = doc {
-                    lines.push(doc);
-                }
+            && let Some((module, name, sig, doc)) = host_fn_info(&registry, *idx)
+        {
+            lines.push(format!(
+                "`{module}::{name}{}`",
+                render_sig(&sig, &analysis.check.defs)
+            ));
+            if let Some(doc) = doc {
+                lines.push(doc);
             }
-        if let Some(wisp_compiler::check::MethodRes::Host(idx)) =
-            analysis.check.methods.get(&node)
+        }
+        if let Some(wisp_compiler::check::MethodRes::Host(idx)) = analysis.check.methods.get(&node)
             && let Some((ty_name, name, sig, doc)) = host_method_info(&registry, *idx)
         {
             lines.push(format!(
@@ -419,17 +450,16 @@ impl LanguageServer for Backend {
             analysis.check.calls.get(&node),
             analysis.check.methods.get(&node),
         ) {
-            (Some(wisp_compiler::check::CallKind::Host(idx)), _) => {
-                host_fn_info(&registry, *idx)
-                    .and_then(|(m, n, ..)| lookup_wispi(&wispi, |i| {
+            (Some(wisp_compiler::check::CallKind::Host(idx)), _) => host_fn_info(&registry, *idx)
+                .and_then(|(m, n, ..)| {
+                    lookup_wispi(&wispi, |i| {
                         i.module_items.get(&(m.clone(), n.clone())).copied()
-                    }))
-            }
+                    })
+                }),
             (_, Some(wisp_compiler::check::MethodRes::Host(idx))) => {
-                host_method_info(&registry, *idx)
-                    .and_then(|(t, n, ..)| lookup_wispi(&wispi, |i| {
-                        i.methods.get(&(t.clone(), n.clone())).copied()
-                    }))
+                host_method_info(&registry, *idx).and_then(|(t, n, ..)| {
+                    lookup_wispi(&wispi, |i| i.methods.get(&(t.clone(), n.clone())).copied())
+                })
             }
             _ => None,
         };
@@ -459,7 +489,9 @@ impl LanguageServer for Backend {
         let before = &text[..offset.min(text.len())];
 
         let mut items: Vec<CompletionItem> = Vec::new();
-        let push = |items: &mut Vec<CompletionItem>, label: &str, kind: CompletionItemKind,
+        let push = |items: &mut Vec<CompletionItem>,
+                    label: &str,
+                    kind: CompletionItemKind,
                     detail: Option<String>| {
             items.push(CompletionItem {
                 label: label.to_string(),
@@ -653,7 +685,11 @@ impl Backend {
                 }),
                 code: Some(NumberOrString::String(d.code.to_string())),
                 source: Some("wisp".into()),
-                message: match &d.help {
+                message: match d
+                    .help
+                    .clone()
+                    .or_else(|| wisp::diag_default_help(d.code).map(String::from))
+                {
                     Some(help) => format!("{}\nhelp: {help}", d.message),
                     None => d.message.clone(),
                 },
@@ -711,10 +747,7 @@ fn host_method_info(reg: &wisp::Registry, idx: u32) -> Option<HostInfo> {
     None
 }
 
-fn lookup_wispi<F>(
-    indexes: &[(PathBuf, WispiIndex)],
-    f: F,
-) -> Option<(PathBuf, wisp::Span)>
+fn lookup_wispi<F>(indexes: &[(PathBuf, WispiIndex)], f: F) -> Option<(PathBuf, wisp::Span)>
 where
     F: Fn(&WispiIndex) -> Option<wisp::Span>,
 {

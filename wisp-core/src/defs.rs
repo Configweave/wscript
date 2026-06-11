@@ -234,12 +234,14 @@ impl DefTable {
 
     /// Find a host-registered def by its Rust `TypeId`.
     pub fn by_rust_type(&self, ty: std::any::TypeId) -> Option<DefId> {
-        self.defs.iter().position(|d| match d {
-            DefKind::Struct(s) => s.rust_type == Some(ty),
-            DefKind::Enum(e) => e.rust_type == Some(ty),
-            DefKind::Trait(_) => false,
-        })
-        .map(|i| DefId(i as u32))
+        self.defs
+            .iter()
+            .position(|d| match d {
+                DefKind::Struct(s) => s.rust_type == Some(ty),
+                DefKind::Enum(e) => e.rust_type == Some(ty),
+                DefKind::Trait(_) => false,
+            })
+            .map(|i| DefId(i as u32))
     }
 
     pub fn len(&self) -> usize {

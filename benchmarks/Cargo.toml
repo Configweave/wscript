@@ -1,0 +1,17 @@
+[package]
+name = "wisp-benchmarks"
+description = "Microbenchmarks: wisp vs Lua (mlua), Rhai, Rune (PRD §10 M7)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "wisp-bench"
+path = "src/main.rs"
+
+[dependencies]
+wisp.workspace = true
+mlua = { version = "0.10", features = ["lua54", "vendored"] }
+rhai = "1"
+rune = "0.13"

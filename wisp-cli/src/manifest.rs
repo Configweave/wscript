@@ -76,12 +76,7 @@ pub fn load_interfaces(
             Ok(text) => {
                 let (diags, index) = wisp_compiler::wispi::load(&text, reg);
                 for d in diags {
-                    eprintln!(
-                        "warning: {}: [{}] {}",
-                        path.display(),
-                        d.code,
-                        d.message
-                    );
+                    eprintln!("warning: {}: [{}] {}", path.display(), d.code, d.message);
                 }
                 indexes.push((path.clone(), index));
             }

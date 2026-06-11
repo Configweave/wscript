@@ -257,16 +257,14 @@ fn find_closure(file: &SourceFile, node: NodeId) -> Option<(usize, &Expr)> {
                     .in_expr(scrutinee)
                     .or_else(|| self.in_block(then))
                     .or_else(|| else_.as_ref().and_then(|e| self.in_expr(e))),
-                ExprKind::Match { scrutinee, arms } => {
-                    self.in_expr(scrutinee).or_else(|| {
-                        arms.iter().find_map(|a| {
-                            a.guard
-                                .as_ref()
-                                .and_then(|g| self.in_expr(g))
-                                .or_else(|| self.in_expr(&a.body))
-                        })
+                ExprKind::Match { scrutinee, arms } => self.in_expr(scrutinee).or_else(|| {
+                    arms.iter().find_map(|a| {
+                        a.guard
+                            .as_ref()
+                            .and_then(|g| self.in_expr(g))
+                            .or_else(|| self.in_expr(&a.body))
                     })
-                }
+                }),
                 ExprKind::While { cond, body } => {
                     self.in_expr(cond).or_else(|| self.in_block(body))
                 }
@@ -274,9 +272,7 @@ fn find_closure(file: &SourceFile, node: NodeId) -> Option<(usize, &Expr)> {
                 ExprKind::For { iter, body, .. } => {
                     self.in_expr(iter).or_else(|| self.in_block(body))
                 }
-                ExprKind::Range { lo, hi, .. } => {
-                    self.in_expr(lo).or_else(|| self.in_expr(hi))
-                }
+                ExprKind::Range { lo, hi, .. } => self.in_expr(lo).or_else(|| self.in_expr(hi)),
                 ExprKind::Return(Some(v)) => self.in_expr(v),
                 ExprKind::Block(b) => self.in_block(b),
                 ExprKind::Closure { body, .. } => self.in_expr(body),
@@ -412,12 +408,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
             match stmt {
                 Stmt::Let { init, id, span, .. } => {
                     self.cur_span = *span;
-                    let local = *self
-                        .em
-                        .res
-                        .decl_locals
-                        .get(id)
-                        .expect("let stmt resolved");
+                    let local = *self.em.res.decl_locals.get(id).expect("let stmt resolved");
                     self.emit_init_local(local, init);
                 }
                 Stmt::LetElse {
@@ -540,9 +531,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
                 self.push(Instr::LoadUnit { dst });
             }
             ExprKind::Call { callee, args } => self.emit_call(e, callee, args, dst),
-            ExprKind::MethodCall { recv, args, .. } => {
-                self.emit_method_call(e, recv, args, dst)
-            }
+            ExprKind::MethodCall { recv, args, .. } => self.emit_method_call(e, recv, args, dst),
             ExprKind::Field { obj, .. } => {
                 let o = self.emit_value(obj);
                 let idx = *self.em.res.fields.get(&e.id).unwrap_or(&0);
@@ -554,12 +543,20 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
                     Some(IndexKind::List) => {
                         let o = self.emit_value(obj);
                         let i = self.emit_value(idx);
-                        self.push(Instr::ListIndexGet { dst, list: o, idx: i });
+                        self.push(Instr::ListIndexGet {
+                            dst,
+                            list: o,
+                            idx: i,
+                        });
                     }
                     Some(IndexKind::Map) => {
                         let o = self.emit_value(obj);
                         let i = self.emit_value(idx);
-                        self.push(Instr::MapIndexGet { dst, map: o, key: i });
+                        self.push(Instr::MapIndexGet {
+                            dst,
+                            map: o,
+                            key: i,
+                        });
                     }
                     Some(IndexKind::UserGet { proto }) => {
                         let base = self.alloc_window(2);
@@ -643,9 +640,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
                 }
                 self.patch_to_here(to_end);
             }
-            ExprKind::Match { scrutinee, arms } => {
-                self.emit_match(scrutinee, arms, dst)
-            }
+            ExprKind::Match { scrutinee, arms } => self.emit_match(scrutinee, arms, dst),
             ExprKind::While { cond, body } => {
                 let start = self.code.len();
                 self.loops.push(LoopFrame {
@@ -704,17 +699,15 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
                     }
                 }
             }
-            ExprKind::Return(value) => {
-                match value {
-                    Some(v) => {
-                        let r = self.emit_value(v);
-                        self.push(Instr::Ret { src: r });
-                    }
-                    None => {
-                        self.push(Instr::RetUnit);
-                    }
+            ExprKind::Return(value) => match value {
+                Some(v) => {
+                    let r = self.emit_value(v);
+                    self.push(Instr::Ret { src: r });
                 }
-            }
+                None => {
+                    self.push(Instr::RetUnit);
+                }
+            },
             ExprKind::Block(b) => self.emit_block(b, Some(dst)),
             ExprKind::Closure { .. } => {
                 let proto = self
@@ -1016,31 +1009,32 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
 
     fn emit_assign(&mut self, target: &Expr, value: &Expr) {
         match &target.kind {
-            ExprKind::Path(_) => {
-                match self.em.res.var_refs.get(&target.id) {
-                    Some(VarRes::Local(l)) => {
-                        let l = *l;
-                        let reg = self.local_reg(l);
-                        if self.captured.contains(&l) {
-                            let tmp = self.alloc_temp();
-                            self.emit_into(value, tmp);
-                            self.push(Instr::CellSet { cell: reg, src: tmp });
-                        } else {
-                            self.emit_into(value, reg);
-                        }
-                    }
-                    Some(VarRes::Capture(slot)) => {
-                        let cell = self.cap_reg(*slot);
+            ExprKind::Path(_) => match self.em.res.var_refs.get(&target.id) {
+                Some(VarRes::Local(l)) => {
+                    let l = *l;
+                    let reg = self.local_reg(l);
+                    if self.captured.contains(&l) {
                         let tmp = self.alloc_temp();
                         self.emit_into(value, tmp);
-                        self.push(Instr::CellSet { cell, src: tmp });
-                    }
-                    None => {
-                        let tmp = self.alloc_temp();
-                        self.emit_into(value, tmp);
+                        self.push(Instr::CellSet {
+                            cell: reg,
+                            src: tmp,
+                        });
+                    } else {
+                        self.emit_into(value, reg);
                     }
                 }
-            }
+                Some(VarRes::Capture(slot)) => {
+                    let cell = self.cap_reg(*slot);
+                    let tmp = self.alloc_temp();
+                    self.emit_into(value, tmp);
+                    self.push(Instr::CellSet { cell, src: tmp });
+                }
+                None => {
+                    let tmp = self.alloc_temp();
+                    self.emit_into(value, tmp);
+                }
+            },
             ExprKind::Field { obj, .. } => {
                 let o = self.emit_value(obj);
                 let tmp = self.alloc_temp();
@@ -1204,7 +1198,13 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
             self.push(Instr::LoadUnit { dst });
             return;
         };
-        let order = self.em.res.field_orders.get(&e.id).cloned().unwrap_or_default();
+        let order = self
+            .em
+            .res
+            .field_orders
+            .get(&e.id)
+            .cloned()
+            .unwrap_or_default();
         let n_fields = match &res {
             StructLitRes::Struct(def) => self
                 .em
@@ -1465,7 +1465,12 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
             .get(&e.id)
             .copied()
             .unwrap_or(ForKind::List);
-        let var_local = *self.em.res.decl_locals.get(&e.id).expect("for var resolved");
+        let var_local = *self
+            .em
+            .res
+            .decl_locals
+            .get(&e.id)
+            .expect("for var resolved");
         let var_reg = self.local_reg(var_local);
         let var_captured = self.captured.contains(&var_local);
 

@@ -106,10 +106,7 @@ macro_rules! int_conv {
             fn from_value(v: Value, _defs: &DefTable) -> Result<Self, HostError> {
                 match v {
                     Value::Int(x) => <$rust>::try_from(x).map_err(|_| {
-                        HostError::msg(format!(
-                            "int {x} does not fit in {}",
-                            stringify!($rust)
-                        ))
+                        HostError::msg(format!("int {x} does not fit in {}", stringify!($rust)))
                     }),
                     other => Err(type_mismatch("int", &other)),
                 }

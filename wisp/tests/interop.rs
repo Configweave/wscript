@@ -137,7 +137,9 @@ fn host_signature_misuse_is_compile_error() {
 #[test]
 fn round_trip_all_conversions() {
     let ctx = Context::new().register_type::<Point>();
-    let unit = ctx.compile("fn id(p: Point) -> Point { p }\nfn main() {}").unwrap();
+    let unit = ctx
+        .compile("fn id(p: Point) -> Point { p }\nfn main() {}")
+        .unwrap();
     let defs = &unit.defs;
 
     macro_rules! round_trip {
@@ -341,7 +343,13 @@ fn script_fn_typed_handles() {
 
     let on_key: wisp::ScriptFn<(KeyEvent,), bool> = unit.fn_handle("on_key").unwrap();
     let quit = on_key
-        .call(&mut vm, (KeyEvent { code: 'q', ctrl: true },))
+        .call(
+            &mut vm,
+            (KeyEvent {
+                code: 'q',
+                ctrl: true,
+            },),
+        )
         .unwrap();
     assert!(quit);
 
@@ -375,7 +383,9 @@ fn shared_data_value_mutation_visible_both_ways() {
     assert_eq!(shared.get().unwrap(), Point { x: 1, y: 2 });
     // Host mutates; script observes through the same live value.
     shared.set(Point { x: 99, y: 2 }).unwrap();
-    let x: i64 = vm.call_unit(&unit, "read_x", (shared.get().unwrap(),)).unwrap();
+    let x: i64 = vm
+        .call_unit(&unit, "read_x", (shared.get().unwrap(),))
+        .unwrap();
     assert_eq!(x, 99);
     // And through the raw aliased value:
     let x = vm.call_values(&unit, "read_x", vec![raw]).unwrap();

@@ -34,7 +34,10 @@ fn run_all_scripts() {
     let mut failures = Vec::new();
     for path in entries {
         if let Err(msg) = run_one(&path) {
-            failures.push(format!("{}: {msg}", path.file_name().unwrap().to_string_lossy()));
+            failures.push(format!(
+                "{}: {msg}",
+                path.file_name().unwrap().to_string_lossy()
+            ));
         }
     }
     if !failures.is_empty() {
@@ -69,7 +72,9 @@ fn run_one(path: &Path) -> Result<(), String> {
 
     if let Some(needle) = expected_error {
         if code == 0 {
-            return Err(format!("expected failure containing `{needle}`, but exit was 0"));
+            return Err(format!(
+                "expected failure containing `{needle}`, but exit was 0"
+            ));
         }
         if !stderr.contains(&needle) {
             return Err(format!(

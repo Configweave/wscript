@@ -32,7 +32,8 @@ fn std_wispi_is_in_sync() {
     }
     let on_disk = std::fs::read_to_string(&path).unwrap_or_default();
     assert_eq!(
-        on_disk, expected,
+        on_disk,
+        expected,
         "stale {}; regenerate with WISP_REGEN_WISPI=1 cargo test -p wisp-cli --test wispi_gen",
         path.display()
     );

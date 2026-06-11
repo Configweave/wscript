@@ -107,12 +107,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let on_key: ScriptFn<(KeyEvent,), bool> = unit.fn_handle("on_key")?;
 
     let fake_input = [
-        KeyEvent { code: '|', ctrl: false },
-        KeyEvent { code: '-', ctrl: false },
-        KeyEvent { code: 'r', ctrl: false },
-        KeyEvent { code: 'x', ctrl: false },
-        KeyEvent { code: 'q', ctrl: true },
-        KeyEvent { code: 'z', ctrl: false }, // never reached
+        KeyEvent {
+            code: '|',
+            ctrl: false,
+        },
+        KeyEvent {
+            code: '-',
+            ctrl: false,
+        },
+        KeyEvent {
+            code: 'r',
+            ctrl: false,
+        },
+        KeyEvent {
+            code: 'x',
+            ctrl: false,
+        },
+        KeyEvent {
+            code: 'q',
+            ctrl: true,
+        },
+        KeyEvent {
+            code: 'z',
+            ctrl: false,
+        }, // never reached
     ];
 
     for key in fake_input {
@@ -122,6 +140,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("[host] final pane count: {}", PANES.with(|p| p.borrow().len()));
+    println!(
+        "[host] final pane count: {}",
+        PANES.with(|p| p.borrow().len())
+    );
     Ok(())
 }

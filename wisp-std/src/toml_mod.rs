@@ -60,9 +60,12 @@ pub fn toml() -> Module {
         let t = to_toml(&v)?;
         toml::to_string(&t).map_err(|e| e.to_string())
     });
-    m.fn_("to_string_pretty", |v: DynValue| -> Result<String, String> {
-        let t = to_toml(&v)?;
-        toml::to_string_pretty(&t).map_err(|e| e.to_string())
-    });
+    m.fn_(
+        "to_string_pretty",
+        |v: DynValue| -> Result<String, String> {
+            let t = to_toml(&v)?;
+            toml::to_string_pretty(&t).map_err(|e| e.to_string())
+        },
+    );
     m
 }

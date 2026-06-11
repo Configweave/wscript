@@ -37,12 +37,14 @@ pub fn render(path: &str, source: &str, diags: &[Diagnostic]) {
                     .with_color(Color::Blue),
             );
         }
-        if let Some(help) = &d.help {
+        if let Some(help) = d
+            .help
+            .clone()
+            .or_else(|| wisp::diag_default_help(d.code).map(String::from))
+        {
             report = report.with_help(help);
         }
-        let _ = report
-            .finish()
-            .eprint((path, Source::from(source)));
+        let _ = report.finish().eprint((path, Source::from(source)));
     }
 }
 
@@ -51,14 +53,18 @@ pub fn render_runtime(path: &str, source: &str, e: &RuntimeError) {
     match e.span {
         Some(span) => {
             let span = clamp_span(source, span.lo as usize, span.hi as usize);
-            let mut report = Report::<(&str, std::ops::Range<usize>)>::build(ReportKind::Error, path, span.start)
-                .with_message(&e.message)
-                .with_config(Config::default().with_color(colored))
-                .with_label(
-                    Label::new((path, span))
-                        .with_message("fault raised here")
-                        .with_color(Color::Red),
-                );
+            let mut report = Report::<(&str, std::ops::Range<usize>)>::build(
+                ReportKind::Error,
+                path,
+                span.start,
+            )
+            .with_message(&e.message)
+            .with_config(Config::default().with_color(colored))
+            .with_label(
+                Label::new((path, span))
+                    .with_message("fault raised here")
+                    .with_color(Color::Red),
+            );
             if !e.trace.is_empty() {
                 report = report.with_note(format!("call stack: {}", e.trace.join(" ← ")));
             }

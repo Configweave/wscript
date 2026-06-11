@@ -131,11 +131,7 @@ fn list_method(name: &str) -> Option<Scheme> {
             fresh: 1,
             ..s(vec![func(vec![p(0)], p(1))], list(p(1)), ListMap)
         },
-        "filter" => s(
-            vec![func(vec![p(0)], Type::Bool)],
-            list(p(0)),
-            ListFilter,
-        ),
+        "filter" => s(vec![func(vec![p(0)], Type::Bool)], list(p(0)), ListFilter),
         "fold" => Scheme {
             fresh: 1,
             ..s(vec![p(1), func(vec![p(1), p(0)], p(1))], p(1), ListFold)

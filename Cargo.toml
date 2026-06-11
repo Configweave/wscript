@@ -8,6 +8,7 @@ members = [
     "wisp-std",
     "wisp-macros",
     "wisp-cli",
+    "benchmarks",
 ]
 
 [workspace.package]

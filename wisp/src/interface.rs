@@ -67,11 +67,8 @@ pub fn render(reg: &Registry) -> String {
                             let _ = writeln!(out, "    {},", v.name);
                         }
                         VariantKind::Tuple => {
-                            let tys: Vec<String> = v
-                                .fields
-                                .iter()
-                                .map(|(_, t)| t.display(&reg.defs))
-                                .collect();
+                            let tys: Vec<String> =
+                                v.fields.iter().map(|(_, t)| t.display(&reg.defs)).collect();
                             let _ = writeln!(out, "    {}({}),", v.name, tys.join(", "));
                         }
                         VariantKind::Struct => {
@@ -80,8 +77,7 @@ pub fn render(reg: &Registry) -> String {
                                 .iter()
                                 .map(|(n, t)| format!("{n}: {}", t.display(&reg.defs)))
                                 .collect();
-                            let _ =
-                                writeln!(out, "    {} {{ {} }},", v.name, fields.join(", "));
+                            let _ = writeln!(out, "    {} {{ {} }},", v.name, fields.join(", "));
                         }
                     }
                 }

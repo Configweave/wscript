@@ -162,10 +162,7 @@ impl Infer {
 /// method schemes and of `Option`/`Result` variant payloads.
 pub fn subst_params(t: &Type, args: &[Type]) -> Type {
     match t {
-        Type::Param(i) => args
-            .get(*i as usize)
-            .cloned()
-            .unwrap_or(Type::Error),
+        Type::Param(i) => args.get(*i as usize).cloned().unwrap_or(Type::Error),
         Type::List(e) => Type::List(Box::new(subst_params(e, args))),
         Type::Map(k, v) => Type::Map(
             Box::new(subst_params(k, args)),

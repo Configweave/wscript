@@ -133,7 +133,10 @@ impl Parser {
     /// Peek at the next token kind, looking through newlines.
     fn peek_through_newlines(&self) -> &TokenKind {
         let mut n = 0;
-        while matches!(self.nth_kind(n), TokenKind::Newline | TokenKind::DocComment(_)) {
+        while matches!(
+            self.nth_kind(n),
+            TokenKind::Newline | TokenKind::DocComment(_)
+        ) {
             n += 1;
         }
         self.nth_kind(n)
@@ -160,11 +163,7 @@ impl Parser {
         } else {
             let found = self.kind().describe();
             let span = self.span();
-            self.error(
-                "E0100",
-                span,
-                format!("expected {what}, found {found}"),
-            );
+            self.error("E0100", span, format!("expected {what}, found {found}"));
             None
         }
     }
@@ -958,10 +957,7 @@ impl Parser {
         // Simple binding: `let name [: ty] = init`. Anything else is a
         // pattern and requires `else` (let-else, PRD §3.4).
         let simple = matches!(self.kind(), TokenKind::Ident(_))
-            && matches!(
-                self.nth_kind(1),
-                TokenKind::Colon | TokenKind::Eq
-            );
+            && matches!(self.nth_kind(1), TokenKind::Colon | TokenKind::Eq);
         if simple {
             let name = self.expect_ident("binding name").unwrap();
             let ty = if self.eat(&TokenKind::Colon) {
@@ -1387,7 +1383,10 @@ impl Parser {
                 self.no_struct_lit = false;
                 let inner = self.expr();
                 self.no_struct_lit = saved;
-                self.expect(&TokenKind::RParen, "`)` to close the parenthesized expression");
+                self.expect(
+                    &TokenKind::RParen,
+                    "`)` to close the parenthesized expression",
+                );
                 inner
             }
             TokenKind::LBracket => {
@@ -1468,10 +1467,12 @@ impl Parser {
             }
             TokenKind::KwFor => {
                 self.bump();
-                let var = self.expect_ident("loop variable after `for`").unwrap_or(Ident {
-                    name: "_".into(),
-                    span: start,
-                });
+                let var = self
+                    .expect_ident("loop variable after `for`")
+                    .unwrap_or(Ident {
+                        name: "_".into(),
+                        span: start,
+                    });
                 self.expect(&TokenKind::KwIn, "`in` in `for` loop");
                 let iter = self.expr_no_struct_lit();
                 self.skip_newlines();
@@ -1575,11 +1576,7 @@ impl Parser {
                 let fname = match self.expect_ident("field name") {
                     Some(n) => n,
                     None => {
-                        self.recover_to(&[
-                            TokenKind::Comma,
-                            TokenKind::Newline,
-                            TokenKind::RBrace,
-                        ]);
+                        self.recover_to(&[TokenKind::Comma, TokenKind::Newline, TokenKind::RBrace]);
                         continue;
                     }
                 };
@@ -1829,7 +1826,10 @@ impl Parser {
                         self.error(
                             "E0113",
                             span,
-                            format!("expected integer after `-` in pattern, found {}", other.describe()),
+                            format!(
+                                "expected integer after `-` in pattern, found {}",
+                                other.describe()
+                            ),
                         );
                         PatternKind::Error
                     }

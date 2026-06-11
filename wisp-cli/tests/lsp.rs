@@ -136,7 +136,10 @@ fn lsp_four_features() {
         r#"{"textDocument":{"uri":"file:///test.wisp"},"position":{"line":6,"character":4}}"#,
     );
     let completions = lsp.read_until(&format!("\"id\":{id}"));
-    assert!(completions.contains("println"), "completions: {completions}");
+    assert!(
+        completions.contains("println"),
+        "completions: {completions}"
+    );
     assert!(completions.contains("match"), "keywords: {completions}");
 
     lsp.request("shutdown", "null");

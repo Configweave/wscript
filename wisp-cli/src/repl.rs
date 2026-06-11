@@ -86,7 +86,11 @@ pub fn run(ctx: Context) -> ExitCode {
 fn read_input(editor: &mut DefaultEditor) -> Result<Option<String>, ReadlineError> {
     let mut buffer = String::new();
     loop {
-        let prompt = if buffer.is_empty() { "wisp> " } else { "  ... " };
+        let prompt = if buffer.is_empty() {
+            "wisp> "
+        } else {
+            "  ... "
+        };
         match editor.readline(prompt) {
             Ok(line) => {
                 buffer.push_str(&line);
@@ -194,10 +198,7 @@ impl Repl {
             all.extend(analysis.check.diags.clone());
             all
         };
-        if errors
-            .iter()
-            .any(|d| d.severity == wisp::Severity::Error)
-        {
+        if errors.iter().any(|d| d.severity == wisp::Severity::Error) {
             diag_render::render("<repl>", &src1, &errors);
             return;
         }
@@ -303,10 +304,8 @@ impl Repl {
 
 fn starts_item(input: &str) -> bool {
     let first = input.split_whitespace().next().unwrap_or("");
-    matches!(
-        first,
-        "fn" | "struct" | "enum" | "trait" | "impl" | "use"
-    ) || input.trim_start().starts_with("#[")
+    matches!(first, "fn" | "struct" | "enum" | "trait" | "impl" | "use")
+        || input.trim_start().starts_with("#[")
 }
 
 /// Types whose surface syntax can round-trip through a generated

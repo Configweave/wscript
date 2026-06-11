@@ -25,10 +25,8 @@ use std::sync::Arc;
 
 pub use wisp_core::bytecode::CompiledUnit;
 pub use wisp_core::defs::DefTable;
-pub use wisp_core::diag::{Diagnostic, Severity};
-pub use wisp_core::host::{
-    FromValue, HostError, IntoValue, ScriptOpaque, ScriptType,
-};
+pub use wisp_core::diag::{Diagnostic, Severity, default_help as diag_default_help};
+pub use wisp_core::host::{FromValue, HostError, IntoValue, ScriptOpaque, ScriptType};
 pub use wisp_core::module::Module;
 pub use wisp_core::registry::Registry;
 pub use wisp_core::span::Span;
@@ -377,11 +375,7 @@ impl UnitExt for CompiledUnit {
 
 fn render_sig(sig: &FnSig, defs: &DefTable) -> String {
     let params: Vec<String> = sig.params.iter().map(|p| p.display(defs)).collect();
-    format!(
-        "fn({}) -> {}",
-        params.join(", "),
-        sig.ret.display(defs)
-    )
+    format!("fn({}) -> {}", params.join(", "), sig.ret.display(defs))
 }
 
 // --------------------------------------------------------------- Shared
@@ -481,9 +475,10 @@ impl<T: ScriptOpaque> Shared<T> {
     pub fn borrow_mut(&self) -> Result<RefMut<'_, T>, Error> {
         match &self.value {
             Value::Opaque(cell) => {
-                let guard = cell.cell.try_borrow_mut().map_err(|_| {
-                    HostError::msg("aliasing violation: opaque value is borrowed")
-                })?;
+                let guard = cell
+                    .cell
+                    .try_borrow_mut()
+                    .map_err(|_| HostError::msg("aliasing violation: opaque value is borrowed"))?;
                 if guard.downcast_ref::<T>().is_none() {
                     return Err(Error::Conversion(HostError::msg(
                         "opaque handle holds a different Rust type",

@@ -39,7 +39,9 @@ pub fn process_with_args(script_args: Vec<String>) -> Module {
             })
         },
     );
-    m.fn_("env", |key: &str| -> Option<String> { std::env::var(key).ok() });
+    m.fn_("env", |key: &str| -> Option<String> {
+        std::env::var(key).ok()
+    });
     m.fn_("set_env", |key: &str, value: &str| {
         // SAFETY contract documented: single-threaded VM (PRD §4.3); the
         // host remains responsible for not racing the environment.

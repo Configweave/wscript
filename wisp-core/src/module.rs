@@ -21,8 +21,7 @@ use std::sync::Arc;
 use crate::bytecode::Const;
 use crate::defs::{DefId, DefTable};
 use crate::host::{
-    FromValue, HostCallable, HostCtx, HostError, IntoValue, ScriptOpaque, ScriptType,
-    type_mismatch,
+    FromValue, HostCallable, HostCtx, HostError, IntoValue, ScriptOpaque, ScriptType, type_mismatch,
 };
 use crate::registry::{HostFnEntry, HostMethod, ModuleDef, Registry};
 use crate::types::{FnSig, Type};
@@ -85,7 +84,11 @@ impl Module {
     }
 
     /// Register a host function under this module.
-    pub fn fn_<M: 'static, F: HostFunction<M>>(&mut self, name: impl Into<String>, f: F) -> &mut Self {
+    pub fn fn_<M: 'static, F: HostFunction<M>>(
+        &mut self,
+        name: impl Into<String>,
+        f: F,
+    ) -> &mut Self {
         self.fns.push(StagedFn {
             name: name.into(),
             sig: Box::new(F::sig),
@@ -332,8 +335,12 @@ macro_rules! mixed_marker {
     (str $S:ident) => { StrArg };
 }
 macro_rules! mixed_param {
-    (own $A:ident) => { $A };
-    (str $S:ident) => { &str };
+    (own $A:ident) => {
+        $A
+    };
+    (str $S:ident) => {
+        &str
+    };
 }
 macro_rules! mixed_type {
     (own $A:ident, $defs:ident) => {
@@ -392,10 +399,7 @@ pub trait HostMethodFn<T, Marker>: Send + Sync + 'static {
     fn into_callable(self) -> Arc<dyn HostCallable>;
 }
 
-pub fn with_opaque_ref<T: 'static, R>(
-    v: &Value,
-    f: impl FnOnce(&T) -> R,
-) -> Result<R, HostError> {
+pub fn with_opaque_ref<T: 'static, R>(v: &Value, f: impl FnOnce(&T) -> R) -> Result<R, HostError> {
     match v {
         Value::Opaque(cell) => {
             let guard = cell.cell.try_borrow().map_err(|_| {
@@ -508,10 +512,7 @@ impl_host_method_str1!(RecvMut, &mut T, with_opaque_mut);
 /// Insert (or find) the registered opaque def for `T` and wrap a host
 /// value into a live handle — used by `#[derive(Script)]`'s generated
 /// `IntoValue` for opaque types.
-pub fn opaque_into_value<T: ScriptOpaque>(
-    value: T,
-    defs: &DefTable,
-) -> Result<Value, HostError> {
+pub fn opaque_into_value<T: ScriptOpaque>(value: T, defs: &DefTable) -> Result<Value, HostError> {
     let Some(def) = defs.by_rust_type(TypeId::of::<T>()) else {
         return Err(HostError::msg(format!(
             "type {} is not registered in this context (register it with \
