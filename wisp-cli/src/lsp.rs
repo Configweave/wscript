@@ -302,7 +302,11 @@ impl LanguageServer for Backend {
             && let Some(m) = manifest::find(&root)
         {
             let mut state = self.state.lock().unwrap();
-            let mut reg = state.base.registry().clone();
+            // A manifest describes the complete host context (see
+            // cmd_check): use exactly the declared interfaces rather
+            // than overlaying them on the CLI stdlib, which would
+            // shadow same-named embedder modules.
+            let mut reg = wisp::Registry::new();
             let indexes = manifest::load_interfaces(&m, &mut reg);
             state.registry = Some(reg);
             state.wispi_indexes = indexes;

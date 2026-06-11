@@ -106,13 +106,21 @@ fn cmd_check(path: &str) -> ExitCode {
         Ok(s) => s,
         Err(c) => return c,
     };
-    let mut ctx = default_context(Vec::new());
     // `wisp check` honors wisp.toml's .wispi interfaces (PRD §8/§9.1).
-    if let Some(m) = manifest::find(std::path::Path::new(path)) {
-        let mut reg = ctx.registry().clone();
-        manifest::load_interfaces(&m, &mut reg);
-        ctx = wisp::Context::from_registry(reg);
-    }
+    // A manifest describes the *complete* host context the script runs
+    // under (interface dumps include everything the host registers), so
+    // when one is present the CLI's default stdlib stays out of the
+    // registry — otherwise a same-named CLI module (e.g. `fs`) would
+    // shadow the embedder's interface and mis-check real scripts. List
+    // the stdlib's own .wispi in the manifest to check against it.
+    let ctx = match manifest::find(std::path::Path::new(path)) {
+        Some(m) => {
+            let mut reg = wisp::Registry::new();
+            manifest::load_interfaces(&m, &mut reg);
+            wisp::Context::from_registry(reg)
+        }
+        None => default_context(Vec::new()),
+    };
     match ctx.compile_verbose(&source) {
         Ok((_unit, warnings)) => {
             diag_render::render(path, &source, &warnings);
