@@ -42,6 +42,45 @@ impl fmt::Display for RuntimeError {
 
 impl std::error::Error for RuntimeError {}
 
+// ------------------------------------------------------------ print hook
+//
+// `print`/`println` write to stdout by default, but an embedder may need
+// to capture script output (a TUI host whose stdout is a live screen, or
+// a tool whose stdout carries machine-readable output). The hook is
+// per-thread, matching the one-`Vm`-per-thread model.
+
+thread_local! {
+    static PRINT_HOOK: std::cell::RefCell<Option<Box<dyn FnMut(&str, bool)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Install (or clear, with `None`) the current thread's print hook. While
+/// set, `print`/`println` deliver their text to the hook instead of
+/// stdout; the `bool` argument is `true` for `println` (trailing newline).
+pub fn set_print_hook(hook: Option<Box<dyn FnMut(&str, bool)>>) {
+    PRINT_HOOK.with(|h| *h.borrow_mut() = hook);
+}
+
+pub(crate) fn print_text(s: &str, newline: bool) {
+    let hooked = PRINT_HOOK.with(|h| {
+        if let Some(hook) = h.borrow_mut().as_mut() {
+            hook(s, newline);
+            true
+        } else {
+            false
+        }
+    });
+    if !hooked {
+        use std::io::Write;
+        let mut out = std::io::stdout().lock();
+        let _ = out.write_all(s.as_bytes());
+        if newline {
+            let _ = out.write_all(b"\n");
+        }
+        let _ = out.flush();
+    }
+}
+
 struct UnitState {
     unit: CompiledUnit,
     consts: Vec<Value>,

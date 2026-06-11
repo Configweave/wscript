@@ -102,10 +102,7 @@ impl Vm {
             // ------------------------------------------------- prelude
             Builtin::Print => {
                 let s = self.display_value(&args[0])?;
-                use std::io::Write;
-                let mut out = std::io::stdout().lock();
-                let _ = out.write_all(s.as_bytes());
-                let _ = out.flush();
+                crate::print_text(&s, false);
                 Value::Unit
             }
             Builtin::Println => {
@@ -113,11 +110,7 @@ impl Vm {
                     Some(v) => self.display_value(v)?,
                     None => String::new(),
                 };
-                use std::io::Write;
-                let mut out = std::io::stdout().lock();
-                let _ = out.write_all(s.as_bytes());
-                let _ = out.write_all(b"\n");
-                let _ = out.flush();
+                crate::print_text(&s, true);
                 Value::Unit
             }
             Builtin::Str => {
