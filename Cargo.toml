@@ -1,6 +1,27 @@
-[package]
-name = "wisp"
+[workspace]
+resolver = "3"
+members = [
+    "wisp",
+    "wisp-core",
+    "wisp-compiler",
+    "wisp-vm",
+    "wisp-std",
+    "wisp-macros",
+    "wisp-cli",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
-[dependencies]
+[workspace.dependencies]
+wisp-core = { path = "wisp-core", version = "0.1.0" }
+wisp-compiler = { path = "wisp-compiler", version = "0.1.0" }
+wisp-vm = { path = "wisp-vm", version = "0.1.0" }
+wisp-std = { path = "wisp-std", version = "0.1.0" }
+wisp-macros = { path = "wisp-macros", version = "0.1.0" }
+wisp = { path = "wisp", version = "0.1.0" }
+
+[profile.release]
+lto = "thin"

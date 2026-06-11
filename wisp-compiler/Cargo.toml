@@ -1,0 +1,9 @@
+[package]
+name = "wisp-compiler"
+description = "wisp compiler: lexer, parser, type checker, bytecode emitter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wisp-core.workspace = true

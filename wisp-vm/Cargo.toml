@@ -1,0 +1,9 @@
+[package]
+name = "wisp-vm"
+description = "wisp register-based virtual machine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wisp-core.workspace = true

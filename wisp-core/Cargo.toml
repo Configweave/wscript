@@ -1,0 +1,8 @@
+[package]
+name = "wisp-core"
+description = "Shared core types for the wisp scripting language: spans, diagnostics, types, bytecode, values"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
