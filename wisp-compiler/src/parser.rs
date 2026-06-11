@@ -102,15 +102,38 @@ impl Parser {
     }
 
     fn skip_newlines(&mut self) {
-        while matches!(self.kind(), TokenKind::Newline) {
+        while matches!(self.kind(), TokenKind::Newline | TokenKind::DocComment(_)) {
             self.bump();
+        }
+    }
+
+    /// Skip newlines/semicolons, collecting `///` doc comments for the
+    /// next declaration.
+    fn collect_docs(&mut self) -> Option<String> {
+        let mut docs: Vec<String> = Vec::new();
+        loop {
+            match self.kind() {
+                TokenKind::Newline | TokenKind::Semi => {
+                    self.bump();
+                }
+                TokenKind::DocComment(text) => {
+                    docs.push(text.clone());
+                    self.bump();
+                }
+                _ => break,
+            }
+        }
+        if docs.is_empty() {
+            None
+        } else {
+            Some(docs.join("\n"))
         }
     }
 
     /// Peek at the next token kind, looking through newlines.
     fn peek_through_newlines(&self) -> &TokenKind {
         let mut n = 0;
-        while matches!(self.nth_kind(n), TokenKind::Newline) {
+        while matches!(self.nth_kind(n), TokenKind::Newline | TokenKind::DocComment(_)) {
             n += 1;
         }
         self.nth_kind(n)
@@ -167,14 +190,11 @@ impl Parser {
     fn source_file(&mut self) -> SourceFile {
         let mut items = Vec::new();
         loop {
-            self.skip_newlines();
-            while self.eat(&TokenKind::Semi) {
-                self.skip_newlines();
-            }
+            let doc = self.collect_docs();
             if self.at_eof() {
                 break;
             }
-            match self.item() {
+            match self.item(doc, true) {
                 Some(item) => items.push(item),
                 None => self.sync_to_item(),
             }
@@ -217,9 +237,11 @@ impl Parser {
         }
     }
 
-    fn item(&mut self) -> Option<Item> {
-        let derives = self.attributes();
+    fn item(&mut self, doc: Option<String>, allow_mod: bool) -> Option<Item> {
+        let (derives, opaque) = self.attributes();
         match self.kind() {
+            TokenKind::KwMod if allow_mod => self.mod_decl(doc).map(Item::Mod),
+            TokenKind::KwConst => self.const_decl(doc).map(Item::Const),
             TokenKind::KwUse => {
                 if !derives.is_empty() {
                     let span = self.span();
@@ -237,10 +259,10 @@ impl Parser {
                         "derives apply to `struct` and `enum` declarations",
                     );
                 }
-                self.fn_decl(false).map(Item::Fn)
+                self.fn_decl(false, doc).map(Item::Fn)
             }
-            TokenKind::KwStruct => self.struct_decl(derives).map(Item::Struct),
-            TokenKind::KwEnum => self.enum_decl(derives).map(Item::Enum),
+            TokenKind::KwStruct => self.struct_decl(derives, opaque, doc).map(Item::Struct),
+            TokenKind::KwEnum => self.enum_decl(derives, doc).map(Item::Enum),
             TokenKind::KwTrait => self.trait_decl().map(Item::Trait),
             TokenKind::KwImpl => self.impl_decl().map(Item::Impl),
             _ => {
@@ -257,9 +279,10 @@ impl Parser {
         }
     }
 
-    /// `#[derive(A, B)]` — the only attribute wisp scripts support.
-    fn attributes(&mut self) -> Vec<Ident> {
+    /// `#[derive(A, B)]` (scripts) and `#[opaque]` (interface files).
+    fn attributes(&mut self) -> (Vec<Ident>, bool) {
         let mut derives = Vec::new();
+        let mut opaque = false;
         while self.at(&TokenKind::Hash) {
             let hash_span = self.bump().span;
             if self.expect(&TokenKind::LBracket, "`[` after `#`").is_none() {
@@ -269,12 +292,19 @@ impl Parser {
                 Some(n) => n,
                 None => break,
             };
+            if name.name == "opaque" {
+                opaque = true;
+                self.expect(&TokenKind::RBracket, "`]` to close the attribute");
+                self.skip_newlines();
+                continue;
+            }
             if name.name != "derive" {
                 self.error_help(
                     "E0103",
                     hash_span.to(name.span),
                     format!("unknown attribute `{}`", name.name),
-                    "the only attribute supported in scripts is `#[derive(...)]`",
+                    "the only attributes supported are `#[derive(...)]` and `#[opaque]` \
+                     (interface files)",
                 );
             }
             if self.eat(&TokenKind::LParen) {
@@ -295,7 +325,7 @@ impl Parser {
             self.expect(&TokenKind::RBracket, "`]` to close the attribute");
             self.skip_newlines();
         }
-        derives
+        (derives, opaque)
     }
 
     fn use_decl(&mut self) -> Option<UseDecl> {
@@ -311,7 +341,7 @@ impl Parser {
     }
 
     /// `allow_self`: parsing inside an impl/trait block.
-    fn fn_decl(&mut self, allow_self: bool) -> Option<FnDecl> {
+    fn fn_decl(&mut self, allow_self: bool, doc: Option<String>) -> Option<FnDecl> {
         let kw = self.bump().span; // `fn`
         let name = self.expect_ident("function name after `fn`")?;
         self.expect(&TokenKind::LParen, "`(` to start the parameter list")?;
@@ -321,6 +351,25 @@ impl Parser {
             ret = Some(self.type_expr());
         }
         let sig_span = kw.to(self.prev_span());
+        // Bodyless declarations are the `.wispi` interface form (PRD §9.1);
+        // the checker rejects them in scripts.
+        if self.peek_through_newlines() != &TokenKind::LBrace {
+            let id = self.id();
+            return Some(FnDecl {
+                name,
+                params,
+                ret,
+                body: Block {
+                    stmts: vec![],
+                    span: sig_span,
+                    id,
+                },
+                has_body: false,
+                doc,
+                span: sig_span,
+                sig_span,
+            });
+        }
         self.skip_newlines();
         let body = self.block()?;
         let span = kw.to(body.span);
@@ -329,8 +378,54 @@ impl Parser {
             params,
             ret,
             body,
+            has_body: true,
+            doc,
             span,
             sig_span,
+        })
+    }
+
+    fn mod_decl(&mut self, doc: Option<String>) -> Option<ModDecl> {
+        let kw = self.bump().span; // `mod`
+        let name = self.expect_ident("module name after `mod`")?;
+        self.skip_newlines();
+        self.expect(&TokenKind::LBrace, "`{` to start the module block")?;
+        let mut items = Vec::new();
+        loop {
+            let doc = self.collect_docs();
+            if self.eat(&TokenKind::RBrace) {
+                break;
+            }
+            if self.at_eof() {
+                self.error("E0100", kw, "unclosed module block: missing `}`");
+                break;
+            }
+            match self.item(doc, false) {
+                Some(item) => items.push(item),
+                None => self.sync_to_item(),
+            }
+        }
+        let span = kw.to(self.prev_span());
+        Some(ModDecl {
+            name,
+            items,
+            doc,
+            span,
+        })
+    }
+
+    fn const_decl(&mut self, doc: Option<String>) -> Option<ConstDecl> {
+        let kw = self.bump().span; // `const`
+        let name = self.expect_ident("constant name after `const`")?;
+        self.expect(&TokenKind::Colon, "`:` after the constant name")?;
+        let ty = self.type_expr();
+        let span = kw.to(ty.span);
+        self.terminate_stmt();
+        Some(ConstDecl {
+            name,
+            ty,
+            doc,
+            span,
         })
     }
 
@@ -411,7 +506,12 @@ impl Parser {
         params
     }
 
-    fn struct_decl(&mut self, derives: Vec<Ident>) -> Option<StructDecl> {
+    fn struct_decl(
+        &mut self,
+        derives: Vec<Ident>,
+        opaque: bool,
+        doc: Option<String>,
+    ) -> Option<StructDecl> {
         let kw = self.bump().span;
         let name = self.expect_ident("struct name")?;
         self.expect(&TokenKind::LBrace, "`{` to start the field list")?;
@@ -453,11 +553,13 @@ impl Parser {
             name,
             fields,
             derives,
+            opaque,
+            doc,
             span,
         })
     }
 
-    fn enum_decl(&mut self, derives: Vec<Ident>) -> Option<EnumDecl> {
+    fn enum_decl(&mut self, derives: Vec<Ident>, doc: Option<String>) -> Option<EnumDecl> {
         let kw = self.bump().span;
         let name = self.expect_ident("enum name")?;
         self.expect(&TokenKind::LBrace, "`{` to start the variant list")?;
@@ -548,6 +650,7 @@ impl Parser {
             name,
             variants,
             derives,
+            doc,
             span,
         })
     }
@@ -641,7 +744,7 @@ impl Parser {
         self.expect(&TokenKind::LBrace, "`{` to start the impl body")?;
         let mut fns = Vec::new();
         loop {
-            self.skip_newlines();
+            let doc = self.collect_docs();
             if self.eat(&TokenKind::RBrace) {
                 break;
             }
@@ -661,7 +764,7 @@ impl Parser {
                 self.recover_to(&[TokenKind::KwFn, TokenKind::RBrace]);
                 continue;
             }
-            if let Some(f) = self.fn_decl(true) {
+            if let Some(f) = self.fn_decl(true, doc) {
                 fns.push(f);
             } else {
                 self.recover_to(&[TokenKind::KwFn, TokenKind::RBrace]);

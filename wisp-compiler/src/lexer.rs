@@ -60,8 +60,13 @@ impl<'s> Lexer<'s> {
                     self.emit_newline(start);
                 }
                 b'/' if self.peek(1) == Some(b'/') => {
+                    let is_doc = self.peek(2) == Some(b'/') && self.peek(3) != Some(b'/');
                     while self.pos < self.bytes.len() && self.bytes[self.pos] != b'\n' {
                         self.pos += 1;
+                    }
+                    if is_doc {
+                        let text = self.src[start + 3..self.pos].trim().to_string();
+                        self.push(TokenKind::DocComment(text), start);
                     }
                 }
                 b'/' if self.peek(1) == Some(b'*') => self.block_comment(start),
@@ -413,6 +418,8 @@ impl<'s> Lexer<'s> {
             "true" => TokenKind::KwTrue,
             "false" => TokenKind::KwFalse,
             "dyn" => TokenKind::KwDyn,
+            "mod" => TokenKind::KwMod,
+            "const" => TokenKind::KwConst,
             "self" => TokenKind::KwSelf,
             "_" => TokenKind::Underscore,
             _ => TokenKind::Ident(text.to_string()),

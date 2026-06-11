@@ -13,3 +13,6 @@ path = "src/main.rs"
 wisp.workspace = true
 wisp-std.workspace = true
 ariadne = "0.4"
+
+[dev-dependencies]
+wisp-compiler.workspace = true

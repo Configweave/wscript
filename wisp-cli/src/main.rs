@@ -54,10 +54,13 @@ fn main() -> ExitCode {
     }
 }
 
-fn default_context() -> Context {
-    // The CLI enables the full stdlib by default (PRD §7). Modules land
-    // with milestone M5.
-    Context::new()
+/// The CLI enables the full stdlib by default (PRD §7/§8).
+fn default_context(script_args: Vec<String>) -> Context {
+    let mut ctx = Context::new();
+    for module in wisp_std::all_modules(script_args) {
+        ctx = ctx.module(module);
+    }
+    ctx
 }
 
 fn read_source(path: &str) -> Result<String, ExitCode> {
@@ -67,12 +70,12 @@ fn read_source(path: &str) -> Result<String, ExitCode> {
     })
 }
 
-fn cmd_run(path: &str, _script_args: Vec<String>) -> ExitCode {
+fn cmd_run(path: &str, script_args: Vec<String>) -> ExitCode {
     let source = match read_source(path) {
         Ok(s) => s,
         Err(c) => return c,
     };
-    let ctx = default_context();
+    let ctx = default_context(script_args);
     let (unit, warnings) = match ctx.compile_verbose(&source) {
         Ok(ok) => ok,
         Err(diags) => {
@@ -106,7 +109,7 @@ fn cmd_check(path: &str) -> ExitCode {
         Ok(s) => s,
         Err(c) => return c,
     };
-    let ctx = default_context();
+    let ctx = default_context(Vec::new());
     match ctx.compile_verbose(&source) {
         Ok((_unit, warnings)) => {
             diag_render::render(path, &source, &warnings);

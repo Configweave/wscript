@@ -16,6 +16,8 @@
 //! assert_eq!(n, 42);
 //! ```
 
+mod interface;
+
 use std::cell::{Ref, RefMut};
 use std::fmt;
 use std::marker::PhantomData;
@@ -121,6 +123,19 @@ impl Context {
 
     pub fn registry(&self) -> &Registry {
         &self.registry
+    }
+
+    /// Render every registered module / function / type / const signature
+    /// as a `.wispi` interface file (PRD §9.1) — a textual, human-readable
+    /// subset of wisp syntax (declarations only), consumed by the LSP and
+    /// `wisp check` via `wisp.toml`. Think `.d.ts`.
+    pub fn interface_text(&self) -> String {
+        interface::render(&self.registry)
+    }
+
+    /// Write the interface to a file (PRD §9.1 / Appendix B).
+    pub fn write_interface(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        std::fs::write(path, self.interface_text())
     }
 
     /// Compile a script. **All** type errors — including misuse of

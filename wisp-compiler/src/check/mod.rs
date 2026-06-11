@@ -372,6 +372,7 @@ impl<'a> Checker<'a> {
     }
 
     fn run(&mut self) {
+        self.reject_interface_items();
         self.register_host_names();
         self.collect_uses();
         self.collect_type_names();
@@ -380,6 +381,86 @@ impl<'a> Checker<'a> {
         self.validate_derives();
         self.check_bodies();
         self.collect_exports();
+    }
+
+    /// `mod` blocks, `const` items, bodyless fns and `#[opaque]` are the
+    /// `.wispi` interface grammar (PRD §9.1) — reject them in scripts.
+    fn reject_interface_items(&mut self) {
+        for item in &self.file.items {
+            match item {
+                Item::Mod(m) => {
+                    let span = m.name.span;
+                    self.out.diags.push(
+                        Diagnostic::error(
+                            "E0270",
+                            span,
+                            "`mod` blocks are only valid in `.wispi` interface files",
+                        )
+                        .with_help(
+                            "modules are registered by the host (PRD §3.9); scripts import \
+                             them with `use`",
+                        ),
+                    );
+                }
+                Item::Const(c) => {
+                    let span = c.name.span;
+                    self.out.diags.push(
+                        Diagnostic::error(
+                            "E0270",
+                            span,
+                            "`const` items are only valid in `.wispi` interface files",
+                        )
+                        .with_help("use a `let` binding inside a function instead"),
+                    );
+                }
+                Item::Fn(f) if !f.has_body => {
+                    let span = f.sig_span;
+                    self.out.diags.push(
+                        Diagnostic::error(
+                            "E0270",
+                            span,
+                            format!("function `{}` is missing a body", f.name.name),
+                        )
+                        .with_help(
+                            "bodyless declarations are only valid in `.wispi` interface files",
+                        ),
+                    );
+                }
+                Item::Struct(s) if s.opaque => {
+                    let span = s.name.span;
+                    self.out.diags.push(
+                        Diagnostic::error(
+                            "E0270",
+                            span,
+                            "`#[opaque]` is only valid in `.wispi` interface files",
+                        )
+                        .with_help(
+                            "opaque types are registered by the host with \
+                             #[derive(Script)] #[script(opaque)] (PRD §6.2)",
+                        ),
+                    );
+                }
+                Item::Impl(im) => {
+                    for f in &im.fns {
+                        if !f.has_body {
+                            let span = f.sig_span;
+                            self.out.diags.push(
+                                Diagnostic::error(
+                                    "E0270",
+                                    span,
+                                    format!("method `{}` is missing a body", f.name.name),
+                                )
+                                .with_help(
+                                    "bodyless declarations are only valid in `.wispi` \
+                                     interface files",
+                                ),
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Host-registered types are ambient in the type namespace (modules

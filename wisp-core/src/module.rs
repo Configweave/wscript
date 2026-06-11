@@ -174,7 +174,7 @@ pub struct TypeBuilder<'m, T> {
     _pd: std::marker::PhantomData<T>,
 }
 
-impl<'m, T: ScriptOpaque> TypeBuilder<'m, T> {
+impl<'m, T: ScriptType + 'static> TypeBuilder<'m, T> {
     pub fn method<M: 'static, F: HostMethodFn<T, M>>(
         &mut self,
         name: impl Into<String>,
@@ -523,4 +523,68 @@ pub fn opaque_into_value<T: ScriptOpaque>(
         def,
         cell: std::cell::RefCell::new(Box::new(value)),
     })))
+}
+
+/// Marker: data-type receiver (converted by value; methods are read-only
+/// accessors — mutations to the receiver are not written back).
+pub struct RecvData;
+
+macro_rules! impl_host_method_data {
+    ($n:expr; $($A:ident : $idx:tt),*) => {
+        impl<Func, Ret, T, $($A,)*> HostMethodFn<T, (RecvData, $(OwnArg<$A>,)*)> for Func
+        where
+            T: FromValue + ScriptType + 'static,
+            Func: Fn(&T, $($A),*) -> Ret + Send + Sync + 'static,
+            Ret: IntoValue + ScriptType,
+            $($A: FromValue + ScriptType + 'static,)*
+        {
+            fn sig(defs: &mut DefTable) -> FnSig {
+                FnSig::new(
+                    vec![$(<$A as ScriptType>::script_type(defs)),*],
+                    <Ret as ScriptType>::script_type(defs),
+                )
+            }
+            fn into_callable(self) -> Arc<dyn HostCallable> {
+                Arc::new(
+                    move |ctx: &mut dyn HostCtx, args: Vec<Value>| -> Result<Value, HostError> {
+                        check_arity(&args, $n + 1)?;
+                        let defs = ctx.defs();
+                        let recv = <T as FromValue>::from_value(args[0].clone(), defs)?;
+                        $(let $A = <$A as FromValue>::from_value(args[1 + $idx].clone(), defs)?;)*
+                        let ret = (self)(&recv, $($A),*);
+                        ret.into_value(ctx.defs())
+                    },
+                )
+            }
+        }
+    };
+}
+
+impl_host_method_data!(0;);
+impl_host_method_data!(1; A0: 0);
+impl_host_method_data!(2; A0: 0, A1: 1);
+impl_host_method_data!(3; A0: 0, A1: 1, A2: 2);
+
+/// `&str` single-arg data-receiver method variant.
+impl<Func, Ret, T> HostMethodFn<T, (RecvData, StrArg)> for Func
+where
+    T: FromValue + ScriptType + 'static,
+    Func: Fn(&T, &str) -> Ret + Send + Sync + 'static,
+    Ret: IntoValue + ScriptType,
+{
+    fn sig(defs: &mut DefTable) -> FnSig {
+        FnSig::new(vec![Type::Str], <Ret as ScriptType>::script_type(defs))
+    }
+    fn into_callable(self) -> Arc<dyn HostCallable> {
+        Arc::new(
+            move |ctx: &mut dyn HostCtx, args: Vec<Value>| -> Result<Value, HostError> {
+                check_arity(&args, 2)?;
+                let defs = ctx.defs();
+                let recv = <T as FromValue>::from_value(args[0].clone(), defs)?;
+                let s = str_of(&args[1])?;
+                let ret = (self)(&recv, &s);
+                ret.into_value(ctx.defs())
+            },
+        )
+    }
 }

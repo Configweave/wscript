@@ -8,6 +8,8 @@ pub enum TokenKind {
     Str(String),
     Char(char),
     Ident(String),
+    /// `/// ...` documentation comment (attached to declarations).
+    DocComment(String),
 
     // keywords
     KwLet,
@@ -31,6 +33,9 @@ pub enum TokenKind {
     KwFalse,
     KwDyn,
     KwSelf,
+    /// Interface files (`.wispi`) only.
+    KwMod,
+    KwConst,
 
     // punctuation
     LParen,
@@ -83,6 +88,7 @@ impl TokenKind {
             TokenKind::Str(_) => "string literal".into(),
             TokenKind::Char(_) => "char literal".into(),
             TokenKind::Ident(name) => format!("`{name}`"),
+            TokenKind::DocComment(_) => "doc comment".into(),
             TokenKind::KwLet => "`let`".into(),
             TokenKind::KwFn => "`fn`".into(),
             TokenKind::KwStruct => "`struct`".into(),
@@ -103,6 +109,8 @@ impl TokenKind {
             TokenKind::KwTrue => "`true`".into(),
             TokenKind::KwFalse => "`false`".into(),
             TokenKind::KwDyn => "`dyn`".into(),
+            TokenKind::KwMod => "`mod`".into(),
+            TokenKind::KwConst => "`const`".into(),
             TokenKind::KwSelf => "`self`".into(),
             TokenKind::LParen => "`(`".into(),
             TokenKind::RParen => "`)`".into(),

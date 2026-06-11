@@ -28,6 +28,28 @@ pub enum Item {
     Enum(EnumDecl),
     Trait(TraitDecl),
     Impl(ImplDecl),
+    /// `mod name { ... }` — interface files (`.wispi`) only.
+    Mod(ModDecl),
+    /// `const NAME: type` — interface files (`.wispi`) only.
+    Const(ConstDecl),
+}
+
+/// A module declaration block, valid only in `.wispi` interface files
+/// (PRD §9.1); the checker rejects it in scripts.
+#[derive(Debug)]
+pub struct ModDecl {
+    pub name: Ident,
+    pub items: Vec<Item>,
+    pub doc: Option<String>,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+pub struct ConstDecl {
+    pub name: Ident,
+    pub ty: TypeExpr,
+    pub doc: Option<String>,
+    pub span: Span,
 }
 
 /// `use module` / `use module::item`
@@ -44,6 +66,9 @@ pub struct FnDecl {
     pub params: Vec<Param>,
     pub ret: Option<TypeExpr>,
     pub body: Block,
+    /// `false` for bodyless declarations (`.wispi` interface files only).
+    pub has_body: bool,
+    pub doc: Option<String>,
     pub span: Span,
     /// Span of `fn name(params) -> ret` for hover/goto.
     pub sig_span: Span,
@@ -63,6 +88,9 @@ pub struct StructDecl {
     pub name: Ident,
     pub fields: Vec<FieldDecl>,
     pub derives: Vec<Ident>,
+    /// `#[opaque]` — interface files only (host handle types).
+    pub opaque: bool,
+    pub doc: Option<String>,
     pub span: Span,
 }
 
@@ -78,6 +106,7 @@ pub struct EnumDecl {
     pub name: Ident,
     pub variants: Vec<VariantDecl>,
     pub derives: Vec<Ident>,
+    pub doc: Option<String>,
     pub span: Span,
 }
 
