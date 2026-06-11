@@ -14,4 +14,4 @@ path = "src/main.rs"
 wisp.workspace = true
 mlua = { version = "0.10", features = ["lua54", "vendored"] }
 rhai = "1"
-rune = "0.13"
+rune = "0.14"

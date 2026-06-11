@@ -80,7 +80,7 @@ wisp lsp                         # language server (diagnostics, hover,
 - [Language tour](docs/tour.md)
 - [Embedding guide](docs/embedding.md)
 - [Stdlib reference](docs/stdlib.md)
-- [Benchmarks](docs/benchmarks.md) — beats Rhai/Rune, trails Lua's C interpreter
+- [Benchmarks](docs/benchmarks.md) — beats Rhai, trades blows with Rune, trails Lua
 - [PRD](docs/PRD.md) — the design source of truth
 
 ## Building
