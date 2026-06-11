@@ -852,15 +852,25 @@ impl<'a> Checker<'a> {
                     let expected = &td.methods[slot].1;
                     let actual = &self.out.fn_infos[*proto as usize].sig;
                     let subst: Vec<Type> = if td.operator {
-                        // Param(0) = Self; Param(1) is free (Index) — bind
-                        // it to whatever the impl declared so it always
-                        // matches.
+                        // Param(0) = Self. Param(1)/Param(2) are
+                        // impl-chosen (Index's key and output types): bind
+                        // them to whatever the impl declared so the shape
+                        // check only enforces structure.
                         let p1 = expected
                             .params
                             .iter()
                             .position(|p| *p == Type::Param(1))
-                            .and_then(|i| actual.params.get(1 + i - 1).cloned());
-                        vec![self_ty.clone(), p1.unwrap_or(Type::Error)]
+                            .and_then(|i| actual.params.get(1 + i).cloned());
+                        let p2 = if expected.ret == Type::Param(2) {
+                            Some(actual.ret.clone())
+                        } else {
+                            None
+                        };
+                        vec![
+                            self_ty.clone(),
+                            p1.unwrap_or(Type::Error),
+                            p2.unwrap_or(Type::Error),
+                        ]
                     } else {
                         vec![]
                     };
@@ -1051,7 +1061,9 @@ impl<'a> Checker<'a> {
 
     pub(crate) fn ord_able(&self, t: &Type) -> bool {
         match t {
-            Type::Int | Type::Float | Type::Char | Type::Str | Type::Bool => true,
+            Type::Int | Type::Float | Type::Char | Type::Str | Type::Bool | Type::Unit => true,
+            Type::List(e) | Type::Option(e) => self.ord_able(e),
+            Type::Result(a, b) => self.ord_able(a) && self.ord_able(b),
             Type::Named(id) => {
                 self.derives.get(id).is_some_and(|d| d.ord)
                     || self.out.impl_maps.cmp.contains_key(&id.0)

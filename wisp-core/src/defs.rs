@@ -171,9 +171,9 @@ impl DefTable {
         }));
         defs.push(DefKind::Trait(TraitDef {
             name: "Index".into(),
-            // Impls declare their own concrete index/output types; Param(1)
-            // here only records the two-slot shape.
-            methods: vec![("index".into(), FnSig::new(vec![p1()], p0()))],
+            // Impls declare their own concrete index (Param 1) and output
+            // (Param 2) types; only the one-parameter shape is fixed.
+            methods: vec![("index".into(), FnSig::new(vec![p1()], Type::Param(2)))],
             operator: true,
         }));
         debug_assert_eq!(defs.len(), FIRST_FREE_DEF as usize);

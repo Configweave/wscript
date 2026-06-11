@@ -186,3 +186,64 @@ fn assignment_targets() {
 fn use_unknown_module() {
     fails_with("use nonexistent\nfn main() {}", "E0200");
 }
+
+#[test]
+fn traits_and_impls() {
+    let t = "trait Speak { fn speak(self) -> string }\nstruct D { x: int }\n";
+    // Missing method in impl.
+    fails_with(
+        &format!("{t}impl Speak for D {{ }}\nfn main() {{}}"),
+        "E0208",
+    );
+    // Wrong signature.
+    fails_with(
+        &format!("{t}impl Speak for D {{ fn speak(self) -> int {{ 1 }} }}\nfn main() {{}}"),
+        "E0208",
+    );
+    // Coercion to dyn requires an impl.
+    fails_with(
+        &format!("{t}fn f(s: dyn Speak) {{}}\nfn main() {{ f(D {{ x: 1 }}) }}"),
+        "E0223",
+    );
+    ok(&format!(
+        "{t}impl Speak for D {{ fn speak(self) -> string {{ \"hi\" }} }}\n\
+         fn f(s: dyn Speak) -> string {{ s.speak() }}\n\
+         fn main() {{ f(D {{ x: 1 }}); }}"
+    ));
+    // Bare trait as a type needs dyn.
+    fails_with(&format!("{t}fn f(s: Speak) {{}}\nfn main() {{}}"), "E0211");
+}
+
+#[test]
+fn eq_requires_impl_or_derive() {
+    let s = "struct P { x: int }\n";
+    fails_with(
+        &format!("{s}fn main() -> bool {{ P {{ x: 1 }} == P {{ x: 1 }} }}"),
+        "E0235",
+    );
+    ok(&format!(
+        "#[derive(Eq)]\n{s}fn main() -> bool {{ P {{ x: 1 }} == P {{ x: 1 }} }}"
+    ));
+}
+
+#[test]
+fn derives_validated() {
+    fails_with("#[derive(Hash)]\nstruct P { x: int }\nfn main() {}", "E0204");
+    fails_with("#[derive(Ord)]\nstruct P { x: int }\nfn main() {}", "E0204"); // Ord needs Eq
+    fails_with(
+        "#[derive(Eq)]\nstruct P { f: fn() -> int }\nfn main() {}",
+        "E0209",
+    );
+}
+
+#[test]
+fn weak_refs() {
+    ok("struct N { v: int }\nfn main() { let n = N { v: 1 }\n let w: weak[N] = weak(n)\n w.upgrade(); }");
+    fails_with("fn main() { weak(5); }", "E0213");
+    fails_with("fn main() { let w: weak[int] = weak(5) }", "E0213");
+}
+
+#[test]
+fn no_impls_for_builtins_or_host() {
+    fails_with("impl Option { fn f(self) {} }\nfn main() {}", "E0206");
+}
