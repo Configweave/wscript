@@ -20,21 +20,37 @@ use wisp_core::registry::Registry;
 use wisp_core::span::Span;
 use wisp_core::value::{Closure, DynObj, Key, Value};
 
+/// One frame of a runtime stack trace, innermost first.
+#[derive(Debug, Clone)]
+pub struct TraceFrame {
+    /// Name of the function this frame is executing.
+    pub function: String,
+    /// Span of the instruction the frame was executing when the fault
+    /// propagated through it — the fault site for the innermost frame, the
+    /// call site for outer frames. `None` when no span is available (e.g.
+    /// a synthetic `<host function>` frame).
+    pub span: Option<Span>,
+}
+
 /// A trappable runtime fault. Carries the source span of the faulting
 /// instruction and a script-level stack trace.
 #[derive(Debug, Clone)]
 pub struct RuntimeError {
     pub message: String,
+    /// Span of the faulting instruction. Equal to `trace[0].span`; kept as
+    /// a convenience for callers that only want the fault site.
     pub span: Option<Span>,
-    /// Function names, innermost first.
-    pub trace: Vec<String>,
+    /// Stack trace, innermost frame first.
+    pub trace: Vec<TraceFrame>,
 }
 
 impl fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Source-free fallback: callers with the source (CLI/REPL) render a
+        // richer trace with line numbers via `diag_render`.
         write!(f, "runtime error: {}", self.message)?;
-        for name in &self.trace {
-            write!(f, "\n  in {name}")?;
+        for frame in &self.trace {
+            write!(f, "\n  in {}", frame.function)?;
         }
         Ok(())
     }
@@ -248,21 +264,23 @@ impl Vm {
     }
 
     pub(crate) fn fault(&self, message: impl Into<String>) -> RuntimeError {
-        let span = self.frames.last().and_then(|f| {
-            let proto = &self.units[self.cur_unit].unit.protos[f.proto as usize];
-            proto.spans.get(f.pc.saturating_sub(1)).copied()
-        });
-        let trace = self
+        // NOTE: all frames are resolved against `self.cur_unit`. v1 only ever
+        // executes within a single unit (`cur_unit` is set once on entry and
+        // closures carry a proto but no unit), so this is correct. A future
+        // cross-unit call chain would need a per-frame unit index on `Frame`.
+        let trace: Vec<TraceFrame> = self
             .frames
             .iter()
             .rev()
-            .take(20)
             .map(|f| {
-                self.units[self.cur_unit].unit.protos[f.proto as usize]
-                    .name
-                    .clone()
+                let proto = &self.units[self.cur_unit].unit.protos[f.proto as usize];
+                TraceFrame {
+                    function: proto.name.clone(),
+                    span: proto.spans.get(f.pc.saturating_sub(1)).copied(),
+                }
             })
             .collect();
+        let span = trace.first().and_then(|t| t.span);
         RuntimeError {
             message: message.into(),
             span,
@@ -881,7 +899,13 @@ impl Vm {
 
     fn host_fault(&self, e: HostError) -> RuntimeError {
         let mut f = self.fault(e.message);
-        f.trace.insert(0, "<host function>".into());
+        f.trace.insert(
+            0,
+            TraceFrame {
+                function: "<host function>".into(),
+                span: None,
+            },
+        );
         f
     }
 }

@@ -363,6 +363,54 @@ fn script_fn_typed_handles() {
     assert!(matches!(missing, Err(Error::Signature(_))));
 }
 
+// ----------------------------------------------------------- stack trace
+
+#[test]
+fn runtime_fault_carries_full_stack_trace() {
+    // A fault in `inner`, called from `outer`, called from `main`, must
+    // produce a frame per call (innermost first), each with a source span.
+    let ctx = Context::new();
+    let unit = ctx
+        .compile(
+            "fn inner(xs: List[int]) -> int { xs[10] }\n\
+             fn outer(xs: List[int]) -> int { inner(xs) }\n\
+             fn main() -> int { let xs = [1, 2, 3]\n outer(xs) }",
+        )
+        .unwrap();
+    let mut vm = Vm::new(&ctx);
+    let err = match vm.call_values(&unit, "main", vec![]) {
+        Err(Error::Runtime(e)) => e,
+        other => panic!("expected a runtime fault, got {other:?}"),
+    };
+
+    assert!(
+        err.message.contains("out of bounds"),
+        "unexpected message: {}",
+        err.message
+    );
+    let names: Vec<&str> = err.trace.iter().map(|f| f.function.as_str()).collect();
+    assert_eq!(names, ["inner", "outer", "main"]);
+    assert!(
+        err.trace.iter().all(|f| f.span.is_some()),
+        "every script frame should carry a source span: {:?}",
+        err.trace
+    );
+    // `span` is a convenience mirror of the innermost frame's location.
+    assert_eq!(err.span, err.trace[0].span);
+    // The three frames sit on three distinct source lines.
+    let spans: Vec<u32> = err
+        .trace
+        .iter()
+        .filter_map(|f| f.span)
+        .map(|s| s.lo)
+        .collect();
+    assert_eq!(spans.len(), 3);
+    assert!(
+        spans[0] != spans[1] && spans[1] != spans[2],
+        "frames should point at distinct call sites: {spans:?}"
+    );
+}
+
 // --------------------------------------------------------------- Shared
 
 #[test]

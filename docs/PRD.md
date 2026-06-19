@@ -139,7 +139,7 @@ impl Damageable for Point {
 - `Option[T]` and `Result[T, E]` are stdlib enums (always available, no import).
 - `?` operator on both, with the same semantics as Rust (early-return the `None`/`Err`).
 - Host function errors map to script-level `Result` (§6.3) so `?` composes across the host boundary.
-- No exceptions. VM-level faults (e.g., index out of bounds, RefCell-style aliasing at the host boundary) surface as `Result` errors or, for true bugs, a trappable VM fault the *host* receives as `Err` — script code never catches panics.
+- No exceptions. VM-level faults (e.g., index out of bounds, RefCell-style aliasing at the host boundary) surface as `Result` errors or, for true bugs, a trappable VM fault the *host* receives as `Err` — script code never catches panics. A fault carries the message, the faulting span, and a full script-level stack trace (one frame per call, innermost first, each with a source span); the CLI renders each frame as `file:line:col`.
 
 ### 3.6 Generics: the deliberate cut
 
@@ -303,7 +303,9 @@ Binary name `wisp`:
 - `wisp lsp` — start the language server on stdio.
 - `wisp fmt` — **stretch goal**, only if trivial; do not block v1 on a formatter.
 
-Pretty diagnostics with source spans, colors when TTY.
+Pretty diagnostics with source spans, colors when TTY. Runtime faults
+render the message, a source snippet at the fault site, and a full script
+stack trace with per-frame `file:line:col`.
 
 ## 9. LSP
 

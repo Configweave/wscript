@@ -299,6 +299,27 @@ errors** delivered to the host with a stack trace — script code never
 catches them, and they never panic the host. Prefer the `Option`-returning
 APIs (`xs.get(i)`, `m.get(k)`) where failure is expected.
 
+`wisp run` renders a fault with the message, a source snippet at the fault
+site, and a full script stack trace — one frame per call, innermost first,
+each with its `file:line:col`:
+
+```
+Error: list index 10 out of bounds (len 3)
+   ╭─[script.wisp:2:5]
+ 2 │     xs[10]
+   │     ───┬──
+   │        ╰──── fault raised here
+───╯
+stack trace (most recent call first):
+  at inner  script.wisp:2:5
+  at outer  script.wisp:6:5
+  at main   script.wisp:11:5
+```
+
+Embedders get the same structure programmatically: `RuntimeError.trace` is
+a `Vec<TraceFrame>` (each a `function` name and an optional source `span`),
+innermost frame first, with `RuntimeError.span` mirroring the fault site.
+
 ## Modules
 
 `use module` imports a host-registered module; `use module::item` imports

@@ -33,7 +33,7 @@ pub use wisp_core::span::Span;
 pub use wisp_core::types::{FnSig, Type};
 pub use wisp_core::value::Value;
 pub use wisp_macros::Script;
-pub use wisp_vm::RuntimeError;
+pub use wisp_vm::{RuntimeError, TraceFrame};
 
 // Used by `#[derive(Script)]` expansions; not public API.
 #[doc(hidden)]
