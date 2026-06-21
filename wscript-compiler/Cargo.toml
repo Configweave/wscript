@@ -1,0 +1,9 @@
+[package]
+name = "wscript-compiler"
+description = "wscript compiler: lexer, parser, type checker, bytecode emitter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wscript-core.workspace = true

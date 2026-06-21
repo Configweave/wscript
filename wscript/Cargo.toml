@@ -1,0 +1,18 @@
+[package]
+name = "wscript"
+description = "wscript: an embeddable, statically typed scripting language for Rust"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["std"]
+# Re-export wscript-std (PRD §2); disable for minimal embeddings.
+std = ["dep:wscript-std"]
+
+[dependencies]
+wscript-core.workspace = true
+wscript-compiler.workspace = true
+wscript-vm.workspace = true
+wscript-macros.workspace = true
+wscript-std = { workspace = true, optional = true }

@@ -1,7 +1,7 @@
-# The wisp standard library reference
+# The wscript standard library reference
 
 Every module is opt-in at embed time (capability-style — nothing
-ambient) and feature-gated in Cargo. The CLI (`wisp run`) enables all of
+ambient) and feature-gated in Cargo. The CLI (`wscript run`) enables all of
 them. Scripts import with `use math`, then call `math::abs(x)`.
 
 **Decided surface note (PRD §7):** string operations are *methods on the
@@ -28,7 +28,7 @@ Float functions (take/return `float`): `abs min max clamp floor ceil
 round trunc sqrt pow exp ln log2 log10 sin cos tan asin acos atan atan2
 sinh cosh tanh asinh acosh atanh lerp signum`.
 
-Int variants (wisp has no overloading): `iabs imin imax iclamp isignum`.
+Int variants (wscript has no overloading): `iabs imin imax iclamp isignum`.
 
 Constants: `PI E TAU INF NAN`.
 
@@ -84,7 +84,7 @@ enum Value {
 ```
 
 You can `match` on it like any enum, or use the accessor methods
-(register `wisp_std::value()` for these; the CLI always does):
+(register `wscript_std::value()` for these; the CLI always does):
 
 `get(key) -> Option[Value]` · `at(idx) -> Option[Value]` ·
 `keys() -> List[string]` · `len() -> int` · `is_null() -> bool` ·
@@ -137,10 +137,10 @@ shapes.get("shape").unwrap().len()             // 2 — repeated → List
 
 ## Cargo features
 
-`wisp-std` features (default = all): `math`, `fs`, `process`, `json`,
+`wscript-std` features (default = all): `math`, `fs`, `process`, `json`,
 `toml`, `xml`. The shared `Value` type and its module are always
 compiled. Embedders wanting a minimal build:
 
 ```toml
-wisp-std = { version = "...", default-features = false, features = ["math"] }
+wscript-std = { version = "...", default-features = false, features = ["math"] }
 ```

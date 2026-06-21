@@ -1,0 +1,24 @@
+[package]
+name = "wscript-cli"
+description = "wscript command-line interface: run, check, repl, lsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "wscript"
+path = "src/main.rs"
+
+[dependencies]
+wscript.workspace = true
+wscript-std.workspace = true
+wscript-compiler.workspace = true
+ariadne = "0.4"
+rustyline = "14"
+toml = "0.8"
+tower-lsp = "0.20"
+tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros"] }
+
+[dev-dependencies]
+wscript-compiler.workspace = true
+wscript-vm.workspace = true

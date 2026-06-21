@@ -1,14 +1,14 @@
-# PRD: wisp — an embeddable scripting language for Rust
+# PRD: wscript — an embeddable scripting language for Rust
 
 **Status:** Draft v1 for implementation
-**Working name:** `wisp` (placeholder — rename is a find/replace; note "Wren" is taken by an existing embeddable language)
+**Working name:** `wscript` (placeholder — rename is a find/replace; note "Wren" is taken by an existing embeddable language)
 **Target:** Rust workspace, implemented incrementally per the milestones in §10
 
 ---
 
 ## 1. Summary
 
-wisp is a statically typed, Rust-flavored scripting language designed to be embedded in Rust applications, occupying the niche Lua occupies for C programs. It compiles to bytecode and runs on a register-based VM. Its differentiating features over Lua/Rhai/Rune:
+wscript is a statically typed, Rust-flavored scripting language designed to be embedded in Rust applications, occupying the niche Lua occupies for C programs. It compiles to bytecode and runs on a register-based VM. Its differentiating features over Lua/Rhai/Rune:
 
 1. **Static typing with inference** — type errors, including misuse of *host-registered* APIs, are caught at script compile time, not at runtime.
 2. **First-class Rust interop** — exposing host functions and types is one derive and one registration call, with plain Rust signatures and no manual value wrangling.
@@ -36,20 +36,20 @@ Scripting layer for the author's Rust tools (terminal multiplexer, editor, task 
 Cargo workspace:
 
 ```
-wisp/            # umbrella crate: embedding API, re-exports compiler+vm+std
-wisp-compiler/   # lexer, parser, AST, type checker, bytecode emitter
-wisp-vm/         # register-based VM, value model, Rc runtime
-wisp-std/        # stdlib modules, individually feature-gated
-wisp-cli/        # binary: run, check, repl, lsp subcommands
+wscript/            # umbrella crate: embedding API, re-exports compiler+vm+std
+wscript-compiler/   # lexer, parser, AST, type checker, bytecode emitter
+wscript-vm/         # register-based VM, value model, Rc runtime
+wscript-std/        # stdlib modules, individually feature-gated
+wscript-cli/        # binary: run, check, repl, lsp subcommands
 ```
 
-Dependency direction: `wisp-cli → wisp → {wisp-compiler, wisp-vm, wisp-std}`. The compiler and VM share a `wisp-core`-style set of common types (bytecode format, type representations, constants) — either a small shared crate or a module re-exported from `wisp-compiler`; implementer's choice, but the VM must not depend on the parser.
+Dependency direction: `wscript-cli → wscript → {wscript-compiler, wscript-vm, wscript-std}`. The compiler and VM share a `wscript-core`-style set of common types (bytecode format, type representations, constants) — either a small shared crate or a module re-exported from `wscript-compiler`; implementer's choice, but the VM must not depend on the parser.
 
 Embedding flow:
 
 ```rust
 let ctx = Context::new()
-    .module(wisp_std::math())
+    .module(wscript_std::math())
     .module(my_app_module());     // host API
 let unit = ctx.compile(source)?;  // ALL type errors surface here
 let mut vm = Vm::new(&ctx);
@@ -73,7 +73,7 @@ Key invariant: **the type checker knows every host signature before checking a s
 
 Primitives (value types, stored inline in registers):
 
-| wisp type | representation |
+| wscript type | representation |
 |---|---|
 | `int` | `i64` |
 | `float` | `f64` |
@@ -273,7 +273,7 @@ Script types implementing *host* traits (Rust code taking `Box<dyn Widget>` back
 
 ---
 
-## 7. Standard library (`wisp-std`)
+## 7. Standard library (`wscript-std`)
 
 Every module is opt-in at embed time (capability-style — nothing ambient) and feature-gated in Cargo. The CLI enables all of them by default.
 
@@ -293,15 +293,15 @@ Every module is opt-in at embed time (capability-style — nothing ambient) and 
 
 ---
 
-## 8. CLI (`wisp-cli`)
+## 8. CLI (`wscript-cli`)
 
-Binary name `wisp`:
+Binary name `wscript`:
 
-- `wisp run <file> [args...]` — compile + execute, full stdlib, script args via `process::args()`. Exit code from script `main`'s return (int or unit→0) or 1 on error.
-- `wisp check <file>` — compile only, print diagnostics, exit code reflects success. Honors `.wispi` files (§9).
-- `wisp repl` — line-oriented REPL. Best-effort: persistent top-level `let` bindings across lines; acceptable to re-compile incrementally. Keep it simple.
-- `wisp lsp` — start the language server on stdio.
-- `wisp fmt` — **stretch goal**, only if trivial; do not block v1 on a formatter.
+- `wscript run <file> [args...]` — compile + execute, full stdlib, script args via `process::args()`. Exit code from script `main`'s return (int or unit→0) or 1 on error.
+- `wscript check <file>` — compile only, print diagnostics, exit code reflects success. Honors `.wscripti` files (§9).
+- `wscript repl` — line-oriented REPL. Best-effort: persistent top-level `let` bindings across lines; acceptable to re-compile incrementally. Keep it simple.
+- `wscript lsp` — start the language server on stdio.
+- `wscript fmt` — **stretch goal**, only if trivial; do not block v1 on a formatter.
 
 Pretty diagnostics with source spans, colors when TTY. Runtime faults
 render the message, a source snippet at the fault site, and a full script
@@ -309,22 +309,22 @@ stack trace with per-frame `file:line:col`.
 
 ## 9. LSP
 
-- Built on `tower-lsp`, launched via `wisp lsp` (stdio).
+- Built on `tower-lsp`, launched via `wscript lsp` (stdio).
 - **v1 features, in priority order:**
   1. Diagnostics (straight reuse of compiler errors; requires the error-recovering parser from §5.1)
   2. Hover (inferred types, signatures, doc strings on host decls if present)
-  3. Go-to-definition (script-local symbols; host symbols jump to `.wispi` entry)
+  3. Go-to-definition (script-local symbols; host symbols jump to `.wscripti` entry)
   4. Completions (keywords, in-scope symbols, module members, struct fields, enum variants after `::`, methods after `.`)
 - **Deferred:** rename, find-references, semantic tokens, formatting, code actions.
 
-### 9.1 Declaration files (`.wispi`) — the host-API problem
+### 9.1 Declaration files (`.wscripti`) — the host-API problem
 
-The point of wisp is scripting against host-registered APIs the LSP has never seen. Fix:
+The point of wscript is scripting against host-registered APIs the LSP has never seen. Fix:
 
-- `Context::write_interface(path)` dumps every registered module/function/type/const signature to a `.wispi` interface file — a *textual, human-readable* subset of wisp syntax (declarations only, no bodies), versioned and diff-friendly. Think `.d.ts`.
-- A small project manifest (`wisp.toml`) in the workspace root lists `.wispi` files (and later, settings). The LSP and `wisp check` both honor it.
-- `wisp-std` ships generated `.wispi` files for its modules so the LSP works out of the box for CLI scripts.
-- The `.wispi` grammar is a strict subset of the language grammar — parse it with the same parser.
+- `Context::write_interface(path)` dumps every registered module/function/type/const signature to a `.wscripti` interface file — a *textual, human-readable* subset of wscript syntax (declarations only, no bodies), versioned and diff-friendly. Think `.d.ts`.
+- A small project manifest (`wscript.toml`) in the workspace root lists `.wscripti` files (and later, settings). The LSP and `wscript check` both honor it.
+- `wscript-std` ships generated `.wscripti` files for its modules so the LSP works out of the box for CLI scripts.
+- The `.wscripti` grammar is a strict subset of the language grammar — parse it with the same parser.
 
 ---
 
@@ -332,19 +332,19 @@ The point of wisp is scripting against host-registered APIs the LSP has never se
 
 Each milestone should land with tests passing and an updated `examples/` script demonstrating the new surface.
 
-1. **M1 — Core pipeline:** lexer, parser (with recovery), AST; `let`, functions, primitives, arithmetic/comparison, `if`/`while`/blocks; type checker for the above; bytecode + VM executing it; `wisp run`/`wisp check` minimal. *Gate: fib/fizzbuzz scripts run.*
+1. **M1 — Core pipeline:** lexer, parser (with recovery), AST; `let`, functions, primitives, arithmetic/comparison, `if`/`while`/blocks; type checker for the above; bytecode + VM executing it; `wscript run`/`wscript check` minimal. *Gate: fib/fizzbuzz scripts run.*
 2. **M2 — Data types:** structs, impl blocks, methods; enums, `match` with exhaustiveness, `if let`/`let else`; `Option`/`Result` + `?`; `List`/`Map` built-ins with literals (`[1,2,3]`, map literal syntax of implementer's choosing — propose, don't agonize); `for` loops; `string` type + methods. *Gate: a non-trivial script (e.g., a small interpreter or task-list app) runs.*
 3. **M3 — Traits & Rc semantics:** traits, impl Trait for Type, `dyn Trait` vtable dispatch, operator traits, derives; `weak[T]`; reference-semantics test suite (aliasing, mutation visibility, cycle-leak documented behavior).
 4. **M4 — Interop:** `Context`/`Module`/registration, `#[derive(Script)]` (data + opaque), `FromValue`/`IntoValue`, `vm.call`, `ScriptFn`, `Shared<T>`, host-signature type checking with good diagnostics. *Gate: an example host app (mini TUI or echo server) scripted end to end.*
-5. **M5 — Stdlib:** all §7 modules + the shared `Value` type; feature gates; `.wispi` generation for std.
-6. **M6 — Tooling:** REPL; LSP with the four v1 features; `wisp.toml` + `.wispi` consumption; editor smoke test (VS Code via generic LSP client is sufficient — no extension required for v1).
+5. **M5 — Stdlib:** all §7 modules + the shared `Value` type; feature gates; `.wscripti` generation for std.
+6. **M6 — Tooling:** REPL; LSP with the four v1 features; `wscript.toml` + `.wscripti` consumption; editor smoke test (VS Code via generic LSP client is sufficient — no extension required for v1).
 7. **M7 — Polish:** diagnostics pass (every error has a help text), docs (language tour + embedding guide + stdlib reference), benchmark vs Lua/Rhai/Rune on a few microbenchmarks (honest numbers, whatever they are).
 
 ## 11. Testing requirements
 
 - Compiler: snapshot tests for diagnostics (insta or similar); golden tests parser → AST.
 - Type checker: positive/negative test pairs per feature, especially match exhaustiveness and host-signature misuse.
-- VM: behavior tests written *in wisp* under `tests/scripts/`, runner asserts on output/exit.
+- VM: behavior tests written *in wscript* under `tests/scripts/`, runner asserts on output/exit.
 - Interop: round-trip conversion tests for every `FromValue`/`IntoValue` impl; aliasing-violation-returns-Err tests.
 - Fuzzing the parser (cargo-fuzz) is a stretch goal.
 
@@ -423,7 +423,7 @@ fn main() -> int {
 ## Appendix B — Embedding sample (target surface)
 
 ```rust
-use wisp::{Context, Module, Vm, ScriptFn};
+use wscript::{Context, Module, Vm, ScriptFn};
 
 #[derive(Script)]
 struct KeyEvent { code: char, ctrl: bool }
@@ -443,13 +443,13 @@ fn pane_module() -> Module {
 
 fn main() -> anyhow::Result<()> {
     let ctx = Context::new()
-        .module(wisp_std::math())
-        .module(wisp_std::string())
+        .module(wscript_std::math())
+        .module(wscript_std::string())
         .module(pane_module());
 
-    ctx.write_interface("api.wispi")?;          // for the LSP
+    ctx.write_interface("api.wscripti")?;          // for the LSP
 
-    let unit = ctx.compile(&std::fs::read_to_string("init.wisp")?)?;
+    let unit = ctx.compile(&std::fs::read_to_string("init.wscript")?)?;
     let mut vm = Vm::new(&ctx);
 
     let on_key: ScriptFn<(KeyEvent,), bool> = unit.fn_handle("on_key")?;

@@ -1,0 +1,9 @@
+[package]
+name = "wscript-vm"
+description = "wscript register-based virtual machine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wscript-core.workspace = true

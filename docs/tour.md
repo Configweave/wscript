@@ -1,12 +1,12 @@
-# The wisp language tour
+# The wscript language tour
 
-wisp is a statically typed, Rust-flavored scripting language that embeds in
+wscript is a statically typed, Rust-flavored scripting language that embeds in
 Rust applications the way Lua embeds in C programs. If you know Rust, you
-already know most of wisp — subtract the borrow checker, lifetimes, and
+already know most of wscript — subtract the borrow checker, lifetimes, and
 generics, and you are there. If you don't know Rust, this tour is still an
 afternoon read.
 
-Run any example with `wisp run file.wisp`. Execution starts at `fn main()`;
+Run any example with `wscript run file.wscript`. Execution starts at `fn main()`;
 its `int` return becomes the exit code (`unit` means 0).
 
 ## Values and types
@@ -115,7 +115,7 @@ impl Player {
 ```
 
 `self` is implicit in type and always by reference — there is no `&` in
-wisp at all.
+wscript at all.
 
 **Reference semantics** (the Lua/Python mental model, stated explicitly):
 assignment, argument passing and returns of reference types copy the
@@ -270,7 +270,7 @@ deep copy. `Ord`'s custom form is `fn cmp(self, other: Self) -> int`
 
 ## Memory: reference counting and weak references
 
-wisp uses **pure reference counting. Reference cycles leak.** This is a
+wscript uses **pure reference counting. Reference cycles leak.** This is a
 deliberate, documented trade — there is no cycle collector. Break cycles
 with weak references:
 
@@ -299,21 +299,21 @@ errors** delivered to the host with a stack trace — script code never
 catches them, and they never panic the host. Prefer the `Option`-returning
 APIs (`xs.get(i)`, `m.get(k)`) where failure is expected.
 
-`wisp run` renders a fault with the message, a source snippet at the fault
+`wscript run` renders a fault with the message, a source snippet at the fault
 site, and a full script stack trace — one frame per call, innermost first,
 each with its `file:line:col`:
 
 ```
 Error: list index 10 out of bounds (len 3)
-   ╭─[script.wisp:2:5]
+   ╭─[script.wscript:2:5]
  2 │     xs[10]
    │     ───┬──
    │        ╰──── fault raised here
 ───╯
 stack trace (most recent call first):
-  at inner  script.wisp:2:5
-  at outer  script.wisp:6:5
-  at main   script.wisp:11:5
+  at inner  script.wscript:2:5
+  at outer  script.wscript:6:5
+  at main   script.wscript:11:5
 ```
 
 Embedders get the same structure programmatically: `RuntimeError.trace` is
@@ -328,7 +328,7 @@ planned for v2. Registered types are ambient (no `use` needed for type
 names). The prelude — always available — is: `print println str fmt same
 weak int float`.
 
-## What wisp does not have (v1)
+## What wscript does not have (v1)
 
 By design: borrow checker, `&`/`&mut`, lifetimes, user-defined generics
 (the built-in containers are special-cased), exceptions, async, threads

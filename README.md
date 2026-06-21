@@ -1,4 +1,4 @@
-# wisp
+# wscript
 
 An embeddable, statically typed, Rust-flavored scripting language —
 occupying the niche for Rust applications that Lua occupies for C
@@ -57,21 +57,21 @@ What sets it apart from Lua/Rhai/Rune:
 
 | crate | contents |
 |---|---|
-| `wisp` | umbrella: embedding API (`Context`, `Vm`, `ScriptFn`, `Shared`), re-exports |
-| `wisp-core` | shared types: spans, diagnostics, type repr, bytecode, values, registry |
-| `wisp-compiler` | lexer, error-recovering parser, type checker, bytecode emitter |
-| `wisp-vm` | register-based VM (one per thread; `Context`/units shared across threads) |
-| `wisp-std` | stdlib: math, fs, process, json/toml/xml over one `Value` type — capability-style, feature-gated |
-| `wisp-macros` | `#[derive(Script)]` |
-| `wisp-cli` | the `wisp` binary: `run`, `check`, `repl`, `lsp` |
+| `wscript` | umbrella: embedding API (`Context`, `Vm`, `ScriptFn`, `Shared`), re-exports |
+| `wscript-core` | shared types: spans, diagnostics, type repr, bytecode, values, registry |
+| `wscript-compiler` | lexer, error-recovering parser, type checker, bytecode emitter |
+| `wscript-vm` | register-based VM (one per thread; `Context`/units shared across threads) |
+| `wscript-std` | stdlib: math, fs, process, json/toml/xml over one `Value` type — capability-style, feature-gated |
+| `wscript-macros` | `#[derive(Script)]` |
+| `wscript-cli` | the `wscript` binary: `run`, `check`, `repl`, `lsp` |
 
 ## CLI
 
 ```sh
-wisp run script.wisp [args...]   # compile + execute (full stdlib)
-wisp check script.wisp           # compile only; honors wisp.toml/.wispi
-wisp repl                        # persistent-binding REPL
-wisp lsp                         # language server (diagnostics, hover,
+wscript run script.wscript [args...]   # compile + execute (full stdlib)
+wscript check script.wscript           # compile only; honors wscript.toml/.wscripti
+wscript repl                        # persistent-binding REPL
+wscript lsp                         # language server (diagnostics, hover,
                                  # goto-definition, completions)
 ```
 
@@ -86,5 +86,5 @@ wisp lsp                         # language server (diagnostics, hover,
 ## Building
 
 Standard Rust toolchain: `cargo build`, `cargo test`, `cargo clippy`.
-Examples live in `examples/` (run with `wisp run`) and
-`wisp/examples/host_app.rs` (`cargo run -p wisp --example host_app`).
+Examples live in `examples/` (run with `wscript run`) and
+`wscript/examples/host_app.rs` (`cargo run -p wscript --example host_app`).

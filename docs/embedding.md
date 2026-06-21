@@ -1,19 +1,19 @@
-# Embedding wisp in a Rust application
+# Embedding wscript in a Rust application
 
-wisp's reason to exist is PRD §6: exposing host functions and types is one
+wscript's reason to exist is PRD §6: exposing host functions and types is one
 derive and one registration call, with plain Rust signatures, and **all**
 type errors — including misuse of your host API — surface when the script
 compiles, not when it runs.
 
 ```toml
 [dependencies]
-wisp = { path = "..." }          # umbrella crate: everything you need
+wscript = { path = "..." }          # umbrella crate: everything you need
 ```
 
 ## The 60-second version
 
 ```rust
-use wisp::{Context, Module, Vm};
+use wscript::{Context, Module, Vm};
 
 let mut m = Module::new("term");
 m.fn_("clear", || { /* ... */ });
@@ -21,7 +21,7 @@ m.fn_("print_at", |x: i64, y: i64, s: &str| { /* ... */ });
 m.const_("MAX_PANES", 16i64);
 
 let ctx = Context::new()
-    .module(wisp::std_modules::math())
+    .module(wscript::std_modules::math())
     .module(m);
 
 let unit = ctx.compile(r#"
@@ -110,8 +110,8 @@ m.ty::<Pane>()
   still needs registering: `Context::new().register_type::<KeyEvent>()`.
 
 Options: `#[script(name = "Other")]` renames the script-side type;
-`#[script(crate_path = "wisp_core")]` for crates that depend on
-`wisp-core` directly.
+`#[script(crate_path = "wscript_core")]` for crates that depend on
+`wscript-core` directly.
 
 ## Calling script from Rust
 
@@ -120,8 +120,8 @@ Options: `#[script(name = "Other")]` renames the script-side type;
 let n: i64 = vm.call(&unit, "compute", (5i64, "scale"))?;
 
 // Hot path — typed handle, signature verified once at lookup:
-use wisp::UnitExt;
-let on_key: wisp::ScriptFn<(KeyEvent,), bool> = unit.fn_handle("on_key")?;
+use wscript::UnitExt;
+let on_key: wscript::ScriptFn<(KeyEvent,), bool> = unit.fn_handle("on_key")?;
 let quit = on_key.call(&mut vm, (key_event,))?;   // cheap thereafter
 ```
 
@@ -179,25 +179,25 @@ ever run on the calling VM's thread.
 The editor has never seen your host API. Fix that with one line:
 
 ```rust
-ctx.write_interface("api.wispi")?;
+ctx.write_interface("api.wscripti")?;
 ```
 
-and a `wisp.toml` next to your scripts:
+and a `wscript.toml` next to your scripts:
 
 ```toml
-interfaces = ["api.wispi"]
+interfaces = ["api.wscripti"]
 ```
 
-`wisp check` and `wisp lsp` read the manifest and typecheck scripts
+`wscript check` and `wscript lsp` read the manifest and typecheck scripts
 against the declared API — completions, hover, goto-definition included.
-`.wispi` files are a strict subset of wisp syntax (declarations only,
+`.wscripti` files are a strict subset of wscript syntax (declarations only,
 think `.d.ts`) and are diff-friendly; regenerate them in CI to keep them
-honest. The stdlib ships its own (`wisp-std/wispi/std.wispi`).
+honest. The stdlib ships its own (`wscript-std/wscripti/std.wscripti`).
 
 ## Feature gates
 
 The umbrella crate re-exports the stdlib behind the default `std`
-feature; each stdlib module is also its own Cargo feature in `wisp-std`
+feature; each stdlib module is also its own Cargo feature in `wscript-std`
 (`math`, `fs`, `process`, `json`, `toml`, `xml` — default all). Registering
 a module is what grants the capability: don't register `fs`, and scripts
 cannot touch the filesystem.
