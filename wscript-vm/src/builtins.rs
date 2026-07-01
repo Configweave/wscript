@@ -534,8 +534,7 @@ impl Vm {
                 Value::Unit
             }
             Builtin::MapClone => {
-                let v = args[0].clone();
-                let Value::Map(m) = &v else { unreachable!() };
+                let m = map_arg!(0);
                 let snapshot = m.borrow().clone();
                 let mut out = BTreeMap::new();
                 for (k, x) in snapshot {

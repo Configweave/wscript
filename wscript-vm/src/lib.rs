@@ -5,6 +5,14 @@
 //! VM-level faults (out-of-bounds indexing, division by zero, borrow
 //! conflicts at the host boundary) are trappable [`RuntimeError`]s returned
 //! to the host; script code never observes a panic (PRD §3.5).
+//!
+//! Bytecode is trusted: instruction operands (proto/register/capture/
+//! vtable/field indices) are the wscript compiler's own output and are
+//! not re-validated per instruction — the dispatch loop indexes with
+//! them directly. Everything that crosses the *script* boundary (values,
+//! arithmetic, collection indices, recursion depth) is checked and
+//! faults; running hand-crafted or corrupted `CompiledUnit`s is outside
+//! the threat model and may panic.
 
 mod builtins;
 mod ops;
@@ -65,15 +73,19 @@ impl std::error::Error for RuntimeError {}
 // a tool whose stdout carries machine-readable output). The hook is
 // per-thread, matching the one-`Vm`-per-thread model.
 
+/// A print hook receives the printed text and `true` for `println`
+/// (trailing newline).
+pub type PrintHook = Box<dyn FnMut(&str, bool)>;
+
 thread_local! {
-    static PRINT_HOOK: std::cell::RefCell<Option<Box<dyn FnMut(&str, bool)>>> =
+    static PRINT_HOOK: std::cell::RefCell<Option<PrintHook>> =
         const { std::cell::RefCell::new(None) };
 }
 
 /// Install (or clear, with `None`) the current thread's print hook. While
 /// set, `print`/`println` deliver their text to the hook instead of
-/// stdout; the `bool` argument is `true` for `println` (trailing newline).
-pub fn set_print_hook(hook: Option<Box<dyn FnMut(&str, bool)>>) {
+/// stdout.
+pub fn set_print_hook(hook: Option<PrintHook>) {
     PRINT_HOOK.with(|h| *h.borrow_mut() = hook);
 }
 

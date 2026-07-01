@@ -11,9 +11,7 @@ use std::path::{Path, PathBuf};
 
 use wscript_compiler::wscripti::WscriptiIndex;
 
-#[allow(dead_code)] // dir used by the LSP
 pub struct Manifest {
-    pub dir: PathBuf,
     pub interfaces: Vec<PathBuf>,
 }
 
@@ -60,7 +58,7 @@ fn parse(path: &Path) -> Option<Manifest> {
                 .collect()
         })
         .unwrap_or_default();
-    Some(Manifest { dir, interfaces })
+    Some(Manifest { interfaces })
 }
 
 /// Load every interface listed by the manifest into the registry (live
