@@ -33,7 +33,7 @@ pub use wscript_core::span::Span;
 pub use wscript_core::types::{FnSig, Type};
 pub use wscript_core::value::Value;
 pub use wscript_macros::Script;
-pub use wscript_vm::{RuntimeError, TraceFrame};
+pub use wscript_vm::{DEFAULT_CALL_DEPTH_LIMIT, RuntimeError, TraceFrame};
 
 // Used by `#[derive(Script)]` expansions; not public API.
 #[doc(hidden)]
@@ -179,6 +179,21 @@ impl Vm {
         Vm {
             inner: wscript_vm::Vm::new(ctx.registry()),
         }
+    }
+
+    /// Set the script call-depth limit (default
+    /// [`wscript_vm::DEFAULT_CALL_DEPTH_LIMIT`]). Exceeding it faults
+    /// with a trappable "stack overflow" runtime error — raise it for
+    /// deeply recursive scripts, lower it to keep untrusted scripts on a
+    /// tighter leash. Frames live on a heap-allocated register stack, so
+    /// the limit counts calls, not bytes.
+    pub fn set_call_depth_limit(&mut self, limit: usize) {
+        self.inner.set_call_depth_limit(limit);
+    }
+
+    /// The current script call-depth limit.
+    pub fn call_depth_limit(&self) -> usize {
+        self.inner.call_depth_limit()
     }
 
     /// One-shot typed call (PRD §6.4): converts arguments, checks the

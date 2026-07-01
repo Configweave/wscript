@@ -134,9 +134,13 @@ pub struct Vm {
     cur_unit: usize,
     stack: Vec<Value>,
     frames: Vec<Frame>,
-    /// Recursion guard.
+    /// Recursion guard; see [`Vm::set_call_depth_limit`].
     depth_limit: usize,
 }
+
+/// Default script call-depth limit (frames, not bytes — script frames
+/// live on the heap-allocated register stack).
+pub const DEFAULT_CALL_DEPTH_LIMIT: usize = 10_000;
 
 impl Vm {
     pub fn new(registry: &Registry) -> Vm {
@@ -147,8 +151,21 @@ impl Vm {
             cur_unit: 0,
             stack: Vec::new(),
             frames: Vec::new(),
-            depth_limit: 10_000,
+            depth_limit: DEFAULT_CALL_DEPTH_LIMIT,
         }
+    }
+
+    /// Set the script call-depth limit (default
+    /// [`DEFAULT_CALL_DEPTH_LIMIT`]). Exceeding it faults with a
+    /// trappable "stack overflow" [`RuntimeError`] rather than growing
+    /// without bound. A limit of 0 makes every call fault.
+    pub fn set_call_depth_limit(&mut self, limit: usize) {
+        self.depth_limit = limit;
+    }
+
+    /// The current script call-depth limit.
+    pub fn call_depth_limit(&self) -> usize {
+        self.depth_limit
     }
 
     /// Load (or find the cached copy of) a compiled unit.

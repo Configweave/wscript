@@ -470,3 +470,29 @@ fn context_and_unit_shared_across_threads() {
     }
     assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
 }
+
+#[test]
+fn call_depth_limit_is_configurable() {
+    let ctx = Context::new();
+    let unit = ctx
+        .compile(
+            "fn rec(n: int) -> int { if n == 0 { 0 } else { rec(n - 1) } }\n\
+             fn main(n: int) -> int { rec(n) }",
+        )
+        .unwrap();
+    let mut vm = Vm::new(&ctx);
+    assert_eq!(vm.call_depth_limit(), wscript::DEFAULT_CALL_DEPTH_LIMIT);
+
+    vm.set_call_depth_limit(50);
+    let ok: i64 = vm.call_unit(&unit, "main", (10_i64,)).unwrap();
+    assert_eq!(ok, 0);
+    let err = vm
+        .call_unit::<_, i64>(&unit, "main", (100_i64,))
+        .unwrap_err();
+    assert!(err.to_string().contains("stack overflow"), "{err}");
+
+    // Raising the limit lets the same call succeed.
+    vm.set_call_depth_limit(200);
+    let ok: i64 = vm.call_unit(&unit, "main", (100_i64,)).unwrap();
+    assert_eq!(ok, 0);
+}
