@@ -1509,91 +1509,12 @@ impl Parser {
                 )
             }
             TokenKind::Ident(_) => self.path_or_struct_lit(),
-            TokenKind::LParen => {
-                self.bump();
-                if self.eat(&TokenKind::RParen) {
-                    let span = start.to(self.prev_span());
-                    return self.mk(ExprKind::UnitLit, span);
-                }
-                let saved = self.no_struct_lit;
-                self.no_struct_lit = false;
-                let inner = self.expr();
-                self.no_struct_lit = saved;
-                self.expect(
-                    &TokenKind::RParen,
-                    "`)` to close the parenthesized expression",
-                );
-                inner
-            }
-            TokenKind::LBracket => {
-                self.bump();
-                let mut items = Vec::new();
-                loop {
-                    if self.eat(&TokenKind::RBracket) {
-                        break;
-                    }
-                    if self.at_eof() {
-                        let span = self.span();
-                        self.error("E0100", span, "unclosed list literal: missing `]`");
-                        break;
-                    }
-                    let saved = self.no_struct_lit;
-                    self.no_struct_lit = false;
-                    items.push(self.expr());
-                    self.no_struct_lit = saved;
-                    if !self.eat(&TokenKind::Comma) {
-                        self.expect(&TokenKind::RBracket, "`,` or `]` in list literal");
-                        break;
-                    }
-                }
-                let span = start.to(self.prev_span());
-                self.mk(ExprKind::ListLit(items), span)
-            }
-            TokenKind::HashBrace => {
-                self.bump();
-                let mut entries = Vec::new();
-                loop {
-                    self.skip_newlines();
-                    if self.eat(&TokenKind::RBrace) {
-                        break;
-                    }
-                    if self.at_eof() {
-                        let span = self.span();
-                        self.error("E0100", span, "unclosed map literal: missing `}`");
-                        break;
-                    }
-                    let saved = self.no_struct_lit;
-                    self.no_struct_lit = false;
-                    let key = self.expr();
-                    self.expect(&TokenKind::Colon, "`:` between map key and value");
-                    let value = self.expr();
-                    self.no_struct_lit = saved;
-                    entries.push((key, value));
-                    self.skip_newlines();
-                    if !self.eat(&TokenKind::Comma) && !self.at(&TokenKind::RBrace) {
-                        self.expect(&TokenKind::RBrace, "`,` or `}` in map literal");
-                        break;
-                    }
-                }
-                let span = start.to(self.prev_span());
-                self.mk(ExprKind::MapLit(entries), span)
-            }
+            TokenKind::LParen => self.paren_expr(),
+            TokenKind::LBracket => self.list_lit_expr(),
+            TokenKind::HashBrace => self.map_lit_expr(),
             TokenKind::KwIf => self.if_expr(),
             TokenKind::KwMatch => self.match_expr(),
-            TokenKind::KwWhile => {
-                self.bump();
-                let cond = self.expr_no_struct_lit();
-                self.skip_newlines();
-                let body = self.block_or_error();
-                let span = start.to(body.span);
-                self.mk(
-                    ExprKind::While {
-                        cond: Box::new(cond),
-                        body,
-                    },
-                    span,
-                )
-            }
+            TokenKind::KwWhile => self.while_expr(),
             TokenKind::KwLoop => {
                 self.bump();
                 self.skip_newlines();
@@ -1601,28 +1522,7 @@ impl Parser {
                 let span = start.to(body.span);
                 self.mk(ExprKind::Loop { body }, span)
             }
-            TokenKind::KwFor => {
-                self.bump();
-                let var = self
-                    .expect_ident("loop variable after `for`")
-                    .unwrap_or(Ident {
-                        name: "_".into(),
-                        span: start,
-                    });
-                self.expect(&TokenKind::KwIn, "`in` in `for` loop");
-                let iter = self.expr_no_struct_lit();
-                self.skip_newlines();
-                let body = self.block_or_error();
-                let span = start.to(body.span);
-                self.mk(
-                    ExprKind::For {
-                        var,
-                        iter: Box::new(iter),
-                        body,
-                    },
-                    span,
-                )
-            }
+            TokenKind::KwFor => self.for_expr(),
             TokenKind::LBrace => {
                 let block = self.block_or_error();
                 let span = block.span;
@@ -1636,27 +1536,7 @@ impl Parser {
                 self.bump();
                 self.mk(ExprKind::Continue, start)
             }
-            TokenKind::KwReturn => {
-                self.bump();
-                let value = if matches!(
-                    self.kind(),
-                    TokenKind::Newline
-                        | TokenKind::Semi
-                        | TokenKind::RBrace
-                        | TokenKind::RParen
-                        | TokenKind::Comma
-                        | TokenKind::Eof
-                ) {
-                    None
-                } else {
-                    Some(Box::new(self.expr()))
-                };
-                let span = match &value {
-                    Some(v) => start.to(v.span),
-                    None => start,
-                };
-                self.mk(ExprKind::Return(value), span)
-            }
+            TokenKind::KwReturn => self.return_expr(),
             TokenKind::Pipe | TokenKind::OrOr => self.closure_expr(),
             other => {
                 self.error(
@@ -1675,6 +1555,138 @@ impl Parser {
                 self.mk(ExprKind::Error, start)
             }
         }
+    }
+
+    fn paren_expr(&mut self) -> Expr {
+        let start = self.bump().span; // `(`
+        if self.eat(&TokenKind::RParen) {
+            let span = start.to(self.prev_span());
+            return self.mk(ExprKind::UnitLit, span);
+        }
+        let saved = self.no_struct_lit;
+        self.no_struct_lit = false;
+        let inner = self.expr();
+        self.no_struct_lit = saved;
+        self.expect(
+            &TokenKind::RParen,
+            "`)` to close the parenthesized expression",
+        );
+        inner
+    }
+
+    fn list_lit_expr(&mut self) -> Expr {
+        let start = self.bump().span; // `[`
+        let mut items = Vec::new();
+        loop {
+            if self.eat(&TokenKind::RBracket) {
+                break;
+            }
+            if self.at_eof() {
+                let span = self.span();
+                self.error("E0100", span, "unclosed list literal: missing `]`");
+                break;
+            }
+            let saved = self.no_struct_lit;
+            self.no_struct_lit = false;
+            items.push(self.expr());
+            self.no_struct_lit = saved;
+            if !self.eat(&TokenKind::Comma) {
+                self.expect(&TokenKind::RBracket, "`,` or `]` in list literal");
+                break;
+            }
+        }
+        let span = start.to(self.prev_span());
+        self.mk(ExprKind::ListLit(items), span)
+    }
+
+    fn map_lit_expr(&mut self) -> Expr {
+        let start = self.bump().span; // `#{`
+        let mut entries = Vec::new();
+        loop {
+            self.skip_newlines();
+            if self.eat(&TokenKind::RBrace) {
+                break;
+            }
+            if self.at_eof() {
+                let span = self.span();
+                self.error("E0100", span, "unclosed map literal: missing `}`");
+                break;
+            }
+            let saved = self.no_struct_lit;
+            self.no_struct_lit = false;
+            let key = self.expr();
+            self.expect(&TokenKind::Colon, "`:` between map key and value");
+            let value = self.expr();
+            self.no_struct_lit = saved;
+            entries.push((key, value));
+            self.skip_newlines();
+            if !self.eat(&TokenKind::Comma) && !self.at(&TokenKind::RBrace) {
+                self.expect(&TokenKind::RBrace, "`,` or `}` in map literal");
+                break;
+            }
+        }
+        let span = start.to(self.prev_span());
+        self.mk(ExprKind::MapLit(entries), span)
+    }
+
+    fn while_expr(&mut self) -> Expr {
+        let start = self.bump().span; // `while`
+        let cond = self.expr_no_struct_lit();
+        self.skip_newlines();
+        let body = self.block_or_error();
+        let span = start.to(body.span);
+        self.mk(
+            ExprKind::While {
+                cond: Box::new(cond),
+                body,
+            },
+            span,
+        )
+    }
+
+    fn for_expr(&mut self) -> Expr {
+        let start = self.bump().span; // `for`
+        let var = self
+            .expect_ident("loop variable after `for`")
+            .unwrap_or(Ident {
+                name: "_".into(),
+                span: start,
+            });
+        self.expect(&TokenKind::KwIn, "`in` in `for` loop");
+        let iter = self.expr_no_struct_lit();
+        self.skip_newlines();
+        let body = self.block_or_error();
+        let span = start.to(body.span);
+        self.mk(
+            ExprKind::For {
+                var,
+                iter: Box::new(iter),
+                body,
+            },
+            span,
+        )
+    }
+
+    fn return_expr(&mut self) -> Expr {
+        let start = self.bump().span; // `return`
+        let value = if matches!(
+            self.kind(),
+            TokenKind::Newline
+                | TokenKind::Semi
+                | TokenKind::RBrace
+                | TokenKind::RParen
+                | TokenKind::Comma
+                | TokenKind::Eof
+        ) {
+            None
+        } else {
+            Some(Box::new(self.expr()))
+        };
+        let span = match &value {
+            Some(v) => start.to(v.span),
+            None => start,
+        };
+        self.mk(ExprKind::Return(value), span)
     }
 
     fn block_or_error(&mut self) -> Block {

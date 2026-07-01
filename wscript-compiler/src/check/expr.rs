@@ -189,95 +189,17 @@ impl<'a> Checker<'a> {
             ExprKind::Field { obj, name } => self.check_field(e, obj, name),
             ExprKind::Index { obj, idx } => self.check_index(e, obj, idx),
             ExprKind::StructLit { path, fields } => self.check_struct_lit(e, path, fields),
-            ExprKind::ListLit(items) => {
-                let elem = match expect.map(|t| self.resolve(t)) {
-                    Some(Type::List(e)) => *e,
-                    _ => self.infer.fresh(),
-                };
-                for item in items {
-                    self.check_coerce(item, &elem);
-                }
-                Type::List(Box::new(elem))
-            }
-            ExprKind::MapLit(entries) => {
-                let (key, val) = match expect.map(|t| self.resolve(t)) {
-                    Some(Type::Map(k, v)) => (*k, *v),
-                    _ => (self.infer.fresh(), self.infer.fresh()),
-                };
-                for (k, v) in entries {
-                    self.check_coerce(k, &key);
-                    self.check_coerce(v, &val);
-                }
-                let kr = self.resolve(&key);
-                if !matches!(
-                    kr,
-                    Type::Int | Type::Bool | Type::Char | Type::Str | Type::Error | Type::Var(_)
-                ) {
-                    let span = entries.first().map(|(k, _)| k.span).unwrap_or(e.span);
-                    let ks = self.ty_str(&kr);
-                    self.error_help(
-                        "E0214",
-                        span,
-                        format!("`{ks}` cannot be a map key"),
-                        "map keys must be int, bool, char, or string",
-                    );
-                }
-                Type::Map(Box::new(key), Box::new(val))
-            }
+            ExprKind::ListLit(items) => self.check_list_lit(items, expect),
+            ExprKind::MapLit(entries) => self.check_map_lit(e, entries, expect),
             ExprKind::If { cond, then, else_ } => {
-                let cond_ty = self.check_expr(cond, Some(&Type::Bool));
-                self.expect_bool(&cond_ty, cond.span, "an `if` condition");
-                let then_ty = self.check_block(then, expect);
-                match else_ {
-                    None => {
-                        let tt = self.resolve(&then_ty);
-                        if !matches!(tt, Type::Unit | Type::Never | Type::Error | Type::Var(_)) {
-                            let span = then.span;
-                            let ts = self.ty_str(&tt);
-                            self.error_help(
-                                "E0224",
-                                span,
-                                format!(
-                                    "`if` without `else` evaluates to unit, but the branch \
-                                     has type `{ts}`"
-                                ),
-                                "add an `else` branch, or discard the value",
-                            );
-                        }
-                        Type::Unit
-                    }
-                    Some(else_expr) => {
-                        let else_ty = self.check_expr(else_expr, expect);
-                        self.combine_branches(&then_ty, &else_ty, else_expr.span)
-                    }
-                }
+                self.check_if(cond, then, else_.as_deref(), expect)
             }
             ExprKind::IfLet {
                 pat,
                 scrutinee,
                 then,
                 else_,
-            } => {
-                let scrut_ty = self.check_expr(scrutinee, None);
-                if !self.pattern_is_refutable(pat, &scrut_ty) {
-                    self.warn(
-                        "W0001",
-                        pat.span,
-                        "irrefutable pattern in `if let`: the branch always runs",
-                    );
-                }
-                self.push_scope();
-                self.check_pattern(pat, &scrut_ty);
-                let then_ty = self.check_block(then, expect);
-                self.pop_scope();
-                match else_ {
-                    None => Type::Unit,
-                    Some(else_expr) => {
-                        let else_ty = self.check_expr(else_expr, expect);
-                        self.combine_branches(&then_ty, &else_ty, else_expr.span)
-                    }
-                }
-            }
+            } => self.check_if_let(pat, scrutinee, then, else_.as_deref(), expect),
             ExprKind::Match { scrutinee, arms } => self.check_match(e, scrutinee, arms, expect),
             ExprKind::While { cond, body } => {
                 let cond_ty = self.check_expr(cond, Some(&Type::Bool));
@@ -314,33 +236,136 @@ impl<'a> Checker<'a> {
                 }
                 Type::Never
             }
-            ExprKind::Return(value) => {
-                let ret = self.current_ret();
-                match value {
-                    Some(v) => {
-                        self.check_coerce(v, &ret);
-                    }
-                    None => {
-                        let rr = self.resolve(&ret);
-                        if !matches!(rr, Type::Unit | Type::Error | Type::Never) {
-                            let rs = self.ty_str(&rr);
-                            self.error_help(
-                                "E0226",
-                                e.span,
-                                format!("`return` without a value in a function returning `{rs}`"),
-                                "write `return <value>`",
-                            );
-                        }
-                    }
-                }
-                Type::Never
-            }
+            ExprKind::Return(value) => self.check_return(e, value.as_deref()),
             ExprKind::Block(b) => self.check_block(b, expect),
             ExprKind::Closure { params, ret, body } => {
                 self.check_closure(e, params, ret.as_ref(), body, expect)
             }
             ExprKind::Try(inner) => self.check_try(e, inner),
         }
+    }
+
+    fn check_list_lit(&mut self, items: &[Expr], expect: Option<&Type>) -> Type {
+        let elem = match expect.map(|t| self.resolve(t)) {
+            Some(Type::List(e)) => *e,
+            _ => self.infer.fresh(),
+        };
+        for item in items {
+            self.check_coerce(item, &elem);
+        }
+        Type::List(Box::new(elem))
+    }
+
+    fn check_map_lit(&mut self, e: &Expr, entries: &[(Expr, Expr)], expect: Option<&Type>) -> Type {
+        let (key, val) = match expect.map(|t| self.resolve(t)) {
+            Some(Type::Map(k, v)) => (*k, *v),
+            _ => (self.infer.fresh(), self.infer.fresh()),
+        };
+        for (k, v) in entries {
+            self.check_coerce(k, &key);
+            self.check_coerce(v, &val);
+        }
+        let kr = self.resolve(&key);
+        if !matches!(
+            kr,
+            Type::Int | Type::Bool | Type::Char | Type::Str | Type::Error | Type::Var(_)
+        ) {
+            let span = entries.first().map(|(k, _)| k.span).unwrap_or(e.span);
+            let ks = self.ty_str(&kr);
+            self.error_help(
+                "E0214",
+                span,
+                format!("`{ks}` cannot be a map key"),
+                "map keys must be int, bool, char, or string",
+            );
+        }
+        Type::Map(Box::new(key), Box::new(val))
+    }
+
+    fn check_if(
+        &mut self,
+        cond: &Expr,
+        then: &Block,
+        else_: Option<&Expr>,
+        expect: Option<&Type>,
+    ) -> Type {
+        let cond_ty = self.check_expr(cond, Some(&Type::Bool));
+        self.expect_bool(&cond_ty, cond.span, "an `if` condition");
+        let then_ty = self.check_block(then, expect);
+        match else_ {
+            None => {
+                let tt = self.resolve(&then_ty);
+                if !matches!(tt, Type::Unit | Type::Never | Type::Error | Type::Var(_)) {
+                    let span = then.span;
+                    let ts = self.ty_str(&tt);
+                    self.error_help(
+                        "E0224",
+                        span,
+                        format!(
+                            "`if` without `else` evaluates to unit, but the branch \
+                             has type `{ts}`"
+                        ),
+                        "add an `else` branch, or discard the value",
+                    );
+                }
+                Type::Unit
+            }
+            Some(else_expr) => {
+                let else_ty = self.check_expr(else_expr, expect);
+                self.combine_branches(&then_ty, &else_ty, else_expr.span)
+            }
+        }
+    }
+
+    fn check_if_let(
+        &mut self,
+        pat: &Pattern,
+        scrutinee: &Expr,
+        then: &Block,
+        else_: Option<&Expr>,
+        expect: Option<&Type>,
+    ) -> Type {
+        let scrut_ty = self.check_expr(scrutinee, None);
+        if !self.pattern_is_refutable(pat, &scrut_ty) {
+            self.warn(
+                "W0001",
+                pat.span,
+                "irrefutable pattern in `if let`: the branch always runs",
+            );
+        }
+        self.push_scope();
+        self.check_pattern(pat, &scrut_ty);
+        let then_ty = self.check_block(then, expect);
+        self.pop_scope();
+        match else_ {
+            None => Type::Unit,
+            Some(else_expr) => {
+                let else_ty = self.check_expr(else_expr, expect);
+                self.combine_branches(&then_ty, &else_ty, else_expr.span)
+            }
+        }
+    }
+
+    fn check_return(&mut self, e: &Expr, value: Option<&Expr>) -> Type {
+        let ret = self.current_ret();
+        match value {
+            Some(v) => {
+                self.check_coerce(v, &ret);
+            }
+            None => {
+                let rr = self.resolve(&ret);
+                if !matches!(rr, Type::Unit | Type::Error | Type::Never) {
+                    let rs = self.ty_str(&rr);
+                    self.error_help(
+                        "E0226",
+                        e.span,
+                        format!("`return` without a value in a function returning `{rs}`"),
+                        "write `return <value>`",
+                    );
+                }
+            }
+        }
+        Type::Never
     }
 
     fn expect_bool(&mut self, t: &Type, span: Span, what: &str) {

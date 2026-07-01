@@ -654,117 +654,118 @@ impl<'a> Checker<'a> {
         for item in &self.file.items {
             match item {
                 Item::Struct(s) => {
-                    let Some(&id) = self.type_names.get(&s.name.name) else {
-                        continue;
-                    };
-                    if !self.owns_script_def(id) {
-                        continue;
+                    if let Some(id) = self.script_def_id(&s.name.name) {
+                        self.fill_struct_def(id, s);
                     }
-                    let mut fields = Vec::new();
-                    let mut seen = HashSet::new();
-                    for f in &s.fields {
-                        if !seen.insert(f.name.name.clone()) {
-                            let span = f.name.span;
-                            let msg = format!("duplicate field `{}`", f.name.name);
-                            self.error("E0203", span, msg);
-                            continue;
-                        }
-                        let ty = self.resolve_type(&f.ty);
-                        fields.push((f.name.name.clone(), ty));
-                    }
-                    if let DefKind::Struct(sd) = &mut self.out.defs.defs[id.index()] {
-                        sd.fields = fields;
-                    }
-                    self.record_derives(id, &s.derives);
                 }
                 Item::Enum(e) => {
-                    let Some(&id) = self.type_names.get(&e.name.name) else {
-                        continue;
-                    };
-                    if !self.owns_script_def(id) {
-                        continue;
+                    if let Some(id) = self.script_def_id(&e.name.name) {
+                        self.fill_enum_def(id, e);
                     }
-                    let mut variants = Vec::new();
-                    let mut seen = HashSet::new();
-                    for v in &e.variants {
-                        if !seen.insert(v.name.name.clone()) {
-                            let span = v.name.span;
-                            let msg = format!("duplicate variant `{}`", v.name.name);
-                            self.error("E0203", span, msg);
-                            continue;
-                        }
-                        let (kind, fields) = match &v.body {
-                            VariantBody::Unit => (VariantKind::Unit, vec![]),
-                            VariantBody::Tuple(tys) => (
-                                VariantKind::Tuple,
-                                tys.iter()
-                                    .enumerate()
-                                    .map(|(i, t)| (i.to_string(), self.resolve_type(t)))
-                                    .collect(),
-                            ),
-                            VariantBody::Struct(fs) => {
-                                let mut fseen = HashSet::new();
-                                let mut fields = Vec::new();
-                                for f in fs {
-                                    if !fseen.insert(f.name.name.clone()) {
-                                        let span = f.name.span;
-                                        let msg = format!("duplicate field `{}`", f.name.name);
-                                        self.error("E0203", span, msg);
-                                        continue;
-                                    }
-                                    let ty = self.resolve_type(&f.ty);
-                                    fields.push((f.name.name.clone(), ty));
-                                }
-                                (VariantKind::Struct, fields)
-                            }
-                        };
-                        variants.push(VariantDef {
-                            name: v.name.name.clone(),
-                            kind,
-                            fields,
-                        });
-                    }
-                    if let DefKind::Enum(ed) = &mut self.out.defs.defs[id.index()] {
-                        ed.variants = variants;
-                    }
-                    self.record_derives(id, &e.derives);
                 }
                 Item::Trait(t) => {
-                    let Some(&id) = self.type_names.get(&t.name.name) else {
-                        continue;
-                    };
-                    if !self.owns_script_def(id) {
-                        continue;
-                    }
-                    let mut methods = Vec::new();
-                    let mut seen = HashSet::new();
-                    for m in &t.methods {
-                        if !seen.insert(m.name.name.clone()) {
-                            let span = m.name.span;
-                            let msg = format!("duplicate trait method `{}`", m.name.name);
-                            self.error("E0203", span, msg);
-                            continue;
-                        }
-                        let params: Vec<Type> = m
-                            .params
-                            .iter()
-                            .map(|p| match &p.ty {
-                                Some(t) => self.resolve_type(t),
-                                None => Type::Error,
-                            })
-                            .collect();
-                        let ret = match &m.ret {
-                            Some(t) => self.resolve_type(t),
-                            None => Type::Unit,
-                        };
-                        methods.push((m.name.name.clone(), FnSig::new(params, ret)));
-                    }
-                    if let DefKind::Trait(td) = &mut self.out.defs.defs[id.index()] {
-                        td.methods = methods;
+                    if let Some(id) = self.script_def_id(&t.name.name) {
+                        self.fill_trait_def(id, t);
                     }
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// The def this script declaration owns, if any — `None` when the
+    /// name didn't register or name-collision left it pointing at a host
+    /// def.
+    fn script_def_id(&self, name: &str) -> Option<DefId> {
+        let id = *self.type_names.get(name)?;
+        self.owns_script_def(id).then_some(id)
+    }
+
+    /// Resolve named fields, dropping duplicates with an E0203. Shared by
+    /// struct declarations and struct-variant bodies.
+    fn resolve_field_defs(&mut self, fields: &[FieldDecl]) -> Vec<(String, Type)> {
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        for f in fields {
+            if !seen.insert(f.name.name.clone()) {
+                let span = f.name.span;
+                let msg = format!("duplicate field `{}`", f.name.name);
+                self.error("E0203", span, msg);
+                continue;
+            }
+            let ty = self.resolve_type(&f.ty);
+            out.push((f.name.name.clone(), ty));
+        }
+        out
+    }
+
+    fn fill_struct_def(&mut self, id: DefId, s: &StructDecl) {
+        let fields = self.resolve_field_defs(&s.fields);
+        if let DefKind::Struct(sd) = &mut self.out.defs.defs[id.index()] {
+            sd.fields = fields;
+        }
+        self.record_derives(id, &s.derives);
+    }
+
+    fn fill_enum_def(&mut self, id: DefId, e: &EnumDecl) {
+        let mut variants = Vec::new();
+        let mut seen = HashSet::new();
+        for v in &e.variants {
+            if !seen.insert(v.name.name.clone()) {
+                let span = v.name.span;
+                let msg = format!("duplicate variant `{}`", v.name.name);
+                self.error("E0203", span, msg);
+                continue;
+            }
+            let (kind, fields) = match &v.body {
+                VariantBody::Unit => (VariantKind::Unit, vec![]),
+                VariantBody::Tuple(tys) => (
+                    VariantKind::Tuple,
+                    tys.iter()
+                        .enumerate()
+                        .map(|(i, t)| (i.to_string(), self.resolve_type(t)))
+                        .collect(),
+                ),
+                VariantBody::Struct(fs) => (VariantKind::Struct, self.resolve_field_defs(fs)),
+            };
+            variants.push(VariantDef {
+                name: v.name.name.clone(),
+                kind,
+                fields,
+            });
+        }
+        if let DefKind::Enum(ed) = &mut self.out.defs.defs[id.index()] {
+            ed.variants = variants;
+        }
+        self.record_derives(id, &e.derives);
+    }
+
+    fn fill_trait_def(&mut self, id: DefId, t: &TraitDecl) {
+        let mut methods = Vec::new();
+        let mut seen = HashSet::new();
+        for m in &t.methods {
+            if !seen.insert(m.name.name.clone()) {
+                let span = m.name.span;
+                let msg = format!("duplicate trait method `{}`", m.name.name);
+                self.error("E0203", span, msg);
+                continue;
+            }
+            let params: Vec<Type> = m
+                .params
+                .iter()
+                .map(|p| match &p.ty {
+                    Some(t) => self.resolve_type(t),
+                    None => Type::Error,
+                })
+                .collect();
+            let ret = match &m.ret {
+                Some(t) => self.resolve_type(t),
+                None => Type::Unit,
+            };
+            methods.push((m.name.name.clone(), FnSig::new(params, ret)));
+        }
+        if let DefKind::Trait(td) = &mut self.out.defs.defs[id.index()] {
+            td.methods = methods;
         }
     }
 
