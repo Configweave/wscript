@@ -65,7 +65,7 @@ struct Parser {
     /// postfix chain loops both count toward it (chains deepen the AST
     /// without deepening the parse stack).
     depth: u32,
-    /// Tripped `MAX_NESTING_DEPTH`: the rest of the file was skipped and
+    /// Tripped `MAX_NESTING_BUDGET`: the rest of the file was skipped and
     /// further diagnostics are suppressed.
     depth_exceeded: bool,
 }
