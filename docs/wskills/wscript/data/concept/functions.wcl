@@ -1,0 +1,39 @@
+concept functions {
+  name     = "Functions & Closures"
+  summary  = "Signatures require annotations; blocks are expressions; closures capture by reference."
+  related  = [control_flow, values, type_system]
+  audience = :both
+  body {
+    p <<PROSE
+Annotations are **required on function signatures and nowhere else** — this is what
+keeps inference local and compile errors readable. A block evaluates to its last
+expression. An omitted return type means `unit`.
+PROSE
+    h2 "Functions"
+    code "rust" { source = <<'SRC'
+fn area(w: int, h: int) -> int {
+    w * h                  // blocks evaluate to their last expression
+}
+
+fn log(msg: string) {      // omitted return type = unit
+    println(msg)
+}
+SRC
+    }
+    p "A trailing `;` discards a block's tail value (Rust-style). A function with no return type must not end on a non-unit expression — write `f();` to discard it."
+    h2 "Function values & closures"
+    code "rust" { source = <<'SRC'
+fn apply(f: fn(int) -> int, x: int) -> int { f(x) }
+
+fn make_counter() -> fn() -> int {
+    let n = 0
+    || { n = n + 1; n }    // closures capture by reference
+}
+
+let double = |x| x * 2     // params inferred where context determines them
+apply(double, 21)          // 42
+SRC
+    }
+    p "The function type `fn(T1, T2, …) -> R` describes a callable; use it for callback parameters. Closures (`|params| body`) capture their environment by reference."
+  }
+}

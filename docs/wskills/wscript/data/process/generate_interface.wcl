@@ -1,0 +1,26 @@
+procedure generate_interface {
+  title   = "Generate .wscripti and wire up wscript.toml"
+  purpose = "Give the LSP and `wscript check` knowledge of your host API."
+  preconditions = ["A built Context with your registrations."]
+  related = [interface_files, type_system]
+  audience = :both
+
+  step write_interface { n = 1
+    title = "Write the interface from the Context"
+    body screen { code "rust" { source = "ctx.write_interface(\"api.wscripti\")?;" } }
+    body steps  { p "This dumps every registered signature into a diff-friendly subset of wscript syntax (declarations only). Regenerate it in CI to keep it honest." }
+  }
+  step list_toml { n = 2
+    title = "List it in wscript.toml"
+    body screen { code "toml" { source = <<'SRC'
+# wscript.toml next to your scripts
+interfaces = ["api.wscripti"]
+SRC
+    } }
+    body steps  { p "`wscript check` and `wscript lsp` read the manifest and typecheck scripts against the declared API — completions, hover and goto included." }
+  }
+
+  write_interface -> list_toml
+
+  verification = "Opening a script in an LSP-enabled editor gives completions and hover for your host functions; `wscript check` flags misuse of them."
+}

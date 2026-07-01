@@ -1,0 +1,29 @@
+concept containers {
+  name     = "Containers: List & Map"
+  summary  = "Built-in List[T] and Map[K, V] with literal syntax and rich method sets."
+  related  = [strings, control_flow, list_methods, map_methods]
+  audience = :both
+  body {
+    p "wscript ships two built-in, special-cased generic containers: `List[T]` and `Map[K, V]`. (User-defined generics do not exist in v1; these two are the exception.)"
+    h2 "Lists"
+    code "rust" { source = <<'SRC'
+let xs = [1, 2, 3]                 // List[int]
+xs.push(4)
+xs[0]                              // faults if out of bounds
+xs.get(99)                         // Option[int] — never faults
+xs.map(|x| x * 2).filter(|x| x > 2).fold(0, |a, x| a + x)
+SRC
+    }
+    h2 "Maps"
+    p "A map literal is written `#{ ... }`. Keys are `int`, `bool`, `char` or `string`."
+    code "rust" { source = <<'SRC'
+let ages = #{ "alice": 30, "bob": 25 }   // Map[string, int]
+ages["carol"] = 22                 // insert or overwrite
+ages["nope"]                       // faults — use .get for an Option
+ages.get("nope")                   // Option[int] -> None
+SRC
+    }
+    callout "Index vs get" { class = ["info"]  body = "`xs[i]` and `m[k]` fault on a missing element; `.get(...)` returns an `Option` instead. Prefer `.get` where absence is expected." }
+    p "See [List methods](fact_list_methods) and [Map methods](fact_map_methods) for the full surface."
+  }
+}

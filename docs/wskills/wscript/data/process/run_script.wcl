@@ -1,0 +1,28 @@
+procedure run_script {
+  title   = "Run a wscript script"
+  purpose = "Compile and execute a .wscript file with the full standard library."
+  preconditions = ["The wscript binary is built (`cargo build --release`) or installed on PATH."]
+  related = [faults, modules]
+  audience = :both
+
+  step write_main { n = 1
+    title = "Write a script with a main function"
+    body screen { code "rust" { source = <<'SRC'
+fn main() -> int {
+    println("hello")
+    0
+}
+SRC
+    } }
+    body steps  { p "Execution starts at `fn main()`. Its `int` return is the exit code; `unit` means 0." }
+  }
+  step run { n = 2
+    title = "Run it"
+    body screen { code "console" { source = "wscript run hello.wscript" } }
+    body steps  { p "Pass any script arguments after the path — read them with `process::args()`." }
+  }
+
+  write_main -> run
+
+  verification = "The script's output appears; a fault (if any) prints with a source snippet and stack trace, and the exit code reflects `main`'s return."
+}

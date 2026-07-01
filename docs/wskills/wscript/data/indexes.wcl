@@ -1,0 +1,106 @@
+// Curated navigation — every unit pinned into a topic-meaningful tree via
+// `index` blocks. In the book each index is a heading in the sidebar whose
+// children are the units it lists in `related` (resolved to their unit pages).
+// In the skill the same indexes drive the SKILL.md Reference section, and an
+// index's `body` renders there as curated prose. These are `:both`, so a single
+// tree shapes the book nav and the skill reference alike.
+
+index getting_started {
+  name    = "Getting started"
+  summary = "What wscript is, the `wscript` CLI, and the first runbooks."
+  related = [wscript, cli_commands, run_script, check_script, use_repl]
+  audience = :both
+  body {
+    h2 "What wscript is"
+    p "An embeddable, statically typed, Rust-flavored scripting language. It compiles to bytecode and runs on a register-based VM, with first-class Rust interop and reference-counted (no borrow-checker) semantics — the niche Lua fills for C, for Rust."
+
+    h2 "Build"
+    p "Standard Rust toolchain. The binary lands at `target/release/wscript`."
+    code "console" { source = <<'SRC'
+cargo build --release
+SRC
+    }
+
+    h2 "Write a script"
+    p "Execution starts at `fn main()`; its `int` return becomes the exit code (`unit` means 0). The file extension is `.wscript`."
+    code "rust" { source = <<'SRC'
+// hello.wscript
+fn main() -> int {
+    println(fmt("Hello, {}!", "wscript"))
+    0
+}
+SRC
+    }
+
+    h2 "Run it"
+    table {
+      header = ["Command", "Does"]
+      rows = [
+        ["`wscript run hello.wscript [args…]`", "compile + execute with the full stdlib"],
+        ["`wscript check hello.wscript`",       "compile only; honors `wscript.toml` / `.wscripti`"],
+        ["`wscript repl`",                      "persistent-binding REPL"],
+        ["`wscript lsp`",                       "language server (diagnostics, hover, goto, completions)"],
+      ]
+    }
+
+    h2 "Embed in Rust (five steps)"
+    p "1. Register your API in a `Module`. 2. Build a `Context` from your modules plus any stdlib modules. 3. `ctx.compile(source)` once — all type errors surface here. 4. Spin one `Vm` per thread. 5. Call script functions with `vm.call` / `unit.fn_handle`."
+    p "See the [Embedding](concept_embedding) concept and the **Embed wscript in a Rust application** process for the full story."
+  }
+}
+
+index language_basics {
+  name    = "Language Basics"
+  summary = "Values, strings, functions and control flow."
+  related = [values, primitive_types, strings, string_methods, functions, control_flow]
+  audience = :both
+}
+
+index data_types {
+  name    = "Data Types"
+  summary = "Structs, enums, pattern matching, error handling and containers."
+  related = [structs, enums, pattern_matching, options_results, option_result_methods, containers, list_methods, map_methods]
+  audience = :both
+}
+
+index traits_operators {
+  name    = "Traits & Operators"
+  summary = "Interfaces, operator overloading and derives."
+  related = [traits, operators, operator_traits, derives]
+  audience = :both
+}
+
+index memory_refs {
+  name    = "Memory & References"
+  summary = "Reference semantics, reference counting and faults."
+  related = [reference_semantics, reference_types, memory, faults]
+  audience = :both
+}
+
+index modules_types {
+  name    = "Modules & Type System"
+  summary = "Importing host APIs, and the static type system."
+  related = [modules, type_system, not_in_v1]
+  audience = :both
+}
+
+index stdlib {
+  name    = "Standard Library"
+  summary = "The prelude plus the capability-style stdlib modules."
+  related = [prelude_functions, math_functions, fs_functions, process_functions, data_formats, value_methods]
+  audience = :both
+}
+
+index embedding_interop {
+  name    = "Embedding (Rust interop)"
+  summary = "Exposing host functions and types to scripts, checked at compile time."
+  related = [embedding, crates, interop_types, interface_files, embed_wscript, expose_host_type, generate_interface]
+  audience = :both
+}
+
+index project {
+  name    = "Project & People"
+  summary = "How wscript was built, the tooling it rests on, and who maintains it."
+  related = [milestones, wcl, wil_taylor]
+  audience = :both
+}

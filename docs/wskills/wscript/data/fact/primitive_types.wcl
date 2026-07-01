@@ -1,0 +1,19 @@
+fact primitive_types {
+  title    = "Primitive types"
+  related  = [values, reference_types]
+  audience = :both
+  body {
+    p "The five value types, copied on assignment."
+    table {
+      header = ["Type", "Example", "Notes"]
+      rows = [
+        ["`int`",   "`42`, `-7`, `0xFF`, `1_000_000`", "64-bit signed, wrapping arithmetic"],
+        ["`float`", "`3.14`, `1e9`",                    "64-bit IEEE 754"],
+        ["`bool`",  "`true`, `false`",                  "no truthiness — conditions must be `bool`"],
+        ["`char`",  "`'a'`, `'\\n'`, `'\\u{1F600}'`",   "a single Unicode scalar value"],
+        ["`unit`",  "`()`",                             "the empty type; an omitted return type is `unit`"],
+      ]
+    }
+    p "There is no implicit numeric conversion: `1 + 2.0` is a type error. Convert with `int(x)` (float truncates; char gives the code point) and `float(x)`."
+  }
+}

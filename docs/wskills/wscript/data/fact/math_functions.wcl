@@ -1,0 +1,18 @@
+fact math_functions {
+  title    = "math module"
+  related  = [modules]
+  audience = :both
+  body {
+    p "Pure numerics (always safe). Import with `use math`, then `math::abs(x)`."
+    table {
+      header = ["Group", "Functions"]
+      rows = [
+        ["Float core",   "`abs min max clamp floor ceil round trunc sqrt pow exp ln log2 log10 signum lerp`"],
+        ["Trig",         "`sin cos tan asin acos atan atan2 sinh cosh tanh asinh acosh atanh`"],
+        ["Int variants", "`iabs imin imax iclamp isignum` (wscript has no overloading)"],
+        ["Constants",    "`PI E TAU INF NAN`"],
+        ["Random",       "`rand() -> float` in [0,1); `rand_range(a, b) -> int` in [a,b)"],
+      ]
+    }
+  }
+}

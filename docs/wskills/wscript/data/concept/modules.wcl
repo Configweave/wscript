@@ -1,0 +1,27 @@
+concept modules {
+  name     = "Modules & use"
+  summary  = "use imports host-registered modules and items; registered types are ambient; the prelude is always available."
+  related  = [embedding, functions, prelude_functions]
+  audience = :both
+  body {
+    p <<PROSE
+`use module` imports a host-registered module; `use module::item` imports one item.
+Registered **types** are ambient — no `use` needed for type names; `use` only governs
+functions and constants. Scripts are single files in v1 (script-to-script imports are
+planned for v2).
+PROSE
+    code "rust" { source = <<'SRC'
+use math
+use fs
+use process::run            // import a single item
+
+fn main() -> int {
+    let h = math::imax(0, -5)        // module::fn
+    fs::write("out.txt", "hi")?
+    0
+}
+SRC
+    }
+    callout "The prelude" { class = ["info"]  body = "Always available, no import: `print println str fmt same weak int float`. See the Prelude fact." }
+  }
+}

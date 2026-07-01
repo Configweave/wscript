@@ -1,0 +1,36 @@
+concept interop_types {
+  name     = "Interop: Data vs Opaque Types"
+  summary  = "#[derive(Script)] exposes types; data types cross by value, opaque types cross by handle."
+  related  = [embedding, interface_files, reference_semantics]
+  audience = :both
+  body {
+    p "`#[derive(Script)]` marks a Rust type for script exposure. The kind of crossing depends on whether it is a data or an opaque type."
+    h2 "Data types — cross by value"
+    code "rust" { source = <<'SRC'
+#[derive(Script)]                 // DATA type: fields visible in script,
+struct Point { x: i64, y: i64 }   // constructible and matchable
+
+#[derive(Script)]
+enum Event {                      // enums derive too, incl. payloads
+    Quit,
+    Key(char),
+    Click { x: i64, y: i64 },
+}
+SRC
+    }
+    p "The script constructs a `Point`, your function receives a real `Point`. Mutations inside the script to its copy do not write back into yours."
+    h2 "Opaque types — cross by handle"
+    code "rust" { source = <<'SRC'
+#[derive(Script)]
+#[script(opaque)]                 // HANDLE type: no fields, methods only
+struct Pane { title: String }
+
+m.ty::<Pane>()
+    .method("title", |p: &Pane| p.title.clone())
+    .method("split", |p: &mut Pane, vertical: bool| { /* ... */ });
+SRC
+    }
+    p "The script holds a reference to the live Rust value; `&mut` methods mutate it in place. Scripts cannot touch fields or construct opaque values."
+    callout "Ambient types & registration" { class = ["info"]  body = "Registered types are ambient in the script's type namespace — `use` only governs functions and constants. A type appearing only in a `ScriptFn` boundary still needs `Context::new().register_type::<KeyEvent>()`. `Shared<T>` is a host-side handle to a live script value; aliasing violations surface as `Err`, never panics." }
+  }
+}

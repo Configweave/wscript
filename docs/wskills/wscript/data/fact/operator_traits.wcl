@@ -1,0 +1,20 @@
+fact operator_traits {
+  title    = "Operator overloading traits"
+  related  = [operators, derives]
+  audience = :both
+  body {
+    p "Operators dispatch through these built-in traits. Implement the trait to overload the operator."
+    table {
+      header = ["Trait", "Operator / use"]
+      rows = [
+        ["`Add` `Sub` `Mul` `Div` `Rem`", "`+` `-` `*` `/` `%`"],
+        ["`Neg`",     "unary `-`"],
+        ["`Eq`",      "`==` / `!=` (REQUIRED for `==` on structs/enums)"],
+        ["`Ord`",     "`<` `<=` `>` `>=`; custom form `fn cmp(self, other: Self) -> int`"],
+        ["`Display`", "`str(x)` and `{}` formatting"],
+        ["`Index`",   "`x[i]` — read-only in v1"],
+      ]
+    }
+    p "There is no implicit identity equality — use `same(a, b)` for reference identity."
+  }
+}

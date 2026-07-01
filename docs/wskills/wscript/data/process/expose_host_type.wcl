@@ -1,0 +1,41 @@
+procedure expose_host_type {
+  title   = "Expose a Rust type to scripts"
+  purpose = "Make a Rust struct or enum constructible (data) or method-only (opaque) from a script."
+  preconditions = ["You are registering modules into a Context (see the embed runbook)."]
+  related = [interop_types, embedding]
+  audience = :both
+
+  step data_type { n = 1
+    title = "Derive Script for a data type"
+    body screen { code "rust" { source = <<'SRC'
+#[derive(Script)]
+struct Point { x: i64, y: i64 }    // fields visible; constructible & matchable
+SRC
+    } }
+    body steps  { p "Data types cross by value: the script constructs a `Point`, your function receives a real one. Enums derive too, payloads included." }
+  }
+  step opaque_type { n = 2
+    title = "Or make it opaque (handle, methods only)"
+    body screen { code "rust" { source = <<'SRC'
+#[derive(Script)]
+#[script(opaque)]
+struct Pane { title: String }
+
+m.ty::<Pane>()
+    .method("title", |p: &Pane| p.title.clone())
+    .method("split", |p: &mut Pane, vertical: bool| { /* ... */ });
+SRC
+    } }
+    body steps  { p "Opaque types cross by handle: `&mut` methods mutate the live Rust value in place; scripts cannot read fields or construct it." }
+  }
+  step boundary_types { n = 3
+    title = "Register types used only at boundaries"
+    body screen { code "rust" { source = "let ctx = Context::new().register_type::<KeyEvent>();" } }
+    body steps  { p "A type that appears in no module (e.g. only in a `ScriptFn` signature) still needs registering. Registered types are ambient — `use` only governs functions and constants." }
+  }
+
+  data_type -> opaque_type
+  opaque_type -> boundary_types
+
+  verification = "The script can construct/match data types and call methods on opaque handles; field access on an opaque type is a compile error."
+}

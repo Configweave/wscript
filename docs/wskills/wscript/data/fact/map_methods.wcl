@@ -1,0 +1,18 @@
+fact map_methods {
+  title    = "Map[K, V] methods"
+  related  = [containers]
+  audience = :both
+  body {
+    p "Map literals are written `#{ k: v, … }`. Keys are `int`, `bool`, `char` or `string`."
+    table {
+      header = ["Group", "Methods"]
+      rows = [
+        ["Size",       "`len` `is_empty` `clear`"],
+        ["Add/remove", "`insert` `remove`"],
+        ["Access",     "`get` (Option) `contains_key` `[k]` (faults if missing)"],
+        ["Iterate",    "`keys` `values`"],
+        ["Copy",       "`clone`"],
+      ]
+    }
+  }
+}

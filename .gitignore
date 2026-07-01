@@ -1,1 +1,6 @@
 /target
+
+# Generated documentation outputs (rebuild with `just docs-build` / `just skill-build`).
+/docs/_site
+/docs/_md
+/docs/wskills/*/out

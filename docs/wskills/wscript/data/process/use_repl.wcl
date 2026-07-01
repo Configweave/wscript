@@ -1,0 +1,26 @@
+procedure use_repl {
+  title   = "Explore wscript in the REPL"
+  purpose = "Try expressions interactively with bindings that persist across lines."
+  preconditions = ["The wscript binary is available."]
+  related = [modules]
+  audience = :both
+
+  step start { n = 1
+    title = "Start the REPL"
+    body screen { code "console" { source = "wscript repl" } }
+    body steps  { p "Bindings you create persist for the session." }
+  }
+  step evaluate { n = 2
+    title = "Evaluate expressions"
+    body screen { code "rust" { source = <<'SRC'
+let xs = [1, 2, 3]
+xs.map(|x| x * 2).fold(0, |a, x| a + x)   // 12
+SRC
+    } }
+    body steps  { p "The prelude (`print println str fmt same weak int float`) is always available; `use math` etc. brings in stdlib modules." }
+  }
+
+  start -> evaluate
+
+  verification = "Expressions evaluate and earlier `let` bindings remain in scope on later lines."
+}

@@ -1,0 +1,34 @@
+concept reference_semantics {
+  name     = "Reference Semantics"
+  summary  = "Reference types alias rather than copy; mutation is visible through every alias; cloning is explicit."
+  related  = [values, memory, structs, prelude_functions]
+  audience = :both
+  body {
+    p <<PROSE
+This is the Lua/Python mental model, stated explicitly: assignment, argument passing,
+and returns of **reference types** copy the *reference*, never the data. Two bindings
+to the same object see each other's mutations. There is no borrow checker and no `&`
+in the language at all — `self` in methods is always by reference.
+PROSE
+    h2 "Aliasing"
+    code "rust" { source = <<'SRC'
+let p = Player { name: "wil", hp: 100 }
+let alias = p              // same object, not a copy
+alias.hp = 70
+p.hp                       // 70 — mutation visible through both
+same(p, alias)             // true — reference identity builtin
+SRC
+    }
+    p "`same(a, b)` tests reference identity (the prelude builtin). It is distinct from `==`, which compares values and requires an `Eq` impl on structs/enums."
+    h2 "Cloning is explicit"
+    p "Plain assignment never clones. Deep copies are opt-in via a derived `Clone`:"
+    code "rust" { source = <<'SRC'
+#[derive(Clone)]
+struct Config { values: List[int] }
+
+let copy = config.clone()  // deep copy — independent of the original
+SRC
+    }
+    callout "Primitives are values" { class = ["note"]  body = "int, float, bool, char and unit are copied on assignment — only reference types alias. See Values & Types." }
+  }
+}

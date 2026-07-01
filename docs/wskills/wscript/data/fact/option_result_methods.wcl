@@ -1,0 +1,15 @@
+fact option_result_methods {
+  title    = "Option & Result methods"
+  related  = [options_results]
+  audience = :both
+  body {
+    table {
+      header = ["Type", "Methods"]
+      rows = [
+        ["`Option[T]`",    "`is_some` `is_none` `unwrap` `unwrap_or` `expect`"],
+        ["`Result[T, E]`", "`is_ok` `is_err` `unwrap` `unwrap_or` `unwrap_err` `expect`"],
+      ]
+    }
+    p "`?` early-returns the `None`/`Err`. `unwrap()` on the empty case raises a trappable fault (not a host panic)."
+  }
+}

@@ -1,0 +1,60 @@
+// wscript landing page. `start = true` makes it the page served at `/`.
+// The site header already shows "wscript", so the page leads with the motivation.
+page index { sites = [:wscript]  title = "Why wscript?"  start = true
+  callout "Embeddable scripting for Rust" {
+    class = ["info"]
+    body  = "wscript is a statically typed, Rust-flavored scripting language that embeds in Rust applications the way **Lua embeds in C**. It compiles to bytecode and runs on a register-based VM."
+  }
+
+  h1 "Why wscript?"
+
+  p "Rust applications that need a scripting layer have had to choose between untyped embeddable languages (Lua, Rhai, Rune) and the friction of a full language. wscript takes a different bet: **static typing that reaches across the host boundary**. Type errors — including misuse of your registered Rust APIs — surface when the script *compiles*, not when it runs."
+
+  p "If you know Rust, you already know most of wscript — subtract the borrow checker, lifetimes, and generics, and you are there. If you don't, it's an afternoon read."
+
+  code rust {
+    source = <<'SRC'
+use math
+use fs
+
+struct Player { name: string, hp: int }
+
+trait Damageable { fn take_damage(self, amount: int) }
+
+impl Damageable for Player {
+    fn take_damage(self, amount: int) {
+        self.hp = math::imax(0, self.hp - amount)
+    }
+}
+
+fn main() -> int {
+    let p = Player { name: "wil", hp: 100 }
+    let alias = p                  // reference semantics: same object
+    alias.take_damage(30)
+    fs::write("game.log", fmt("hp: {}", p.hp))?   // p.hp == 70
+    0
+}
+SRC
+  }
+
+  h2 "What sets it apart"
+
+  p "**Static typing with inference** — annotations on function signatures only; local inference everywhere else. Exhaustive `match`, `Option`/`Result` with `?`, and host-API misuse all caught at compile time."
+
+  p "**First-class Rust interop** — exposing host functions and types is one `#[derive(Script)]` and one registration call, with plain Rust signatures. No manual value wrangling."
+
+  p "**Rust-stripped syntax** — structs, enums, traits (incl. `dyn` dispatch), derives — familiar to Rust developers, learnable by anyone in an afternoon."
+
+  p "**No borrow checker** — Rc-based memory with free aliased mutation, the Lua/Python mental model. Cycles leak (documented); `weak[T]` provided."
+
+  h2 "Reference"
+
+  p "wscript's reference is published as a **wskill** — a self-contained WCL model, projected into the book linked below and a Claude Code skill."
+
+  // One linked entry per wskill under docs/wskills/, discovered and built by the
+  // `include` in main.wcl. Title / summary come from the member's book site; the
+  // `wskills/<name>/` href is root-relative (this landing is the root site).
+  wdoc_repeater { each = included_sites({ folder: "wskills", entry: "wdoc/book/main.wcl" })  as = :s
+    p $"**[${s.title}](./${s.href})**${match s.summary { none => "", su => $" — ${su}" }}"
+  }
+}

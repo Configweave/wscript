@@ -1,0 +1,24 @@
+fact process_functions {
+  title    = "process module"
+  related  = [modules]
+  audience = :both
+  body {
+    p "Commands & environment (capability: process control)."
+    table {
+      header = ["Function", "Signature"]
+      rows = [
+        ["`run`",     "`(string, List[string]) -> Result[Output, string]`"],
+        ["`env`",     "`(string) -> Option[string]`"],
+        ["`set_env`", "`(string, string)`"],
+        ["`cwd`",     "`() -> Result[string, string]`"],
+        ["`args`",    "`() -> List[string]` — arguments after the script path on the CLI"],
+      ]
+    }
+    p "`Output` is `{ status: int, stdout: string, stderr: string }`."
+    code "rust" { source = <<'SRC'
+use process
+let out = process::run("git", ["status", "--short"])?
+SRC
+    }
+  }
+}

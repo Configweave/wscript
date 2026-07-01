@@ -1,0 +1,104 @@
+// wscript — wskill root document.
+//
+// A complete reference for the wscript scripting language, its standard library,
+// the `wscript` command-line interface, and the Rust embedding API. `wcl check
+// wskill.wcl` validates the whole model; the wdoc template sets in wdoc/ project it
+// into the book (human reference) and the Claude Code skill.
+
+import <wdoc.wcl>
+import "./schema/base.wcl"
+import "./schema/extensions.wcl"
+
+// Data — split into per-type folders (concept / entity / fact / process), each
+// exposing a main.wcl; data/main.wcl aggregates them all, plus glossary, examples
+// and the curated index navigation.
+import "./data/main.wcl"
+
+schema_version = "1.1.0"
+
+topic wscript {
+  name    = "wscript"
+  summary = "An embeddable, statically typed, Rust-flavored scripting language: bytecode-compiled, register-VM, with first-class Rust interop and reference-counted (no borrow-checker) semantics."
+  version = "0.1.0"
+  description = <<END
+wscript is a statically typed scripting language that embeds in Rust applications
+the way Lua embeds in C programs. It compiles to bytecode and runs on a
+register-based VM. The syntax is Rust with the borrow checker, lifetimes and
+generics subtracted: structs, enums, traits (static and `dyn` dispatch), exhaustive
+`match`, `Option`/`Result` with `?`, and derives. Memory is pure reference counting
+(cycles leak; `weak[T]` is provided), so aliased mutation is free — the Lua/Python
+mental model. Its defining trait is **compile-time type safety across the host
+boundary**: exposing Rust functions and types is one `#[derive(Script)]` and one
+registration call, and misuse of a host API is a *compile* error in the script, not
+a runtime fault. The `wscript` CLI runs, checks, REPLs and language-servers scripts;
+the stdlib (math, fs, process, json/toml/xml) is capability-style and feature-gated.
+END
+  tags = ["wscript", "scripting", "language", "rust", "embedding", "bytecode", "vm"]
+  created    = "2026-06-22"
+  maintainer = "Wil Taylor"
+  maintainer_entity = wil_taylor
+}
+
+// Skill-projection config (→ SKILL.md frontmatter). No bundled artifacts.
+wcl.wskill::skill {
+  summary {
+    overview = [
+      "wscript is an embeddable, statically typed, Rust-flavored scripting language. This skill captures its full reference as data — the language, the standard library, the `wscript` CLI, and the Rust embedding API — projected from one model.",
+    ]
+  }
+  skill_param "$ARGUMENTS" {
+    description = "The wscript topic, stdlib function, CLI subcommand, or embedding API to look up."
+    value       = "Take it from the user's request — e.g. the language feature, method, module, or `wscript` subcommand they asked about. If empty, summarise the reference and ask what they need."
+  }
+  skill_param "$1" {
+    description = "Optional area to scope the answer to: `language`, `stdlib`, `cli`, or `embedding`."
+    value       = "Infer from the question; default to searching all areas when unset."
+  }
+  skill_boundary {
+    always = ["Cite the exact reference page when answering.", "Prefer the documented language/stdlib/CLI form over guesses.", "Match wscript syntax exactly — no implicit numeric conversion, no truthiness, `self` is by reference (no `&`), map literals are `#{...}`, closures are `|x| ...`."]
+    ask    = ["Before running a script that touches the filesystem (`fs`) or spawns processes (`process`)."]
+    never  = ["Invent stdlib functions, methods, CLI flags, or syntax that aren't in the reference.", "Suggest v1-unsupported features (borrow checker, generics, `+=`, bitwise ops, async, threads-per-value, string interpolation) as if they exist."]
+  }
+}
+
+// ---- Sources (update-workflow metadata only) ----
+
+source wscript_repo {
+  kind         = "repo"
+  locator      = "/home/wil/dev/wscript"
+  covers       = "Source of truth for wscript: the workspace crates (compiler, vm, std, macros, cli) and the examples/ scripts."
+  last_checked = "2026-06-22"
+  reflects_version = "0.1.0"
+}
+
+source wscript_prd {
+  kind         = "docs"
+  locator      = "/home/wil/dev/wscript/docs/PRD.md"
+  covers       = "The product requirements document — the authoritative source for language design, scope, and the M1-M7 milestones."
+  last_checked = "2026-06-22"
+  reflects_version = "0.1.0"
+}
+
+source wscript_docs {
+  kind         = "docs"
+  locator      = "/home/wil/dev/wscript/docs"
+  covers       = "The language tour (tour.md), embedding guide (embedding.md), and stdlib reference (stdlib.md)."
+  last_checked = "2026-06-22"
+  reflects_version = "0.1.0"
+}
+
+source wscript_cli {
+  kind         = "cli"
+  locator      = "wscript --help"
+  covers       = "Subcommand help text for run / check / repl / lsp."
+  last_checked = "2026-06-22"
+  reflects_version = "0.1.0"
+}
+
+// ---- Cross-references to other wskills ----
+
+wskill_ref wcl {
+  name     = "wcl"
+  relation = "wcl is a sibling project — a typed configuration & schema language by the same author; wscript's docs site is built with wcl's wdoc"
+  status   = "exists"
+}

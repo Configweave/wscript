@@ -1,0 +1,208 @@
+// Examples — worked, runnable scripts lifted from the wscript repo's examples/.
+// Each binds to a unit via `unit = <id>` and renders on that unit's page.
+
+example ex_fib {
+  title      = "Fibonacci — recursion, iteration, control flow"
+  unit       = functions
+  narrative  = "The M1 gate. Two functions, an `if`-expression body, a `while` loop, and `main` returning an exit code."
+  code_lang  = "rust"
+  code       = <<'SRC'
+fn fib(n: int) -> int {
+    if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+fn fib_iter(n: int) -> int {
+    let a = 0
+    let b = 1
+    let i = 0
+    while i < n {
+        let next = a + b
+        a = b
+        b = next
+        i = i + 1
+    }
+    a
+}
+
+fn main() -> int {
+    println(fib(20))        // 6765
+    println(fib_iter(20))   // 6765
+    if fib(20) == fib_iter(20) { 0 } else { 1 }
+}
+SRC
+  expected   = "Prints 6765 twice; exits 0."
+  audience   = :both
+}
+
+example ex_tasklist {
+  title      = "Task list — structs, enums, match, Option/Result, containers"
+  unit       = structs
+  narrative  = "The M2 gate. A `Store` of `Task`s driven by `Command` variants; note `let … else`, `?`-free explicit error returns, closures in `filter`, and reference-semantics mutation through `self`."
+  code_lang  = "rust"
+  code       = <<'SRC'
+struct Task { id: int, title: string, done: bool, tags: List[string] }
+
+enum Command { Add(string), Done(int), Remove(int), Report }
+
+struct Store { tasks: List[Task], next_id: int }
+
+impl Store {
+    fn add(self, title: string) -> int {
+        let id = self.next_id
+        self.next_id = self.next_id + 1
+        let tags = []
+        for word in title.split(" ") {
+            if word.starts_with("#") { tags.push(word.slice(1, word.len())) }
+        }
+        self.tasks.push(Task { id: id, title: title, done: false, tags: tags })
+        id
+    }
+
+    fn complete(self, id: int) -> Result[string, string] {
+        let Some(task) = self.find(id) else { return Err(fmt("no task with id {}", id)) }
+        task.done = true
+        Ok(task.title)
+    }
+
+    fn find(self, id: int) -> Option[Task] {
+        for t in self.tasks { if t.id == id { return Some(t) } }
+        None
+    }
+
+    fn report(self) {
+        let open = self.tasks.filter(|t| !t.done)
+        println(fmt("{} open / {} done", open.len(), self.tasks.len() - open.len()))
+    }
+}
+SRC
+  expected   = "Drives the store with a list of Command variants and prints a report."
+  audience   = :both
+}
+
+example ex_shapes {
+  title      = "Shapes — traits, dyn dispatch, operator overloading, derives"
+  unit       = traits
+  narrative  = "The M3 example. A `Shape` trait with two impls, dynamic dispatch through `List[dyn Shape]`, an `Add` overload, and `#[derive(Eq, Display, Clone)]`."
+  code_lang  = "rust"
+  code       = <<'SRC'
+trait Shape {
+    fn area(self) -> float
+    fn describe(self) -> string
+}
+
+#[derive(Eq, Display, Clone)]
+struct Rect { w: float, h: float }
+
+#[derive(Eq, Display, Clone)]
+struct Circle { r: float }
+
+impl Shape for Rect {
+    fn area(self) -> float { self.w * self.h }
+    fn describe(self) -> string { fmt("rect {}x{}", self.w, self.h) }
+}
+
+impl Shape for Circle {
+    fn area(self) -> float { 3.14159265 * self.r * self.r }
+    fn describe(self) -> string { fmt("circle r={}", self.r) }
+}
+
+impl Add for Rect {
+    fn add(self, other: Rect) -> Rect {
+        Rect { w: self.w + other.w, h: self.h + other.h }
+    }
+}
+
+fn total_area(shapes: List[dyn Shape]) -> float {
+    shapes.fold(0.0, |acc, s| acc + s.area())
+}
+
+fn main() -> int {
+    let shapes: List[dyn Shape] = [
+        Rect { w: 2.0, h: 3.0 },
+        Circle { r: 1.0 },
+        Rect { w: 1.0, h: 1.0 },
+    ]
+    for s in shapes { println(s.describe()) }
+    println(fmt("total: {}", total_area(shapes)))
+
+    let a = Rect { w: 1.0, h: 2.0 }
+    println(a + Rect { w: 2.0, h: 1.0 })
+    println(a == a.clone())
+    0
+}
+SRC
+  expected   = "Describes each shape, prints the total area, an added Rect, and `true`."
+  audience   = :both
+}
+
+example ex_config_tool {
+  title      = "Config tool — JSON in, TOML out via the shared Value"
+  unit       = data_formats
+  narrative  = "The M5 example. Parse JSON into a `Value`, read fields via the accessor methods, do some math, and re-emit as TOML — formats compose over one Value."
+  code_lang  = "rust"
+  code       = <<'SRC'
+use json
+use toml
+use fs
+use math
+
+fn main() -> int {
+    let raw = "{\"name\": \"demo\", \"port\": 8080, \"retries\": [1, 2, 3]}"
+    let conf = json::parse(raw).unwrap()
+
+    let name = conf.get("name").unwrap().as_string().unwrap_or("unnamed")
+    let port = conf.get("port").unwrap().as_int().unwrap_or(80)
+    println(fmt("service {} on port {}", name, port))
+
+    let retries = conf.get("retries").unwrap()
+    let total = 0
+    for i in 0..retries.len() {
+        total = total + retries.at(i).unwrap().as_int().unwrap_or(0)
+    }
+    println(fmt("total retry budget: {}s (sqrt {})", total, math::sqrt(float(total))))
+
+    // formats compose: JSON in, TOML out
+    println(toml::to_string(conf).unwrap().trim())
+
+    let path = "/tmp/wscript_config_tool.toml"
+    fs::write(path, toml::to_string(conf).unwrap()).unwrap()
+    let ok = fs::exists(path)
+    fs::remove_file(path).unwrap()
+    if ok { 0 } else { 1 }
+}
+SRC
+  expected   = "Prints the service line, the retry budget, and the TOML rendering of the config."
+  audience   = :both
+}
+
+example ex_host_app {
+  title      = "Embedding — register a module and call a script function"
+  unit       = embedding
+  narrative  = "Register a host `Module`, fold in a stdlib module, compile (all type errors surface here), then run `main` on a per-thread Vm."
+  code_lang  = "rust"
+  code       = <<'SRC'
+use wscript::{Context, Module, Vm};
+
+let mut m = Module::new("term");
+m.fn_("clear", || { /* ... */ });
+m.fn_("print_at", |x: i64, y: i64, s: &str| { /* ... */ });
+m.const_("MAX_PANES", 16i64);
+
+let ctx = Context::new()
+    .module(wscript::std_modules::math())
+    .module(m);
+
+let unit = ctx.compile(r#"
+    use term
+    fn main() -> int {
+        term::print_at(1, 2, "hello")
+        term::MAX_PANES
+    }
+"#)?;                                   // ← ALL type errors surface here
+
+let mut vm = Vm::new(&ctx);
+let n: i64 = vm.call_unit(&unit, "main", ())?;
+SRC
+  expected   = "n == 16. Calling `term::print_at(\"oops\", 1, 2)` would instead be a compile error."
+  audience   = :both
+}

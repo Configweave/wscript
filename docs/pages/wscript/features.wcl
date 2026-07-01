@@ -1,0 +1,91 @@
+// Features tour — sectioned, drawn from the PRD / README / tour.
+page features { sites = [:wscript]  title = "Features"
+  h1 "Features"
+
+  h2 "Static typing with local inference"
+  p "wscript is statically typed; inference is local, so annotations are required only on function signatures. Type errors are caught when the script compiles — not when it runs. There is no implicit numeric conversion and no truthiness: the type system stays honest."
+  code rust {
+    source = <<'SRC'
+fn area(w: int, h: int) -> int { w * h }   // signature annotated; body inferred
+
+let x = 5                  // inferred: int
+// if 1 { }                // ERROR — conditions must be bool
+// let n = 1 + 2.0         // ERROR — no implicit int/float mixing
+SRC
+  }
+
+  h2 "First-class Rust interop"
+  p "Exposing host functions and types is one derive and one registration call, with plain Rust signatures. Misuse of a host API from a script is a *compile* error with a span."
+  code rust {
+    source = <<'SRC'
+#[derive(Script)]
+struct Point { x: i64, y: i64 }
+
+let mut m = Module::new("term");
+m.fn_("print_at", |x: i64, y: i64, s: &str| { /* ... */ });
+let ctx  = Context::new().module(m);
+let unit = ctx.compile(source)?;   // ALL type errors surface here
+SRC
+  }
+
+  h2 "Rust-stripped syntax"
+  p "Structs, enums, traits with static and `dyn` dispatch, exhaustive pattern matching, and derives — the Rust mental models, without the borrow checker, lifetimes, or generics."
+  code rust {
+    source = <<'SRC'
+#[derive(Eq, Display, Clone)]
+struct Rect { w: float, h: float }
+
+trait Shape { fn area(self) -> float }
+impl Shape for Rect { fn area(self) -> float { self.w * self.h } }
+
+fn total(shapes: List[dyn Shape]) -> float {
+    shapes.fold(0.0, |acc, s| acc + s.area())
+}
+SRC
+  }
+
+  h2 "Exhaustive match, Option/Result and ?"
+  p "`match` is exhaustiveness-checked at compile time. `Option[T]` and `Result[T, E]` are always available, and `?` composes across the host boundary."
+  code rust {
+    source = <<'SRC'
+fn parse_double(s: string) -> Result[int, string] {
+    let Some(n) = s.parse_int() else { return Err("bad number") }
+    Ok(n * 2)
+}
+SRC
+  }
+
+  h2 "Reference semantics, no borrow checker"
+  p "Reference types alias rather than copy; mutation is visible through every alias — the Lua/Python model. Memory is pure reference counting; cycles leak (documented), broken with `weak[T]`. `self` is always by reference — there is no `&` in the language."
+  code rust {
+    source = <<'SRC'
+let p = Player { name: "wil", hp: 100 }
+let alias = p              // same object
+alias.hp = 70
+p.hp                       // 70 — visible through both
+same(p, alias)             // true — reference identity
+SRC
+  }
+
+  h2 "A capability-style standard library"
+  p "math, fs, process, and json/toml/xml over one shared `Value` type. Nothing is ambient: registering a module grants the capability, and each module is a Cargo feature gate. `wscript run` enables them all."
+  code rust {
+    source = <<'SRC'
+use json
+use toml
+let conf = json::parse(raw)?        // parse JSON…
+println(toml::to_string(conf)?)     // …emit TOML — formats compose over Value
+SRC
+  }
+
+  h2 "Complete tooling"
+  p "The `wscript` CLI runs and type-checks scripts, offers a persistent-binding REPL, and ships a language server (diagnostics, hover, goto-definition, completions). Host APIs are described in diff-friendly `.wscripti` interface files referenced from a `wscript.toml`, so the editor understands your registrations too."
+  code console {
+    source = <<'SRC'
+wscript run script.wscript      # compile + execute (full stdlib)
+wscript check script.wscript    # compile only; honors wscript.toml/.wscripti
+wscript repl                    # persistent-binding REPL
+wscript lsp                     # language server
+SRC
+  }
+}

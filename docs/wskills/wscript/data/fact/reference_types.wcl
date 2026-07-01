@@ -1,0 +1,20 @@
+fact reference_types {
+  title    = "Reference types"
+  related  = [reference_semantics, primitive_types]
+  audience = :both
+  body {
+    p "Everything that is not a primitive is a reference type: assignment copies the reference, not the data."
+    table {
+      header = ["Type", "Notes"]
+      rows = [
+        ["`string`",      "immutable UTF-8; methods return new strings; character-indexed"],
+        ["structs",       "named field records, mutated in place"],
+        ["enums",         "tagged unions; `Option[T]` / `Result[T,E]` are built in"],
+        ["`List[T]`",     "growable ordered sequence (built-in generic)"],
+        ["`Map[K, V]`",   "hash map; keys are `int`/`bool`/`char`/`string` (built-in generic)"],
+        ["function values", "closures capture by reference"],
+        ["`weak[T]`",     "a weak reference; `.upgrade() -> Option[T]`"],
+      ]
+    }
+  }
+}

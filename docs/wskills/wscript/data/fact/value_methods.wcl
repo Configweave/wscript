@@ -1,0 +1,26 @@
+fact value_methods {
+  title    = "The shared Value type"
+  related  = [data_formats]
+  audience = :both
+  body {
+    p "The single dynamically-typed escape hatch — the parse target for json/toml/xml. `match` on it like any enum, or use the accessor methods (register `wscript_std::value()`; the CLI always does)."
+    code "rust" { source = <<'SRC'
+enum Value {
+    Null, Bool(bool), Int(int), Float(float), String(string),
+    List(List[Value]), Map(Map[string, Value]),
+}
+SRC
+    }
+    table {
+      header = ["Method", "Returns"]
+      rows = [
+        ["`get(key)`", "`Option[Value]`"],
+        ["`at(idx)`",  "`Option[Value]`"],
+        ["`keys()`",   "`List[string]`"],
+        ["`len()`",    "`int`"],
+        ["`is_null()`","`bool`"],
+        ["`as_bool/as_int/as_float/as_string/as_list/as_map`", "`Option[...]` (`as_float` also accepts `Int`)"],
+      ]
+    }
+  }
+}

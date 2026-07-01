@@ -1,0 +1,24 @@
+concept derives {
+  name     = "Derives"
+  summary  = "#[derive(...)] generates Eq, Ord, Display and Clone impls."
+  related  = [operators, traits, reference_semantics]
+  audience = :both
+  body {
+    p "`#[derive(...)]` auto-generates trait impls for a struct or enum."
+    code "rust" { source = <<'SRC'
+#[derive(Eq, Ord, Display, Clone)]
+struct Vec2 { x: int, y: int }
+SRC
+    }
+    table {
+      header = ["Derive", "Generates"]
+      rows = [
+        ["`Eq`",      "structural `==` / `!=`"],
+        ["`Ord`",     "structural ordering; custom form is `fn cmp(self, other: Self) -> int` (-1/0/1)"],
+        ["`Display`", "a debug-ish `str(x)` / `{}` rendering"],
+        ["`Clone`",   "a deep copy via `x.clone()`"],
+      ]
+    }
+    p "Derived `Eq`/`Ord` are structural; `Display` is debug-ish; `Clone` is a deep copy."
+  }
+}

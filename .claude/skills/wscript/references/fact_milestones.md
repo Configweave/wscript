@@ -1,0 +1,19 @@
+# Milestones (M1-M7)
+
+The language was built incrementally; all seven milestones are implemented and tested (v1 complete).
+
+| Milestone | Scope |
+| --- | --- |
+| M1 — Core pipeline | lexer, error-recovering parser, type checker, bytecode + VM; `let`, functions, primitives, arithmetic, `if`/`while`/blocks. Gate: fib/fizzbuzz run. |
+| M2 — Data types | structs, impl/methods, enums, `match` + exhaustiveness, `if let`/`let else`, `Option`/`Result` + `?`, `List`/`Map`, `for`, `string`. Gate: task-list app runs. |
+| M3 — Traits & Rc | traits, `dyn` dispatch, operator traits, derives, `weak[T]`, reference-semantics test suite. |
+| M4 — Interop | `Context`/`Module`/registration, `#[derive(Script)]`, `FromValue`/`IntoValue`, `vm.call`, `ScriptFn`, `Shared<T>`, host-signature type checking. Gate: example host app. |
+| M5 — Stdlib | all modules + shared `Value`; feature gates; `.wscripti` generation for std. |
+| M6 — Tooling | REPL; LSP (diagnostics, hover, goto-definition, completions); `wscript.toml` + `.wscripti` consumption. |
+| M7 — Polish | diagnostics pass (every error has help text), docs (tour + embedding + stdlib), benchmarks vs Lua/Rhai/Rune. |
+
+## Related
+
+- [The Type System](../references/concept_type_system.md)
+
+[← Back to SKILL.md](../SKILL.md)

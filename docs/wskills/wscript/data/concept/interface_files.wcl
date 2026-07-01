@@ -1,0 +1,25 @@
+concept interface_files {
+  name     = "Interface Files & wscript.toml"
+  summary  = ".wscripti files declare the host API so the LSP and `wscript check` understand it."
+  related  = [embedding, interop_types, type_system]
+  audience = :both
+  body {
+    p <<PROSE
+The editor has never seen your host API. `ctx.write_interface("api.wscripti")` dumps
+every registered signature into a `.wscripti` file — a strict, diff-friendly subset of
+wscript syntax (declarations only, think `.d.ts`). A `wscript.toml` next to your scripts
+lists the interface files.
+PROSE
+    code "rust" { source = <<'SRC'
+ctx.write_interface("api.wscripti")?;   // from your host's build/setup
+SRC
+    }
+    code "toml" { source = <<'SRC'
+# wscript.toml next to your scripts
+interfaces = ["api.wscripti"]
+SRC
+    }
+    p "`wscript check` and `wscript lsp` read the manifest and typecheck scripts against the declared API — completions, hover, and goto-definition included. Regenerate `.wscripti` files in CI to keep them honest. The stdlib ships its own at `wscript-std/wscripti/std.wscripti`."
+    callout "Feature gates grant capability" { class = ["note"]  body = "Each stdlib module is a Cargo feature in wscript-std (`math fs process json toml xml`, default all). Registering a module is what grants the capability — don't register `fs`, and scripts cannot touch the filesystem." }
+  }
+}

@@ -1,0 +1,120 @@
+// Glossary — wscript terms.
+
+term wscript {
+  term       = "wscript"
+  definition = "An embeddable, statically typed, Rust-flavored scripting language that compiles to bytecode and runs on a register-based VM."
+  aliases    = ["the wscript language"]
+  audience   = :both
+}
+
+term bytecode_vm {
+  term       = "register-based VM"
+  definition = "wscript's runtime: a register machine (Lua 5.x-style) that executes the bytecode emitted by the compiler. One VM runs per thread; the Context and compiled units are shared across threads."
+  aliases    = ["VM", "virtual machine"]
+  audience   = :both
+}
+
+term reference_counting {
+  term       = "reference counting"
+  definition = "wscript's memory model: every reference-typed value is `Rc`-managed. There is no cycle collector, so reference cycles leak until the VM is dropped; break them with `weak[T]`."
+  aliases    = ["Rc", "refcounting"]
+  audience   = :both
+}
+
+term reference_semantics {
+  term       = "reference semantics"
+  definition = "The rule that assigning, passing, or returning a reference type copies the reference, not the data — so mutation is visible through every alias. The Lua/Python mental model."
+  aliases    = ["aliasing"]
+  audience   = :both
+}
+
+term fault {
+  term       = "fault"
+  definition = "A trappable VM-level error (out-of-bounds, divide-by-zero, `unwrap()` on `None`, host aliasing violation) delivered to the host with a message, span and stack trace. Script code never catches it; it never panics the host."
+  aliases    = ["trappable error", "runtime fault"]
+  audience   = :both
+}
+
+term data_type {
+  term       = "data type (interop)"
+  definition = "A `#[derive(Script)]` Rust type whose fields are visible to scripts; it crosses the host boundary by value. The script constructs and matches it; mutations to its copy do not write back."
+  aliases    = []
+  audience   = :both
+}
+
+term opaque_type {
+  term       = "opaque type (interop)"
+  definition = "A `#[derive(Script)] #[script(opaque)]` Rust type with no script-visible fields, only methods; it crosses by handle. `&mut` methods mutate the live Rust value; scripts cannot construct it."
+  aliases    = ["handle type"]
+  audience   = :both
+}
+
+term context {
+  term       = "Context"
+  definition = "The host registrations plus the compiler. `Send + Sync` and cheaply cloneable: compile once, share across threads."
+  aliases    = []
+  audience   = :both
+}
+
+term module {
+  term       = "Module"
+  definition = "A named bag of host functions, constants and types. Scripts opt in with `use name`. Registering a module is what grants its capability (nothing is ambient)."
+  aliases    = []
+  audience   = :both
+}
+
+term compiled_unit {
+  term       = "CompiledUnit"
+  definition = "The output of `ctx.compile(source)` — the typed, compiled script. `Send + Sync`, so it can be shared across threads and run on one Vm per thread."
+  aliases    = ["unit"]
+  audience   = :both
+}
+
+term scriptfn {
+  term       = "ScriptFn"
+  definition = "A typed handle to a script function (`ScriptFn<(Args…), Return>`), obtained via `unit.fn_handle(name)`. Its signature is verified once at lookup, making repeated calls cheap."
+  aliases    = []
+  audience   = :both
+}
+
+term shared {
+  term       = "Shared<T>"
+  definition = "A host-side handle to a live script value; both sides observe mutation. Aliasing violations surface as `Err`, never panics."
+  aliases    = []
+  audience   = :both
+}
+
+term interface_file {
+  term       = "interface file (.wscripti)"
+  definition = "A machine-generated, diff-friendly declaration of a host API in a strict subset of wscript syntax (think `.d.ts`). Written by `ctx.write_interface(...)` and read by `wscript check`/`wscript lsp` via `wscript.toml`."
+  aliases    = [".wscripti"]
+  audience   = :both
+}
+
+term capability {
+  term       = "capability"
+  definition = "The embedding model in which a script can only touch what the host registers. Don't register `fs`, and scripts cannot reach the filesystem. Mirrored by Cargo feature gates in wscript-std."
+  aliases    = ["capability-style"]
+  audience   = :both
+}
+
+term prelude {
+  term       = "prelude"
+  definition = "The functions available in every script with no import: `print println str fmt same weak int float`."
+  aliases    = []
+  audience   = :both
+}
+
+term exhaustiveness {
+  term       = "exhaustiveness checking"
+  definition = "Compile-time verification that a `match` covers every case; a missing variant is an error reported with a witness. Guarded arms never count toward exhaustiveness."
+  aliases    = []
+  audience   = :both
+}
+
+term weak_reference {
+  term       = "weak reference (weak[T])"
+  definition = "A non-owning reference produced by `weak(x)`. `.upgrade()` returns `Option[T]` — `None` once the strong references are gone. Used to break cycles, which otherwise leak."
+  aliases    = ["weak"]
+  audience   = :both
+}

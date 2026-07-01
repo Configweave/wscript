@@ -1,0 +1,19 @@
+// The maintainer, modelled as an entity so the overview's Maintainer field can link
+// to their details. Book-only — an agent working with the topic doesn't need it.
+entity wil_taylor {
+  name     = "Wil Taylor"
+  kind     = "maintainer"
+  summary  = "Author and maintainer of wscript."
+  audience = :book
+  body {
+    p "Wil Taylor authors and maintains wscript and its sibling tooling."
+    table {
+      header = ["Field", "Value"]
+      rows = [
+        ["Name",   "Wil Taylor"],
+        ["Role",   "Author & maintainer"],
+        ["GitHub", "[github.com/wiltaylor](https://github.com/wiltaylor)"],
+      ]
+    }
+  }
+}

@@ -1,0 +1,23 @@
+concept options_results {
+  name     = "Option, Result & ?"
+  summary  = "Option[T] and Result[T, E] are always available; ? early-returns and composes across the host boundary."
+  related  = [enums, pattern_matching, option_result_methods, faults]
+  audience = :both
+  body {
+    p "`Option[T]` and `Result[T, E]` are always available — no import. The `?` operator early-returns the `None`/`Err`, exactly as in Rust, and composes across the host boundary (host errors arrive as `Err`)."
+    code "rust" { source = <<'SRC'
+fn parse_double(s: string) -> Result[int, string] {
+    let Some(n) = s.parse_int() else { return Err("bad number") }
+    Ok(n * 2)
+}
+
+fn sum(a: string, b: string) -> Result[int, string] {
+    Ok(parse_double(a)? + parse_double(b)?)
+}
+SRC
+    }
+    h2 "Methods"
+    p "`Option`: `is_some is_none unwrap unwrap_or expect`. `Result`: `is_ok is_err unwrap unwrap_or unwrap_err expect`. `unwrap()` on the empty case is a trappable [fault](concept_faults), not a host panic. See [Option/Result methods](fact_option_result_methods)."
+    callout "Prefer Option-returning APIs" { class = ["info"]  body = "Where failure is expected (a missing list index or map key), reach for the Option-returning form (`xs.get(i)`, `m.get(k)`) rather than the faulting index." }
+  }
+}

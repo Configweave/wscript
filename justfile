@@ -82,3 +82,30 @@ repl-start:
 [group('run')]
 bench-run:
 	cargo run --release -p wscript-benchmarks
+
+# ------------------------------------------------------------------ docs
+
+# The docs site + wscript wskill are authored in wdoc and rendered by the `wcl`
+# CLI (install: https://wcl.dev). These recipes need `wcl` on PATH.
+
+# Serve the docs site with live reload (/ = landing, /wskills/wscript/ = reference)
+[group('docs')]
+docs-serve *ARGS:
+	wcl wdoc serve docs/main.wcl {{ARGS}}
+
+# Build the docs site into docs/_site/ (gitignored)
+[group('docs')]
+docs-build *ARGS:
+	wcl wdoc build docs/main.wcl --out docs/_site {{ARGS}}
+
+# Build the wscript skill into .claude/skills/wscript/ (committed) from the wscript wskill
+[group('docs')]
+skill-build *ARGS:
+	wcl wdoc skill docs/wskills/wscript/wdoc/skill/main.wcl --out .claude/skills/wscript {{ARGS}}
+
+# Validate the wskill model and both projection templates
+[group('docs')]
+wskill-check:
+	wcl check docs/wskills/wscript/wskill.wcl
+	wcl check docs/wskills/wscript/wdoc/book/main.wcl
+	wcl check docs/wskills/wscript/wdoc/skill/main.wcl

@@ -1,0 +1,43 @@
+// wscript's landing site, authored in wdoc and rendered by `wcl wdoc`.
+//
+//   wcl wdoc serve docs/main.wcl                  # / = wscript landing
+//   wcl wdoc build docs/main.wcl --out docs/_site
+//     → docs/_site/index.html            wscript landing (webpage template)
+//       docs/_site/wskills/wscript/…      the wscript reference (book template)
+//
+// One document, one landing site, plus the wscript wskill included as a book under
+// /wskills/wscript/. The single `import <wdoc.wcl>` pulls in the embedded wdoc
+// standard library, so every stdlib block (`page` / `code` / `callout` / `table` /
+// `h1`..`h6` / …) is in scope here and in every imported page.
+import <wdoc.wcl>
+
+// The reference content lives in a wskill — a self-contained WCL model under
+// docs/wskills/wscript, projected into a book (included here) and a Claude Code skill.
+// `include` builds the wskill's book under docs/_site/wskills/<name>/; the landing
+// page lists it via `included_sites(...)`.
+include "wskills" { entry = "wdoc/book/main.wcl" }
+
+// The wscript landing: the `webpage` template (title header + top navbar).
+// `root = true` serves it at `/`; the reference book renders under
+// `/wskills/wscript/`. Nord theme, cyan accent.
+site wscript {
+  default_template = :webpage
+  title            = "wscript"
+  root             = true
+  theme            = :nord
+  accent           = :cyan
+  menu {
+    item "Home"            { page = index }
+    item "Features"        { page = features }
+    item "Getting started" { page = getting_started }
+    // The reference is the wscript wskill, built as its own sub-site; link by its
+    // root-relative output path (a `page =` here would only resolve within this site).
+    item "Reference"       { href = "wskills/wscript/" }
+    item "Source"          { href = "https://github.com/wiltaylor/wscript" }
+  }
+}
+
+// wscript landing pages (sites = [:wscript]).
+import "./pages/wscript/index.wcl"
+import "./pages/wscript/features.wcl"
+import "./pages/wscript/getting-started.wcl"

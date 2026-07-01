@@ -1,0 +1,62 @@
+// Getting started — build, run, embed.
+page getting_started { sites = [:wscript]  title = "Getting started"
+  h1 "Getting started"
+
+  h2 "1. Build"
+  p "wscript uses the standard Rust toolchain. The binary lands at `target/release/wscript`."
+  code console {
+    source = <<'SRC'
+cargo build --release
+SRC
+  }
+
+  h2 "2. Write a script"
+  p "Execution starts at `fn main()`; its `int` return becomes the exit code (`unit` means 0). The file extension is `.wscript`."
+  code rust {
+    source = <<'SRC'
+// hello.wscript
+fn main() -> int {
+    println(fmt("Hello, {}!", "wscript"))
+    0
+}
+SRC
+  }
+
+  h2 "3. Run, check, REPL, LSP"
+  p "Four subcommands cover the workflow. `run` enables the full standard library; `check` type-checks without running and honors a `wscript.toml`."
+  code console {
+    source = <<'SRC'
+wscript run hello.wscript [args...]   # compile + execute (full stdlib)
+wscript check hello.wscript           # compile only; honors wscript.toml/.wscripti
+wscript repl                          # persistent-binding REPL
+wscript lsp                           # language server (diagnostics, hover, …)
+SRC
+  }
+
+  h2 "4. Editor support"
+  p "Run `wscript lsp` as a generic LSP server. To teach the editor about a host application's registered API, drop a `wscript.toml` next to your scripts pointing at the generated `.wscripti` interface files:"
+  code toml {
+    source = <<'SRC'
+# wscript.toml
+interfaces = ["api.wscripti"]
+SRC
+  }
+
+  h2 "5. Embed it in Rust"
+  p "Register your API in a `Module`, build a `Context`, compile once (all type errors surface here), then run one `Vm` per thread."
+  code rust {
+    source = <<'SRC'
+use wscript::{Context, Module, Vm};
+
+let mut m = Module::new("term");
+m.fn_("print_at", |x: i64, y: i64, s: &str| { /* ... */ });
+
+let ctx  = Context::new().module(m);
+let unit = ctx.compile(source)?;            // type errors (incl. host API) here
+let mut vm = Vm::new(&ctx);
+let n: i64 = vm.call_unit(&unit, "main", ())?;
+SRC
+  }
+
+  p "The full language, standard library, CLI, and embedding API are documented in the [wscript reference](./wskills/wscript/)."
+}

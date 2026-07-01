@@ -1,0 +1,19 @@
+// The `wscript` CLI, as a fact table. Converted from the old bespoke `cli`
+// module: the binary's four subcommands, each with its purpose and an example.
+fact cli_commands {
+  title    = "The `wscript` CLI"
+  related  = [run_script, check_script, interface_files, modules]
+  audience = :both
+  body {
+    p "The `wscript` binary compiles and runs scripts, type-checks them, drops into an interactive REPL, and serves a language server. `wscript run` enables the full standard library; execution starts at `fn main()` and its `int` return becomes the process exit code (`unit` means 0)."
+    table {
+      header = ["Command", "Purpose", "Example"]
+      rows = [
+        ["`run <script.wscript> [args…]`", "Compile and execute a script with the full stdlib. Arguments after the path are read with `process::args()`.", "`wscript run script.wscript --verbose 3`"],
+        ["`check <script.wscript>`", "Compile and type-check without running. Honors `wscript.toml` and the `.wscripti` interfaces it lists, so host APIs are checked too. Non-zero exit on any error.", "`wscript check script.wscript`"],
+        ["`repl`", "Interactive read-eval-print loop with bindings persisted across lines.", "`wscript repl`"],
+        ["`lsp`", "Language server over stdio: diagnostics, hover, go-to-definition, completions. Reads `wscript.toml` / `.wscripti` for registered host APIs.", "`wscript lsp`"],
+      ]
+    }
+  }
+}

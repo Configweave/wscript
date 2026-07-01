@@ -1,0 +1,19 @@
+fact crates {
+  title    = "Workspace crates"
+  related  = [embedding]
+  audience = :both
+  body {
+    table {
+      header = ["Crate", "Contents"]
+      rows = [
+        ["`wscript`",          "umbrella: embedding API (`Context`, `Vm`, `ScriptFn`, `Shared`), re-exports"],
+        ["`wscript-core`",     "shared types: spans, diagnostics, type repr, bytecode, values, registry"],
+        ["`wscript-compiler`", "lexer, error-recovering parser, type checker, bytecode emitter"],
+        ["`wscript-vm`",       "register-based VM (one per thread; `Context`/units shared across threads)"],
+        ["`wscript-std`",      "stdlib: math, fs, process, json/toml/xml — capability-style, feature-gated"],
+        ["`wscript-macros`",   "`#[derive(Script)]`"],
+        ["`wscript-cli`",      "the `wscript` binary: `run`, `check`, `repl`, `lsp`"],
+      ]
+    }
+  }
+}

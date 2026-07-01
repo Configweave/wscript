@@ -1,0 +1,20 @@
+concept enums {
+  name     = "Enums"
+  summary  = "Tagged unions with unit, tuple and struct variants, consumed by match."
+  related  = [pattern_matching, structs, options_results]
+  audience = :both
+  body {
+    p "An `enum` is a tagged union. Variants come in three shapes: unit, tuple, and struct."
+    code "rust" { source = <<'SRC'
+enum Event {
+    Quit,                        // unit variant
+    Key(char),                   // tuple variant
+    Click { x: int, y: int },    // struct variant
+}
+
+let e = Event::Click { x: 10, y: 20 }
+SRC
+    }
+    p "Construct a variant with `Enum::Variant`. Enums are consumed with [`match`](concept_pattern_matching), which checks exhaustiveness at compile time. `Option[T]` and `Result[T, E]` are the two built-in enums."
+  }
+}

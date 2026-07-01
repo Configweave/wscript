@@ -1,0 +1,23 @@
+concept structs {
+  name     = "Structs & Methods"
+  summary  = "Named field records with impl blocks; self is implicit and always by reference."
+  related  = [enums, traits, reference_semantics]
+  audience = :both
+  body {
+    p "A `struct` is a named record of typed fields. Methods are declared in an `impl` block. `self` is implicit in type and **always by reference** — there is no `&` in wscript."
+    code "rust" { source = <<'SRC'
+struct Player { name: string, hp: int }
+
+impl Player {
+    fn heal(self, amount: int) {
+        self.hp = self.hp + amount
+    }
+}
+
+let p = Player { name: "wil", hp: 100 }
+p.heal(20)                 // p.hp == 120
+SRC
+    }
+    callout "Construction & mutation" { class = ["note"]  body = "Construct with `Type { field: value, … }`. Fields are mutated in place (`p.hp = …`) — and because structs are reference types, that mutation is visible through every alias. See Reference Semantics." }
+  }
+}

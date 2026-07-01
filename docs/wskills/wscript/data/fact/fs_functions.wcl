@@ -1,0 +1,23 @@
+fact fs_functions {
+  title    = "fs module"
+  related  = [modules]
+  audience = :both
+  body {
+    p "File I/O (capability: filesystem). All fallible operations return `Result[…, string]`."
+    table {
+      header = ["Function", "Signature"]
+      rows = [
+        ["`read_to_string`", "`(string) -> Result[string, string]`"],
+        ["`read_bytes`",     "`(string) -> Result[List[int], string]`"],
+        ["`write`, `append`","`(string, string) -> Result[unit, string]`"],
+        ["`exists`, `is_file`, `is_dir`", "`(string) -> bool`"],
+        ["`list_dir`",       "`(string) -> Result[List[string], string]` (sorted)"],
+        ["`create_dir`, `create_dir_all`", "`(string) -> Result[unit, string]`"],
+        ["`copy`, `rename`", "`(string, string) -> Result[unit, string]`"],
+        ["`remove_file`, `remove_dir`", "`(string) -> Result[unit, string]`"],
+        ["`join`",           "`(string, string) -> string`"],
+        ["`parent`, `file_name`, `ext`", "`(string) -> Option[string]`"],
+      ]
+    }
+  }
+}

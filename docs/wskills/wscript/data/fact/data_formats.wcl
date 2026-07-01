@@ -1,0 +1,17 @@
+fact data_formats {
+  title    = "json / toml / xml modules"
+  related  = [value_methods, modules]
+  audience = :both
+  body {
+    p "Three data formats parse into one shared dynamic [`Value`](fact_value_methods) type, so formats compose (parse JSON, emit TOML)."
+    table {
+      header = ["Module", "Functions"]
+      rows = [
+        ["`json`", "`parse(string) -> Result[Value, string]`; `to_string(Value) -> string` (keys sorted); `to_string_pretty`"],
+        ["`toml`", "`parse(string) -> Result[Value, string]` (datetimes become strings); `to_string` / `to_string_pretty -> Result[string, string]`"],
+        ["`xml`",  "`parse(string) -> Result[Value, string]`; `to_string` / `to_string_pretty -> Result[string, string]` (needs exactly one root key)"],
+      ]
+    }
+    p "TOML serialization fails on `Null` anywhere and on non-map top levels. XML uses a documented mapping: attributes under `\"@attrs\"`, text under `\"#text\"`, repeated child elements collapse into a `List`."
+  }
+}

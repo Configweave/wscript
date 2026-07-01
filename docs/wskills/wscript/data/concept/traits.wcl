@@ -1,0 +1,28 @@
+concept traits {
+  name     = "Traits"
+  summary  = "Go-flavored interfaces with Rust syntax; static dispatch when the type is known, dyn Trait otherwise."
+  related  = [operators, structs, derives]
+  audience = :both
+  body {
+    p <<PROSE
+Traits are Go-flavored interfaces with Rust syntax. Dispatch is **static** when the
+concrete type is known; `dyn Trait` selects **dynamic** (vtable) dispatch, with
+implicit coercion at typed boundaries. There are no default method bodies and no
+trait inheritance in v1.
+PROSE
+    code "rust" { source = <<'SRC'
+trait Shape {
+    fn area(self) -> float
+}
+
+impl Shape for Circle {
+    fn area(self) -> float { 3.14159 * self.r * self.r }
+}
+
+fn describe(s: dyn Shape) -> string { str(s.area()) }   // vtable dispatch
+let shapes: List[dyn Shape] = [Circle { r: 1.0 }, square]
+SRC
+    }
+    callout "dyn at boundaries" { class = ["note"]  body = "A concrete type coerces to `dyn Trait` implicitly at a typed boundary (a `dyn Trait` parameter, or an element of a `List[dyn Trait]`)." }
+  }
+}

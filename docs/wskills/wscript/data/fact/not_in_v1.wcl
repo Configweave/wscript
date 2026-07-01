@@ -1,0 +1,23 @@
+fact not_in_v1 {
+  title    = "Not in wscript v1 (by design)"
+  related  = [type_system, memory]
+  audience = :both
+  body {
+    p "Deliberately absent in v1:"
+    table {
+      header = ["Absent", "Instead"]
+      rows = [
+        ["borrow checker, `&`/`&mut`, lifetimes", "reference counting; `self` is implicitly by reference"],
+        ["user-defined generics", "built-in `List[T]` / `Map[K,V]` only"],
+        ["exceptions", "`Result` + `?`; trappable faults to the host"],
+        ["async, threads sharing values", "one VM per thread (`Rc`, not `Arc`)"],
+        ["implicit conversions, truthiness", "`int(x)`/`float(x)`; `bool` conditions"],
+        ["a cycle collector", "cycles leak; use `weak[T]`"],
+        ["string interpolation", "`fmt(template, args…)`"],
+        ["compound assignment (`+=`), bitwise operators", "write the full expression"],
+        ["range values outside `for` headers", "`0..n` only in a `for` header"],
+        ["script-to-script imports", "single-file scripts (planned for v2)"],
+      ]
+    }
+  }
+}

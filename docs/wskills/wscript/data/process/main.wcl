@@ -1,0 +1,9 @@
+// Processes — runbooks for *doing* tasks with wscript. Each step carries a
+// `body screen { … }` (what's on screen) and a `body steps { … }` (the action),
+// wired by `from -> to` flow statements.
+import "./run_script.wcl"
+import "./check_script.wcl"
+import "./embed_wscript.wcl"
+import "./expose_host_type.wcl"
+import "./generate_interface.wcl"
+import "./use_repl.wcl"

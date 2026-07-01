@@ -1,0 +1,15 @@
+# WCL
+
+_tool_
+
+A typed configuration & schema language by the same author; its `wdoc` renderer builds wscript's docs site and this wskill.
+
+WCL is a sibling project — a statically typed data/config language with a document renderer, `wdoc`. The wscript wskill is authored as WCL data and projected with `wdoc`: `wcl check` validates the model against the schema, `wcl wdoc build` produces the book, and `wcl wdoc skill` produces the Claude Code skill. Install it so the `wcl` command is on your PATH.
+
+| Field | Value |
+| --- | --- |
+| Provides | wcl check · wcl wdoc build · wcl wdoc skill |
+| Needed for | validating and rendering this wskill |
+| Check | `wcl --version` |
+
+[← Back to SKILL.md](../SKILL.md)
