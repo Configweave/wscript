@@ -22,6 +22,19 @@ pub struct ParseOutput {
     pub diags: Vec<Diagnostic>,
 }
 
+/// Nesting budget for a single expression/pattern/type. Pathological
+/// nesting must produce a diagnostic, not overflow the stack — the parser
+/// recurses per level, and the checker and emitter recurse over the AST
+/// it builds (the LSP runs them on smaller tokio stacks). Costs are
+/// weighted by what they burn: a recursion level crosses the whole
+/// precedence chain (~14 debug frames, upwards of 10 KiB of a 2 MiB
+/// thread stack) and costs `RECURSION_COST`; an operator/postfix chain
+/// link adds no parser recursion, only AST depth, and costs 1. Net
+/// effect: ~100 nested levels or ~500 chained operations, far beyond
+/// real code; see `nesting_too_deep`.
+const MAX_NESTING_BUDGET: u32 = 500;
+const RECURSION_COST: u32 = 5;
+
 pub fn parse(src: &str) -> ParseOutput {
     let lexed = lexer::lex(src);
     let mut parser = Parser {
@@ -30,6 +43,8 @@ pub fn parse(src: &str) -> ParseOutput {
         diags: lexed.diags,
         next_id: 0,
         no_struct_lit: false,
+        depth: 0,
+        depth_exceeded: false,
     };
     let file = parser.source_file();
     ParseOutput {
@@ -46,6 +61,13 @@ struct Parser {
     /// Set while parsing `if`/`while`/`for`/`match` headers, where `{`
     /// starts the body rather than a struct literal.
     no_struct_lit: bool,
+    /// Current nesting level — recursive entry points and the operator/
+    /// postfix chain loops both count toward it (chains deepen the AST
+    /// without deepening the parse stack).
+    depth: u32,
+    /// Tripped `MAX_NESTING_DEPTH`: the rest of the file was skipped and
+    /// further diagnostics are suppressed.
+    depth_exceeded: bool,
 }
 
 impl Parser {
@@ -143,6 +165,9 @@ impl Parser {
     }
 
     fn error(&mut self, code: &'static str, span: Span, msg: impl Into<String>) {
+        if self.depth_exceeded {
+            return;
+        }
         self.diags.push(Diagnostic::error(code, span, msg));
     }
 
@@ -153,8 +178,32 @@ impl Parser {
         msg: impl Into<String>,
         help: impl Into<String>,
     ) {
+        if self.depth_exceeded {
+            return;
+        }
         self.diags
             .push(Diagnostic::error(code, span, msg).with_help(help));
+    }
+
+    /// Check the nesting budget before going one level deeper. On the
+    /// first trip this reports E0114 and jumps to EOF — the unwinding
+    /// frames would otherwise flood the diagnostics with follow-on
+    /// "expected ..." errors, so `error` goes quiet from here on.
+    fn nesting_too_deep(&mut self) -> bool {
+        if self.depth < MAX_NESTING_BUDGET {
+            return false;
+        }
+        let span = self.span();
+        self.error_help(
+            "E0114",
+            span,
+            "code is nested too deeply",
+            "the compiler allows about 100 nested levels (500 chained operations); \
+             split this into smaller statements",
+        );
+        self.depth_exceeded = true;
+        self.pos = self.tokens.len() - 1;
+        true
     }
 
     fn expect(&mut self, kind: &TokenKind, what: &str) -> Option<Span> {
@@ -788,6 +837,19 @@ impl Parser {
     // ------------------------------------------------------------- types
 
     fn type_expr(&mut self) -> TypeExpr {
+        if self.nesting_too_deep() {
+            return TypeExpr {
+                kind: TypeExprKind::Error,
+                span: self.span(),
+            };
+        }
+        self.depth += RECURSION_COST;
+        let t = self.type_expr_inner();
+        self.depth -= RECURSION_COST;
+        t
+    }
+
+    fn type_expr_inner(&mut self) -> TypeExpr {
         let start = self.span();
         match self.kind().clone() {
             TokenKind::LParen => {
@@ -1048,6 +1110,17 @@ impl Parser {
     }
 
     fn assign_expr(&mut self) -> Expr {
+        if self.nesting_too_deep() {
+            let span = self.span();
+            return self.mk(ExprKind::Error, span);
+        }
+        self.depth += RECURSION_COST;
+        let e = self.assign_expr_inner();
+        self.depth -= RECURSION_COST;
+        e
+    }
+
+    fn assign_expr_inner(&mut self) -> Expr {
         let lhs = self.range_expr();
         if self.at(&TokenKind::Eq) {
             self.bump();
@@ -1088,7 +1161,17 @@ impl Parser {
 
     fn or_expr(&mut self) -> Expr {
         let mut lhs = self.and_expr();
+        // Operator chains deepen the AST without deepening the parse
+        // stack, so each link spends nesting budget too (returned when
+        // the chain ends — sibling chains don't accumulate). Same in the
+        // other precedence tiers and the postfix loop.
+        let mut chain = 0;
         while self.at(&TokenKind::OrOr) {
+            if self.nesting_too_deep() {
+                break;
+            }
+            self.depth += 1;
+            chain += 1;
             self.bump();
             self.skip_newlines();
             let rhs = self.and_expr();
@@ -1102,12 +1185,19 @@ impl Parser {
                 span,
             );
         }
+        self.depth -= chain;
         lhs
     }
 
     fn and_expr(&mut self) -> Expr {
         let mut lhs = self.cmp_expr();
+        let mut chain = 0;
         while self.at(&TokenKind::AndAnd) {
+            if self.nesting_too_deep() {
+                break;
+            }
+            self.depth += 1;
+            chain += 1;
             self.bump();
             self.skip_newlines();
             let rhs = self.cmp_expr();
@@ -1121,11 +1211,13 @@ impl Parser {
                 span,
             );
         }
+        self.depth -= chain;
         lhs
     }
 
     fn cmp_expr(&mut self) -> Expr {
         let mut lhs = self.add_expr();
+        let mut chain = 0;
         loop {
             let op = match self.kind() {
                 TokenKind::EqEq => BinOp::Eq,
@@ -1134,8 +1226,13 @@ impl Parser {
                 TokenKind::Le => BinOp::Le,
                 TokenKind::Gt => BinOp::Gt,
                 TokenKind::Ge => BinOp::Ge,
-                _ => return lhs,
+                _ => break,
             };
+            if self.nesting_too_deep() {
+                break;
+            }
+            self.depth += 1;
+            chain += 1;
             self.bump();
             self.skip_newlines();
             let rhs = self.add_expr();
@@ -1149,16 +1246,24 @@ impl Parser {
                 span,
             );
         }
+        self.depth -= chain;
+        lhs
     }
 
     fn add_expr(&mut self) -> Expr {
         let mut lhs = self.mul_expr();
+        let mut chain = 0;
         loop {
             let op = match self.kind() {
                 TokenKind::Plus => BinOp::Add,
                 TokenKind::Minus => BinOp::Sub,
-                _ => return lhs,
+                _ => break,
             };
+            if self.nesting_too_deep() {
+                break;
+            }
+            self.depth += 1;
+            chain += 1;
             self.bump();
             self.skip_newlines();
             let rhs = self.mul_expr();
@@ -1172,17 +1277,25 @@ impl Parser {
                 span,
             );
         }
+        self.depth -= chain;
+        lhs
     }
 
     fn mul_expr(&mut self) -> Expr {
         let mut lhs = self.unary_expr();
+        let mut chain = 0;
         loop {
             let op = match self.kind() {
                 TokenKind::Star => BinOp::Mul,
                 TokenKind::Slash => BinOp::Div,
                 TokenKind::Percent => BinOp::Rem,
-                _ => return lhs,
+                _ => break,
             };
+            if self.nesting_too_deep() {
+                break;
+            }
+            self.depth += 1;
+            chain += 1;
             self.bump();
             self.skip_newlines();
             let rhs = self.unary_expr();
@@ -1196,6 +1309,8 @@ impl Parser {
                 span,
             );
         }
+        self.depth -= chain;
+        lhs
     }
 
     fn unary_expr(&mut self) -> Expr {
@@ -1205,8 +1320,16 @@ impl Parser {
             _ => None,
         };
         if let Some(op) = op {
+            // Only an actual operator spends budget — this function is on
+            // the path of every expression.
+            if self.nesting_too_deep() {
+                let span = self.span();
+                return self.mk(ExprKind::Error, span);
+            }
+            self.depth += RECURSION_COST;
             let start = self.bump().span;
             let expr = self.unary_expr();
+            self.depth -= RECURSION_COST;
             let span = start.to(expr.span);
             return self.mk(
                 ExprKind::Unary {
@@ -1221,7 +1344,18 @@ impl Parser {
 
     fn postfix_expr(&mut self) -> Expr {
         let mut expr = self.primary_expr();
+        let mut chain = 0;
         loop {
+            match self.kind() {
+                TokenKind::LParen | TokenKind::Dot | TokenKind::LBracket | TokenKind::Question => {
+                    if self.nesting_too_deep() {
+                        break;
+                    }
+                    self.depth += 1;
+                    chain += 1;
+                }
+                _ => {}
+            }
             match self.kind() {
                 TokenKind::LParen => {
                     self.bump();
@@ -1243,7 +1377,7 @@ impl Parser {
                             // Keep the receiver in the tree — the LSP needs
                             // its type for `.` completions mid-typing.
                             let span = expr.span;
-                            return self.mk(
+                            expr = self.mk(
                                 ExprKind::Field {
                                     obj: Box::new(expr),
                                     name: Ident {
@@ -1253,6 +1387,7 @@ impl Parser {
                                 },
                                 span,
                             );
+                            break;
                         }
                     };
                     if self.eat(&TokenKind::LParen) {
@@ -1308,6 +1443,7 @@ impl Parser {
                 _ => break,
             }
         }
+        self.depth -= chain;
         expr
     }
 
@@ -1612,6 +1748,19 @@ impl Parser {
     }
 
     fn if_expr(&mut self) -> Expr {
+        // Guarded separately: `else if` chains recurse via `else_tail`
+        // without passing through `assign_expr`.
+        if self.nesting_too_deep() {
+            let span = self.span();
+            return self.mk(ExprKind::Error, span);
+        }
+        self.depth += RECURSION_COST;
+        let e = self.if_expr_inner();
+        self.depth -= RECURSION_COST;
+        e
+    }
+
+    fn if_expr_inner(&mut self) -> Expr {
         let start = self.bump().span; // `if`
         // `if let pat = expr { ... }`
         if self.at(&TokenKind::KwLet) {
@@ -1804,6 +1953,20 @@ impl Parser {
     }
 
     fn pattern_single(&mut self) -> Pattern {
+        if self.nesting_too_deep() {
+            return Pattern {
+                span: self.span(),
+                id: self.id(),
+                kind: PatternKind::Error,
+            };
+        }
+        self.depth += RECURSION_COST;
+        let p = self.pattern_single_inner();
+        self.depth -= RECURSION_COST;
+        p
+    }
+
+    fn pattern_single_inner(&mut self) -> Pattern {
         let start = self.span();
         let kind = match self.kind().clone() {
             TokenKind::Underscore => {

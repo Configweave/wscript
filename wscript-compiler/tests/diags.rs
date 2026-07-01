@@ -289,3 +289,68 @@ fn annotated_let_checks_init() {
         impl T for S { fn f(self) -> int { self.v } }\n\
         fn main() { let d: dyn T = S { v: 1 }\n d.f(); }");
 }
+
+#[test]
+fn pathological_nesting_errors_instead_of_overflowing() {
+    // Parser recursion: parens, chained assignment, unary chains,
+    // patterns, types.
+    fails_with(
+        &format!(
+            "fn main() {{ let x = {}1{}; }}",
+            "(".repeat(5000),
+            ")".repeat(5000)
+        ),
+        "E0114",
+    );
+    fails_with(
+        &format!("fn main() {{ let mut a = 1; {}1; }}", "a = ".repeat(5000)),
+        "E0114",
+    );
+    fails_with(
+        &format!("fn main() {{ let x = {}1; }}", "-".repeat(5000)),
+        "E0114",
+    );
+    fails_with(
+        &format!(
+            "fn main() {{ match None {{ {}_{} => (), _ => () }} }}",
+            "Some(".repeat(5000),
+            ")".repeat(5000)
+        ),
+        "E0114",
+    );
+    fails_with(
+        &format!(
+            "fn f(x: {}int{}) {{}}\nfn main() {{}}",
+            "list[".repeat(5000),
+            "]".repeat(5000)
+        ),
+        "E0114",
+    );
+    // Operator/postfix chains are parsed iteratively but deepen the AST,
+    // so they spend the same budget.
+    fails_with(
+        &format!("fn main() {{ let x = 1{}; }}", " + 1".repeat(5000)),
+        "E0114",
+    );
+    fails_with(
+        &format!("fn main() {{ let l = [1]{}; }}", "[0]".repeat(5000)),
+        "E0114",
+    );
+    // Alternating parens and index chains keep the parser's counter low
+    // while the AST still deepens — the checker's backstop catches it.
+    let mut e = String::from("x");
+    for _ in 0..60 {
+        e = format!("({e}){}", "[0]".repeat(20));
+    }
+    fails_with(
+        &format!("fn main() {{ let x = [[1]]\n let y = {e}; }}"),
+        "E0271",
+    );
+    // Sane nesting still compiles.
+    ok(&format!(
+        "fn main() {{ let x = {}1{}; }}",
+        "(".repeat(80),
+        ")".repeat(80)
+    ));
+    ok(&format!("fn main() {{ let x = 1{}; }}", " + 1".repeat(150)));
+}

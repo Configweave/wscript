@@ -12,6 +12,11 @@ use super::{
     StructLitRes, TryKind, UnOpKind,
 };
 
+/// AST-depth budget for `check_expr` — the backstop behind the parser's
+/// `MAX_NESTING_DEPTH`, sized so the checker stays well within the LSP's
+/// smaller tokio stacks.
+const MAX_EXPR_DEPTH: u32 = 500;
+
 impl<'a> Checker<'a> {
     pub(crate) fn check_block(&mut self, block: &Block, expect: Option<&Type>) -> Type {
         self.push_scope();
@@ -147,7 +152,20 @@ impl<'a> Checker<'a> {
     }
 
     pub(crate) fn check_expr(&mut self, e: &Expr, expect: Option<&Type>) -> Type {
+        if self.expr_depth >= MAX_EXPR_DEPTH {
+            if !self.expr_depth_reported {
+                self.expr_depth_reported = true;
+                self.error(
+                    "E0271",
+                    e.span,
+                    format!("expression is nested more than {MAX_EXPR_DEPTH} levels deep"),
+                );
+            }
+            return self.record_type(e.id, Type::Error);
+        }
+        self.expr_depth += 1;
         let ty = self.check_expr_inner(e, expect);
+        self.expr_depth -= 1;
         self.record_type(e.id, ty)
     }
 

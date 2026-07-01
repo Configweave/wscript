@@ -104,45 +104,83 @@ fn span_to_range(text: &str, span: wscript::Span) -> Range {
 // ------------------------------------------------------ AST span index
 
 /// Collect (span, node id) for every expression, for position lookups.
+///
+/// Explicit worklist, not recursion: operator/postfix chains give the AST
+/// unbounded depth even when the parser's nesting limit holds, and this
+/// runs on a tokio stack. A node is recorded when popped, its children
+/// later — parents always precede children in the output (the `find`
+/// tie-break below relies on that).
 fn expr_index(file: &ast::SourceFile) -> Vec<(wscript::Span, ast::NodeId)> {
+    enum Work<'a> {
+        E(&'a ast::Expr),
+        B(&'a ast::Block),
+    }
     let mut out = Vec::new();
-    fn walk_expr(e: &ast::Expr, out: &mut Vec<(wscript::Span, ast::NodeId)>) {
+    let mut stack: Vec<Work> = Vec::new();
+    for item in &file.items {
+        match item {
+            ast::Item::Fn(f) => stack.push(Work::B(&f.body)),
+            ast::Item::Impl(im) => stack.extend(im.fns.iter().map(|f| Work::B(&f.body))),
+            _ => {}
+        }
+    }
+    while let Some(work) = stack.pop() {
+        let e = match work {
+            Work::E(e) => e,
+            Work::B(b) => {
+                for stmt in &b.stmts {
+                    match stmt {
+                        ast::Stmt::Let { init, .. } => stack.push(Work::E(init)),
+                        ast::Stmt::LetElse {
+                            init, else_block, ..
+                        } => {
+                            stack.push(Work::E(init));
+                            stack.push(Work::B(else_block));
+                        }
+                        ast::Stmt::Expr { expr, .. } => stack.push(Work::E(expr)),
+                    }
+                }
+                continue;
+            }
+        };
         out.push((e.span, e.id));
         use ast::ExprKind::*;
         match &e.kind {
-            Unary { expr, .. } | Try(expr) => walk_expr(expr, out),
+            Unary { expr, .. } | Try(expr) => stack.push(Work::E(expr)),
             Binary { lhs, rhs, .. } => {
-                walk_expr(lhs, out);
-                walk_expr(rhs, out);
+                stack.push(Work::E(lhs));
+                stack.push(Work::E(rhs));
             }
             Assign { target, value } => {
-                walk_expr(target, out);
-                walk_expr(value, out);
+                stack.push(Work::E(target));
+                stack.push(Work::E(value));
             }
             Call { callee, args } => {
-                walk_expr(callee, out);
-                args.iter().for_each(|a| walk_expr(a, out));
+                stack.push(Work::E(callee));
+                stack.extend(args.iter().map(Work::E));
             }
             MethodCall { recv, args, .. } => {
-                walk_expr(recv, out);
-                args.iter().for_each(|a| walk_expr(a, out));
+                stack.push(Work::E(recv));
+                stack.extend(args.iter().map(Work::E));
             }
-            Field { obj, .. } => walk_expr(obj, out),
+            Field { obj, .. } => stack.push(Work::E(obj)),
             Index { obj, idx } => {
-                walk_expr(obj, out);
-                walk_expr(idx, out);
+                stack.push(Work::E(obj));
+                stack.push(Work::E(idx));
             }
-            StructLit { fields, .. } => fields.iter().for_each(|(_, v)| walk_expr(v, out)),
-            ListLit(items) => items.iter().for_each(|i| walk_expr(i, out)),
-            MapLit(entries) => entries.iter().for_each(|(k, v)| {
-                walk_expr(k, out);
-                walk_expr(v, out);
-            }),
+            StructLit { fields, .. } => stack.extend(fields.iter().map(|(_, v)| Work::E(v))),
+            ListLit(items) => stack.extend(items.iter().map(Work::E)),
+            MapLit(entries) => {
+                for (k, v) in entries {
+                    stack.push(Work::E(k));
+                    stack.push(Work::E(v));
+                }
+            }
             If { cond, then, else_ } => {
-                walk_expr(cond, out);
-                walk_block(then, out);
+                stack.push(Work::E(cond));
+                stack.push(Work::B(then));
                 if let Some(e) = else_ {
-                    walk_expr(e, out);
+                    stack.push(Work::E(e));
                 }
             }
             IfLet {
@@ -151,58 +189,37 @@ fn expr_index(file: &ast::SourceFile) -> Vec<(wscript::Span, ast::NodeId)> {
                 else_,
                 ..
             } => {
-                walk_expr(scrutinee, out);
-                walk_block(then, out);
+                stack.push(Work::E(scrutinee));
+                stack.push(Work::B(then));
                 if let Some(e) = else_ {
-                    walk_expr(e, out);
+                    stack.push(Work::E(e));
                 }
             }
             Match { scrutinee, arms } => {
-                walk_expr(scrutinee, out);
+                stack.push(Work::E(scrutinee));
                 for arm in arms {
                     if let Some(g) = &arm.guard {
-                        walk_expr(g, out);
+                        stack.push(Work::E(g));
                     }
-                    walk_expr(&arm.body, out);
+                    stack.push(Work::E(&arm.body));
                 }
             }
             While { cond, body } => {
-                walk_expr(cond, out);
-                walk_block(body, out);
+                stack.push(Work::E(cond));
+                stack.push(Work::B(body));
             }
-            Loop { body } => walk_block(body, out),
+            Loop { body } => stack.push(Work::B(body)),
             For { iter, body, .. } => {
-                walk_expr(iter, out);
-                walk_block(body, out);
+                stack.push(Work::E(iter));
+                stack.push(Work::B(body));
             }
             Range { lo, hi, .. } => {
-                walk_expr(lo, out);
-                walk_expr(hi, out);
+                stack.push(Work::E(lo));
+                stack.push(Work::E(hi));
             }
-            Return(Some(v)) => walk_expr(v, out),
-            Block(b) => walk_block(b, out),
-            Closure { body, .. } => walk_expr(body, out),
-            _ => {}
-        }
-    }
-    fn walk_block(b: &ast::Block, out: &mut Vec<(wscript::Span, ast::NodeId)>) {
-        for stmt in &b.stmts {
-            match stmt {
-                ast::Stmt::Let { init, .. } => walk_expr(init, out),
-                ast::Stmt::LetElse {
-                    init, else_block, ..
-                } => {
-                    walk_expr(init, out);
-                    walk_block(else_block, out);
-                }
-                ast::Stmt::Expr { expr, .. } => walk_expr(expr, out),
-            }
-        }
-    }
-    for item in &file.items {
-        match item {
-            ast::Item::Fn(f) => walk_block(&f.body, &mut out),
-            ast::Item::Impl(im) => im.fns.iter().for_each(|f| walk_block(&f.body, &mut out)),
+            Return(Some(v)) => stack.push(Work::E(v)),
+            Block(b) => stack.push(Work::B(b)),
+            Closure { body, .. } => stack.push(Work::E(body)),
             _ => {}
         }
     }

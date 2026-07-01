@@ -305,9 +305,6 @@ struct FnState {
     /// Dedup: (owner fn depth, local) → capture slot.
     capture_map: HashMap<(usize, LocalId), u16>,
     loops: Vec<LoopCtx>,
-    /// Proto index in `fn_infos`.
-    #[allow(dead_code)]
-    proto: u32,
 }
 
 /// Item imported via `use module::item`.
@@ -348,6 +345,13 @@ pub struct Checker<'a> {
     /// > 0 while checking the alternatives of an or-pattern (bindings are
     /// > rejected there in v1).
     pub(crate) or_depth: u32,
+    /// Current `check_expr` recursion depth — capped so a pathologically
+    /// deep AST produces E0271 instead of overflowing the stack (the
+    /// parser bounds its own recursion, but builds operator/postfix
+    /// chains like `x[0][0]…` iteratively).
+    pub(crate) expr_depth: u32,
+    /// E0271 already reported — deeper nodes error silently.
+    pub(crate) expr_depth_reported: bool,
 }
 
 pub fn check(file: &SourceFile, registry: &Registry) -> CheckResult {
@@ -372,6 +376,8 @@ pub fn check(file: &SourceFile, registry: &Registry) -> CheckResult {
         nodes_this_fn: Vec::new(),
         must_resolve: Vec::new(),
         or_depth: 0,
+        expr_depth: 0,
+        expr_depth_reported: false,
     };
     checker.run();
     checker.out
@@ -1471,7 +1477,6 @@ impl<'a> Checker<'a> {
             captures: Vec::new(),
             capture_map: HashMap::new(),
             loops: Vec::new(),
-            proto,
         });
         self.push_scope();
         for (i, p) in decl.params.iter().enumerate() {
@@ -1743,7 +1748,6 @@ impl<'a> Checker<'a> {
             captures: Vec::new(),
             capture_map: HashMap::new(),
             loops: Vec::new(),
-            proto,
         });
         self.push_scope();
         proto
