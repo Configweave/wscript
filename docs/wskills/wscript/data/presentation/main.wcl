@@ -1,0 +1,147 @@
+// The presentation view's deck — "wscript in a nutshell", the topic's
+// introduction as slides (schema/presentation.wcl). Slides feature existing
+// units where possible (`unit = <id>` pulls the headline + summary); detail
+// stays in the book.
+presentation nutshell {
+  title   = "wscript in a nutshell"
+  summary = "An embeddable, statically typed, Rust-flavored scripting language: bytecode-compiled, register-VM, with compile-time type safety across the host boundary."
+
+  pres_section why_wscript {
+    title = "Why wscript"
+    pres_slide what {
+      unit = wscript
+      speaker_notes = "The pitch in one line: wscript embeds in Rust the way Lua embeds in C — but statically typed, so misusing a host API is a compile error in the script, not a runtime fault."
+    }
+    pres_slide host_boundary {
+      title = "Type safety across the host boundary"
+      unit  = embedding
+      body {
+        p "- Expose a Rust type: `#[derive(Script)]` + one registration call"
+        p "- Scripts are checked **against the host API** before they run"
+        p "- Compile once (`Send + Sync`), run one `Vm` per thread"
+      }
+      speaker_notes = "This is the defining trait. Lua/Rhai find host-API misuse at runtime; wscript finds it when the script compiles."
+    }
+    pres_slide memory_model {
+      title = "No borrow checker"
+      unit  = memory
+      body {
+        p "- Pure reference counting — aliased mutation is free"
+        p "- The Lua/Python mental model, with Rust syntax"
+        p "- Cycles leak by design; break them with `weak[T]`"
+      }
+      speaker_notes = "Rust minus the hard parts: no lifetimes, no borrows, no generics. Scripters share and mutate freely; the host keeps its guarantees."
+    }
+  }
+
+  pres_section the_language {
+    title = "The language"
+    pres_slide types {
+      title = "Static, inferred, strict"
+      unit  = type_system
+      body {
+        p "- Local inference — annotations only on function signatures"
+        p "- No implicit numeric conversion, no truthiness"
+        p "- Faults (index out of range, unwrap on none) end the run cleanly"
+      }
+    }
+    pres_slide data_shapes {
+      title = "Structs, enums, derives"
+      unit  = structs
+      body {
+        p "- Named-field structs with `impl` blocks; `self` is always by reference"
+        p "- Enums with payloads, exhaustive `match` over them"
+        p "- `#[derive(Debug, Clone, PartialEq)]` — the derives you expect"
+      }
+    }
+    pres_slide matching {
+      title = "Pattern matching"
+      unit  = pattern_matching
+      body {
+        p "- `match` is an expression, exhaustiveness-checked at compile time"
+        p "- Guards, or-patterns, destructuring of structs and enums"
+      }
+    }
+    pres_slide errors {
+      title = "Option, Result and ?"
+      unit  = options_results
+      body {
+        p "- `Option[T]` and `Result[T, E]` are always in scope"
+        p "- `?` early-returns — and composes across the host boundary"
+        p "- Host `Result`s become script `Result`s, not exceptions"
+      }
+      speaker_notes = "Error handling is the Rust story end to end: a fallible host call is a Result in the script, and ? threads it up."
+    }
+    pres_slide traits_slide {
+      title = "Traits"
+      unit  = traits
+      body {
+        p "- Go-flavored interfaces with Rust syntax"
+        p "- Static dispatch when the type is known, `dyn Trait` otherwise"
+        p "- Operator traits (`Add`, `Index`, …) overload operators"
+      }
+    }
+  }
+
+  pres_section host_interop {
+    title = "Rust interop"
+    pres_slide expose {
+      title = "Exposing host types"
+      unit  = interop_types
+      body {
+        p "- `#[derive(Script)]` on the Rust type — that's the FFI"
+        p "- Data types cross by value, opaque types cross by handle"
+        p "- Registered functions and methods are ordinary script calls"
+      }
+    }
+    pres_slide interfaces {
+      title = "Interface files"
+      unit  = interface_files
+      body {
+        p "- `.wscripti` declares the host API as data"
+        p "- `wscript check` and the LSP understand it — no host build needed"
+        p "- Regenerated from the registration code, so it can't drift"
+      }
+    }
+    pres_slide capabilities {
+      title = "A capability-style stdlib"
+      unit  = modules
+      body {
+        p "- `use` imports host-registered modules; the prelude is ambient"
+        p "- math, fs, process, json/toml/xml — each feature-gated"
+        p "- The host decides what a script is *allowed* to touch"
+      }
+      speaker_notes = "No ambient authority: a script can only reach the modules its host registered. Sandboxing is the default posture, not an add-on."
+    }
+  }
+
+  pres_section tooling_and_next {
+    title = "Tooling & next steps"
+    pres_slide cli {
+      unit = cli_commands
+      body {
+        p "- `wscript run` / `wscript check` — execute or just type-check"
+        p "- `wscript repl` — explore interactively"
+        p "- `wscript lsp` + `wscript.toml` + `.wscripti` — editor setup"
+      }
+    }
+    pres_slide not_v1 {
+      title = "What v1 leaves out"
+      unit  = not_in_v1
+      body {
+        p "- No borrow checker, lifetimes, or user generics"
+        p "- No `+=`, bitwise ops, string interpolation, async, or threads"
+        p "- Subtractions, not gaps — the scripting layer stays small"
+      }
+      speaker_notes = "Set expectations early so Rust muscle memory doesn't fight the language. Everything here is deliberate scope, documented in the PRD."
+    }
+    pres_slide next {
+      title = "Where to go next"
+      body {
+        p "- The **reference book** — the language, stdlib, CLI and embedding API"
+        p "- The **Learn wscript** training course — hands-on lessons"
+        p "- Embedding? Start at the book's *Embedding & interop* index"
+      }
+    }
+  }
+}

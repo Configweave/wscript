@@ -8,11 +8,13 @@
 import <wdoc.wcl>
 import "./schema/base.wcl"
 import "./schema/extensions.wcl"
+import "./schema/presentation.wcl"      // opt-in: the overview deck view
 
 // Data — split into per-type folders (concept / entity / fact / process), each
 // exposing a main.wcl; data/main.wcl aggregates them all, plus glossary, examples
 // and the curated index navigation.
 import "./data/main.wcl"
+import "./data/presentation/main.wcl"
 
 schema_version = "1.0.0"
 
@@ -65,6 +67,7 @@ wcl.wskill::skill {
 
 artifact book     { kind = :book      entry = "wdoc/book/main.wcl"   output = "out/book" }
 artifact ai_skill { kind = :ai_skill  entry = "wdoc/skill/main.wcl"  output = "out/skill" }
+artifact slides   { kind = :presentation  entry = "wdoc/presentation/main.wcl"  output = "out/presentation"  summary = "wscript in a nutshell — an overview deck." }
 
 // ---- Sources (update-workflow metadata only) ----
 
