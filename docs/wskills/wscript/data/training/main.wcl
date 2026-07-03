@@ -1,0 +1,554 @@
+// The training view's course — "Learn wscript" (schema/training.wcl). Ordered
+// lessons with hands-on exercises; `related` links each lesson back to the
+// reference units it teaches. Every snippet here is runnable as written and
+// was executed against the current wscript binary.
+
+lesson first_script {
+  n       = 1
+  title   = "Build wscript and run your first script"
+  summary = "Get the toolchain built, write a hello-world script, and understand how execution starts and ends."
+  objectives = [
+    "Build the `wscript` binary with the standard Rust toolchain",
+    "Write a minimal script: `fn main() -> int` in a `.wscript` file",
+    "Run it with `wscript run` and read the exit code",
+  ]
+  related = [wscript, cli_commands, run_script]
+  body {
+    p "wscript ships as one binary. From a checkout of the repo, `cargo build --release` puts it at `target/release/wscript` — add that to your `PATH` or call it by path. (Inside the repo you can also run any script with `cargo run -q -p wscript-cli -- run file.wscript`.)"
+    p "Execution starts at `fn main()`. Its `int` return becomes the process exit code (a `unit` return means 0), and the file extension is `.wscript`. There is no string interpolation in wscript — formatting goes through `fmt(\"{}\", …)`."
+  }
+  exercise hello {
+    title     = "Hello, wscript"
+    task      = "Write a one-function script that formats a greeting with `fmt`, prints it, and exits 0."
+    code_lang = "bash"
+    code      = <<'SH'
+cat > hello.wscript <<'WSCRIPT'
+fn main() -> int {
+    println(fmt("Hello, {}!", "wscript"))
+    0
+}
+WSCRIPT
+wscript run hello.wscript
+echo "exit: $?"
+SH
+    expected = "Prints `Hello, wscript!` and `exit: 0`."
+    hint     = "If `wscript` is not on your PATH, use `target/release/wscript` from the repo root. `main` must return `int` (the exit code) — ending the block with `0` is the whole return."
+  }
+}
+
+lesson values_and_let {
+  n       = 2
+  title   = "Values, types and let"
+  summary = "Primitives, local inference, and why 1 + 2.0 refuses to compile."
+  objectives = [
+    "Bind values with `let`; rely on inference instead of annotations",
+    "Convert between `int` and `float` explicitly",
+    "Read integer literal forms: `1_000_000`, `0xFF`",
+  ]
+  related = [values, type_system, primitive_types]
+  body {
+    p "The primitives are `int` (64-bit signed), `float`, `bool`, `char` and `unit`; everything else — strings, structs, containers — is a reference type. `let` infers the type from the initializer; annotations are allowed on `let` but required nowhere except function signatures."
+    p "There is **no implicit numeric conversion** and **no truthiness**: `1 + 2.0` is a type error and conditions must be `bool`. Convert explicitly with `int(x)` (truncates) and `float(x)`."
+  }
+  exercise convert {
+    title     = "Mix int and float — explicitly"
+    task      = "Add an `int` to a `float` by converting first, then print two integer literal forms."
+    code_lang = "bash"
+    code      = <<'SH'
+cat > values.wscript <<'WSCRIPT'
+fn main() -> int {
+    let x = 5
+    let pi = 3.14
+    let sum = float(x) + pi
+    println(str(sum))
+    println(fmt("{} and {}", 1_000_000, 0xFF))
+    0
+}
+WSCRIPT
+wscript run values.wscript
+SH
+    expected = "Prints `8.14`, then `1000000 and 255`."
+    hint     = "Drop the `float(...)` conversion and re-run — the compiler rejects `int + float` with a type mismatch and suggests the conversion."
+  }
+}
+
+lesson strings_and_fmt {
+  n       = 3
+  title   = "Strings and fmt"
+  summary = "Immutable strings, method chains, and fmt instead of interpolation."
+  objectives = [
+    "Concatenate with `+` and convert values with `str()`",
+    "Chain string methods — every operation returns a new string",
+    "Parse text into numbers with `parse_int`",
+  ]
+  related = [strings, string_methods]
+  body {
+    p "Strings are immutable reference values: `to_upper`, `trim`, `replace` and friends all return new strings, and `len`/`slice`/`find` count characters, not bytes. `+` concatenates strings only — convert other values with `str()` first, or format everything at once with `fmt(\"{}\", …)`."
+    p "`\"42\".parse_int()` returns `Option[int]` — parsing is the first place you meet wscript's no-exceptions error model."
+  }
+  exercise shout {
+    title     = "Chain, measure, parse"
+    task      = "Uppercase a greeting, report its length and prefix, and parse a number out of a string."
+    code_lang = "bash"
+    code      = <<'SH'
+cat > strings.wscript <<'WSCRIPT'
+fn main() -> int {
+    let name = "wil"
+    let shout = ("hello, " + name).to_upper()
+    println(shout)
+    println(fmt("{} chars, starts with HELLO: {}", shout.len(), shout.starts_with("HELLO")))
+    println(fmt("parsed: {}", "42".parse_int().unwrap_or(0)))
+    0
+}
+WSCRIPT
+wscript run strings.wscript
+SH
+    expected = "Prints `HELLO, WIL`, then `10 chars, starts with HELLO: true`, then `parsed: 42`."
+    hint     = "`\"hello, \" + name` needs parentheses before `.to_upper()` so the method applies to the whole concatenation."
+  }
+}
+
+lesson control_flow_basics {
+  n       = 4
+  title   = "Control flow and loops"
+  summary = "if/while/for, ranges, and the newline statement rule."
+  objectives = [
+    "Loop over ranges (`0..10` exclusive, `0..=10` inclusive)",
+    "Use `if` as a statement and remember conditions must be `bool`",
+    "Mutate an accumulator without `+=` (which doesn't exist)",
+  ]
+  related = [control_flow, operators]
+  body {
+    p "Statements end at newlines; semicolons are permitted but never required. `for` iterates ranges, list elements, map keys and string chars; `while` and `loop`/`break` work as in Rust. There is no compound assignment — write `total = total + i`."
+  }
+  exercise evens {
+    title     = "Sum the evens"
+    task      = "Sum the even numbers in 1..=10 with a `for` loop and count a variable down with `while`."
+    code_lang = "bash"
+    code      = <<'SH'
+cat > flow.wscript <<'WSCRIPT'
+fn main() -> int {
+    let total = 0
+    for i in 1..=10 {
+        if i % 2 == 0 { total = total + i }
+    }
+    let n = 3
+    while n > 0 { n = n - 1 }
+    println(fmt("evens sum: {}, n: {}", total, n))
+    0
+}
+WSCRIPT
+wscript run flow.wscript
+SH
+    expected = "Prints `evens sum: 30, n: 0`."
+    hint     = "`total += i` is a syntax error by design — v1 has no compound assignment. Spell it out."
+  }
+}
+
+lesson lists_and_maps {
+  n       = 5
+  title   = "Containers: List and Map"
+  summary = "List literals, the #{...} map literal, and the map/filter/fold pipeline."
+  objectives = [
+    "Build and mutate a `List[T]`; chain `map`/`filter`/`fold`",
+    "Build a `Map[K, V]` with the `#{...}` literal and index-assign into it",
+    "Reach for `.get` (returns `Option`) where a missing key is expected",
+  ]
+  related = [containers, list_methods, map_methods]
+  body {
+    p "Lists are `[1, 2, 3]`; maps use the dedicated `#{ \"key\": value }` literal (keys are `int`, `bool`, `char` or `string`). Indexing (`xs[99]`, `m[\"nope\"]`) faults on a miss; `.get` returns `Option` and never faults — prefer it when absence is normal."
+    p "The closure-taking methods `map`, `filter` and `fold` compose into pipelines; closures are written `|x| x * 2`."
+  }
+  exercise pipeline {
+    title     = "A container pipeline"
+    task      = "Push into a list, run a map/filter/fold pipeline over it, then insert into a map and probe a missing key safely."
+    code_lang = "bash"
+    code      = <<'SH'
+cat > containers.wscript <<'WSCRIPT'
+fn main() -> int {
+    let xs = [1, 2, 3]
+    xs.push(4)
+    let sum = xs.map(|x| x * 2).filter(|x| x > 4).fold(0, |a, x| a + x)
+    let ages = #{ "alice": 30, "bob": 25 }
+    ages["carol"] = 22
+    println(fmt("sum: {}, people: {}", sum, ages.len()))
+    match ages.get("nope") {
+        Some(v) => println(str(v)),
+        None => println("no such key"),
+    }
+    0
+}
+WSCRIPT
+wscript run containers.wscript
+SH
+    expected = "Prints `sum: 14, people: 3` (doubled [2,4,6,8], filtered to [6,8], folded to 14), then `no such key`."
+    hint     = "Swap `ages.get(\"nope\")` for `ages[\"nope\"]` and re-run to see a fault with a stack trace — that's why `.get` exists."
+  }
+}
+
+lesson functions_and_closures {
+  n       = 6
+  title   = "Functions and closures"
+  summary = "Signatures carry the annotations; closures capture by reference."
+  objectives = [
+    "Declare functions — annotations are required on signatures only",
+    "Pass function values with `fn(int) -> int` parameter types",
+    "Return a closure that captures and mutates its environment",
+  ]
+  related = [functions]
+  body {
+    p "Type annotations live on function signatures and nowhere else — that is what keeps inference local and error messages readable. Blocks evaluate to their last expression, so `w * h` is the return."
+    p "Closures (`|x| x * 2`) capture **by reference**: a returned closure keeps its captured `let` alive and can mutate it, which is all you need for a stateful counter. A trailing `;` discards a value — use `tick();` when you call something for its effect."
+  }
+  exercise counter {
+    title     = "Higher-order + a stateful counter"
+    task      = "Pass a closure to a higher-order function, then build a counter from a closure that captures a local."
+    code_lang = "bash"
+    code      = <<'SH'
+cat > functions.wscript <<'WSCRIPT'
+fn apply(f: fn(int) -> int, x: int) -> int { f(x) }
+
+fn make_counter() -> fn() -> int {
+    let n = 0
+    || { n = n + 1; n }
+}
+
+fn main() -> int {
+    let double = |x| x * 2
+    println(str(apply(double, 21)))
+    let tick = make_counter()
+    tick();
+    tick();
+    println(fmt("third tick: {}", tick()))
+    0
+}
+WSCRIPT
+wscript run functions.wscript
+SH
+    expected = "Prints `42`, then `third tick: 3` — the closure kept `n` alive across calls."
+    hint     = "The `|x| x * 2` closure's parameter type is inferred from `apply`'s `fn(int) -> int` — context determines it, so no annotation is needed."
+  }
+}
+
+lesson structs_enums_methods {
+  n       = 7
+  title   = "Structs, enums and methods"
+  summary = "Named-field structs, impl blocks, and self by reference."
+  objectives = [
+    "Declare a struct and give it methods in an `impl` block",
+    "Understand `self`: implicit in type, always by reference, no `&` anywhere",
+    "Mutate a struct through a method and see it stick",
+  ]
+  related = [structs, enums]
+  body {
+    p "Structs are named-field records; enums have unit, tuple and struct variants (`Quit`, `Key(char)`, `Click { x: int, y: int }`). Methods live in `impl` blocks; `self` needs no type and is always a reference, so `self.hp = self.hp + amount` mutates the caller's object — there is no `&` in wscript at all."
+  }
+  exercise heal {
+    title     = "Mutate through a method"
+    task      = "Define a struct with a mutating method and a formatting method, and call both."
+    code_lang = "bash"
+    code      = <<'SH'
+cat > structs.wscript <<'WSCRIPT'
+struct Player { name: string, hp: int }
+
+impl Player {
+    fn heal(self, amount: int) {
+        self.hp = self.hp + amount
+    }
+    fn describe(self) -> string {
+        fmt("{} ({} hp)", self.name, self.hp)
+    }
+}
+
+fn main() -> int {
+    let p = Player { name: "wil", hp: 90 }
+    p.heal(10)
+    println(p.describe())
+    0
+}
+WSCRIPT
+wscript run structs.wscript
+SH
+    expected = "Prints `wil (100 hp)` — `heal` mutated the object in place because `self` is a reference."
+    hint     = "`heal` has no return annotation, so it returns `unit`; the assignment statement is its whole body."
+  }
+}
+
+lesson match_option_result {
+  n       = 8
+  title   = "Pattern matching, Option, Result and ?"
+  summary = "Exhaustive match, guards and destructuring; error flow without exceptions."
+  objectives = [
+    "Match enum variants with guards, wildcards and struct destructuring",
+    "Return `Result[T, E]` and bail early with `let ... else`",
+    "Chain fallible calls with `?`",
+  ]
+  related = [pattern_matching, options_results, option_result_methods]
+  body {
+    p "`match` is an expression and exhaustiveness is checked at compile time — delete an arm and the compiler names the missing variant. Guards (`if c == 'q'`) never count toward exhaustiveness."
+    p "`Option[T]` and `Result[T, E]` are always in scope. `?` early-returns the `None`/`Err` exactly as in Rust; `let Some(n) = … else { return Err(…) }` is the idiomatic parse-or-bail."
+  }
+  exercise events_errors {
+    title     = "Dispatch events, thread errors"
+    task      = "Match over an enum with a guard and struct destructuring, then compose two fallible parses with `?`."
+    code_lang = "bash"
+    code      = <<'SH'
+cat > matching.wscript <<'WSCRIPT'
+enum Event {
+    Quit,
+    Key(char),
+    Click { x: int, y: int },
+}
+
+fn describe(e: Event) -> string {
+    match e {
+        Event::Quit => "quit",
+        Event::Key(c) if c == 'q' => "quit key",
+        Event::Key(_) => "some key",
+        Event::Click { x, y } => fmt("click at {},{}", x, y),
+    }
+}
+
+fn parse_double(s: string) -> Result[int, string] {
+    let Some(n) = s.parse_int() else { return Err("bad number") }
+    Ok(n * 2)
+}
+
+fn sum(a: string, b: string) -> Result[int, string] {
+    Ok(parse_double(a)? + parse_double(b)?)
+}
+
+fn main() -> int {
+    println(describe(Event::Click { x: 3, y: 4 }))
+    match sum("20", "1") {
+        Ok(n) => println(fmt("sum: {}", n)),
+        Err(e) => println(e),
+    }
+    match sum("20", "oops") {
+        Ok(n) => println(str(n)),
+        Err(e) => println(fmt("error: {}", e)),
+    }
+    0
+}
+WSCRIPT
+wscript run matching.wscript
+SH
+    expected = "Prints `click at 3,4`, `sum: 42`, then `error: bad number` — the second `?` short-circuited."
+    hint     = "Delete the `Event::Key(_)` arm and run `wscript check matching.wscript`: the exhaustiveness error names the uncovered case."
+  }
+}
+
+lesson traits_and_derives {
+  n       = 9
+  title   = "Traits, derives and operators"
+  summary = "Go-flavored interfaces, dyn dispatch, and operator overloading through traits."
+  objectives = [
+    "Implement a trait for two types and dispatch through `dyn Trait`",
+    "Overload `+` by implementing `Add`",
+    "Derive `Eq`/`Display`/`Clone` instead of writing them",
+  ]
+  related = [traits, derives, operator_traits]
+  body {
+    p "Traits are Go-flavored interfaces in Rust syntax: static dispatch when the concrete type is known, `dyn Trait` (vtable) otherwise, with implicit coercion at typed boundaries like `List[dyn Shape]`. No default bodies, no trait inheritance in v1."
+    p "Operators route through built-in traits (`Add`, `Eq`, `Ord`, `Display`, `Index`, …). `==` on a struct **requires** an `Eq` impl — there is no implicit structural or identity equality (`same(a, b)` covers identity). Deriving `Eq`/`Display`/`Clone` is the usual move."
+  }
+  exercise vec2_shapes {
+    title     = "Vec2 + dyn Shape"
+    task      = "Derive Eq/Display/Clone on a vector type, overload `+` via `Add`, and area-dispatch a heterogeneous shape list through `dyn Trait`."
+    code_lang = "bash"
+    code      = <<'SH'
+cat > traits.wscript <<'WSCRIPT'
+#[derive(Eq, Display, Clone)]
+struct Vec2 { x: int, y: int }
+
+impl Add for Vec2 {
+    fn add(self, other: Vec2) -> Vec2 {
+        Vec2 { x: self.x + other.x, y: self.y + other.y }
+    }
+}
+
+trait Shape {
+    fn area(self) -> float
+}
+
+struct Circle { r: float }
+struct Square { side: float }
+
+impl Shape for Circle {
+    fn area(self) -> float { 3.14159 * self.r * self.r }
+}
+impl Shape for Square {
+    fn area(self) -> float { self.side * self.side }
+}
+
+fn main() -> int {
+    let v = Vec2 { x: 1, y: 2 } + Vec2 { x: 3, y: 4 }
+    println(str(v))
+    println(str(v == Vec2 { x: 4, y: 6 }))
+    let shapes: List[dyn Shape] = [Circle { r: 1.0 }, Square { side: 2.0 }]
+    for s in shapes { println(str(s.area())) }
+    0
+}
+WSCRIPT
+wscript run traits.wscript
+SH
+    expected = "Prints `Vec2 { x: 4, y: 6 }`, `true`, then the two areas `3.14159` and `4.0`."
+    hint     = "Remove `Eq` from the derive list and the `==` comparison becomes a compile error — equality is never implicit."
+  }
+}
+
+lesson references_and_memory {
+  n       = 10
+  title   = "Reference semantics and memory"
+  summary = "Aliased mutation, explicit clone, reference counting and weak[T]."
+  objectives = [
+    "Predict aliasing: assignment copies the reference, never the data",
+    "Deep-copy explicitly with a derived `Clone`",
+    "Break parent/child cycles with `weak(x)` and `upgrade()`",
+  ]
+  related = [reference_semantics, memory, reference_types]
+  body {
+    p "Every non-primitive is a reference: assignment, argument passing and returns copy the reference, so mutation is visible through every alias (the Lua/Python mental model). `same(a, b)` tests identity; `.clone()` (via `#[derive(Clone)]`) is the only deep copy."
+    p "Memory is pure reference counting and **cycles leak by design** — there is no cycle collector. A child that must point back at its parent holds `Option[weak[Parent]]`; `weak(x)` demotes and `w.upgrade() -> Option[T]` re-promotes, returning `None` once the target is gone."
+  }
+  exercise alias_vs_clone {
+    title     = "Alias, then clone"
+    task      = "Show a mutation travelling through an alias, then isolate a deep copy with `.clone()`."
+    code_lang = "bash"
+    code      = <<'SH'
+cat > memory.wscript <<'WSCRIPT'
+#[derive(Clone)]
+struct Config { values: List[int] }
+
+fn main() -> int {
+    let a = Config { values: [1, 2, 3] }
+    let alias = a
+    alias.values.push(4)
+    println(fmt("shared: {} items, same object: {}", a.values.len(), same(a, alias)))
+    let copy = a.clone()
+    copy.values.push(5)
+    println(fmt("copy: {} items vs original: {}", copy.values.len(), a.values.len()))
+    0
+}
+WSCRIPT
+wscript run memory.wscript
+SH
+    expected = "Prints `shared: 4 items, same object: true`, then `copy: 5 items vs original: 4` — the clone is independent."
+    hint     = "Derived `Clone` is a deep copy: `copy.values` is a new list, not a second reference to `a.values`."
+  }
+  exercise weak_parent {
+    title     = "A weak back-reference"
+    task      = "Give a child node a weak reference to its parent and read it back through `upgrade()`."
+    code_lang = "bash"
+    code      = <<'SH'
+cat > weak.wscript <<'WSCRIPT'
+struct Node { name: string, parent: Option[weak[Node]] }
+
+fn main() -> int {
+    let root = Node { name: "root", parent: None }
+    let child = Node { name: "kid", parent: Some(weak(root)) }
+    match child.parent {
+        Some(w) => match w.upgrade() {
+            Some(p) => println(fmt("parent: {}", p.name)),
+            None => println("parent dropped"),
+        }
+        None => println("no parent"),
+    }
+    0
+}
+WSCRIPT
+wscript run weak.wscript
+SH
+    expected = "Prints `parent: root`."
+    hint     = "Store a *strong* `Node` in both directions instead and neither node is ever reclaimed — that's the cycle `weak[T]` exists to break."
+  }
+}
+
+lesson stdlib_and_check {
+  n       = 11
+  title   = "The stdlib, modules and wscript check"
+  summary = "use-imports, the capability-style stdlib, and type-checking without running."
+  objectives = [
+    "Import stdlib modules with `use` and call `module::function`",
+    "Round-trip data: JSON in, TOML out, file on disk",
+    "Catch a type error with `wscript check` before anything runs",
+  ]
+  related = [modules, fs_functions, data_formats, check_script]
+  body {
+    p "`use fs` imports a host-registered module; the prelude (`print println str fmt same weak int float`) needs no import. The stdlib is capability-style: a host embeds only the modules it wants scripts to have, and under `wscript run` you get all of them — math, fs, process, json/toml/xml. The three data formats parse into one shared `Value` type, so formats compose."
+    p "`wscript check` compiles without executing — same diagnostics, no side effects — and honors `wscript.toml`/`.wscripti` so host APIs type-check too."
+  }
+  exercise config_tool {
+    title     = "JSON in, TOML out"
+    task      = "Parse JSON into a Value, read a field, re-emit it as TOML, and round-trip a file through fs."
+    code_lang = "bash"
+    code      = <<'SH'
+cat > config.wscript <<'WSCRIPT'
+use fs
+use json
+use toml
+
+fn main() -> int {
+    let raw = "{\"name\": \"demo\", \"port\": 8080}"
+    let conf = json::parse(raw).unwrap()
+    let port = conf.get("port").unwrap().as_int().unwrap_or(80)
+    println(fmt("service on port {}", port))
+    println(toml::to_string(conf).unwrap().trim())
+
+    let path = "/tmp/learn_wscript.txt"
+    fs::write(path, fmt("port={}", port)).unwrap()
+    println(fs::read_to_string(path).unwrap())
+    fs::remove_file(path).unwrap()
+    0
+}
+WSCRIPT
+wscript run config.wscript
+SH
+    expected = "Prints `service on port 8080`, the TOML rendering (`name = \"demo\"` / `port = 8080`), then `port=8080` read back from disk."
+    hint     = "Every fallible fs/json/toml call returns `Result[…, string]` — `.unwrap()` is fine in a throwaway script; real code matches or uses `?`."
+  }
+  exercise catch_type_error {
+    title     = "Let check catch it"
+    task      = "Write a script with a deliberate type error and let `wscript check` reject it without running anything."
+    code_lang = "bash"
+    code      = <<'SH'
+cat > broken.wscript <<'WSCRIPT'
+fn main() -> int {
+    let x = 1 + 2.0
+    0
+}
+WSCRIPT
+wscript check broken.wscript
+echo "exit: $?"
+SH
+    expected = "A type-mismatch diagnostic (expected `int`, found `float`) pointing at `2.0`, with a hint to convert explicitly; `exit: 1`. On a clean file, `wscript check` prints nothing and exits 0."
+    hint     = "This is the same compile step `wscript run` performs — `check` just stops before execution, which makes it the right CI gate."
+  }
+}
+
+lesson embed_capstone {
+  n       = 12
+  title   = "Capstone: embed wscript in a Rust host"
+  summary = "The other half of the language: expose a Rust API and run a script against it."
+  objectives = [
+    "Read the embedding flow: Module → Context → compile → Vm → call",
+    "Run the repo's host_app example and map its output to the script",
+    "Know where `#[derive(Script)]` and `.wscripti` generation fit",
+  ]
+  prerequisites = [structs_enums_methods, match_option_result]
+  related = [embedding, interop_types, interface_files, embed_wscript, expose_host_type, generate_interface]
+  body {
+    p "Everything so far ran under the `wscript` CLI, whose host registers the whole stdlib. Embedding is the same machinery pointed at *your* API: mark Rust types with `#[derive(Script)]`, register functions and types in a `Module`, build a `Context`, `compile` once (all script type errors — including misuse of your API — surface here), then run one `Vm` per thread and call script functions from Rust."
+    p "The repo's `host_app` example embeds a tiny pane-manager API and drives it from a script. Read `wscript/examples/host_app.rs` side by side with the output: every `[status]` line is the script calling back into registered host functions. To give the LSP and `wscript check` the same knowledge of your API, generate a `.wscripti` interface file and point `wscript.toml` at it (see the *Generate .wscripti* process in the reference)."
+  }
+  exercise run_host_app {
+    title     = "Drive Rust from a script"
+    task      = "From a checkout of the wscript repo, run the embedding example and match each output line to the script/host round-trips."
+    code_lang = "bash"
+    code      = <<'SH'
+cargo run -q --release -p wscript --example host_app
+SH
+    expected = "Five `[status]` lines (splits, a rename, an unbound key, `bye!`) printed by host functions the script called, then `[host] final pane count: 3` printed by Rust after the Vm returned."
+    hint     = "The `[host]` line reads state the script mutated — that's the embedding contract in one line: shared data, host-defined capabilities, script-driven logic."
+  }
+}

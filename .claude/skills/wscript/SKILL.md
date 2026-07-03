@@ -222,3 +222,5 @@ Beyond this skill, the wskill ships these views — build them with `just render
 - **ai skill** (`wdoc/skill/main.wcl`)
 
 - **presentation** — wscript in a nutshell — an overview deck. (`wdoc/presentation/main.wcl`)
+
+- **training** — Learn wscript — a hands-on lesson series. (`wdoc/training/main.wcl`)
