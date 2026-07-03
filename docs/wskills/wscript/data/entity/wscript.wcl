@@ -1,7 +1,7 @@
 // The wscript language and its CLI — the software this wskill documents.
 entity wscript {
   name    = "wscript"
-  kind    = "tool"
+  kind    = :software
   summary = "An embeddable, statically typed, Rust-flavored scripting language with a bytecode compiler, a register VM, and first-class Rust interop."
   audience = :both
   related = [embedding, type_system, cli_commands]

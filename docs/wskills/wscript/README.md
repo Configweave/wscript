@@ -2,26 +2,31 @@
 
 A **wskill**: one self-contained folder capturing everything about *wscript*
 — reference, processes, and curated indexes — as a single WCL data model, projected into
-a human-readable book and a Claude Code skill.
+a human-readable book, a Claude Code skill, an overview deck, and a training course.
 
 ## Layout
 
 ```
-wskill.wcl            # entry point: topic, version pin, meta, sources, data imports
-schema/base.wcl       # base block types (DO NOT hand-edit)
-schema/extensions.wcl # custom block types for this topic
-data/                 # the content: reference / processes
-wdoc/book, wdoc/skill # projection templates (no content — pure structure)
-out/                  # generated outputs (gitignored)
+wskill.wcl               # entry point: topic, version pin, meta, artifacts, sources, data imports
+schema/base.wcl          # base block types (DO NOT hand-edit)
+schema/kinds.wcl         # topic-owned vocabularies (EntityKind, ArtifactKind) — hand-editable
+schema/extensions.wcl    # custom block types for this topic
+schema/presentation.wcl  # opt-in schema for the overview deck
+schema/training.wcl      # opt-in schema for the tutorial series
+data/                    # the content: reference / processes / presentation / training
+wdoc/book, wdoc/skill    # projection templates (no content — pure structure)
+wdoc/presentation        # overview-deck projection template
+wdoc/training            # training-course projection template
+out/                     # generated outputs (gitignored)
 ```
 
 ## Build
 
 ```bash
-just                 # list recipes
-just wskill-check    # validate against the schema
-just render          # build out/book (site) and out/skill (SKILL.md + references)
-just book-serve      # live-preview the book
+just                    # list recipes
+just wskill-check       # validate against the schema
+just render             # build out/book, out/skill, out/presentation and out/training
+just book-serve         # live-preview the book
 ```
 
 Install the rendered skill into a repo by copying it:

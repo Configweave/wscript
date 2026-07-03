@@ -1,7 +1,7 @@
 // WCL — the sibling tool that builds this wskill's book and skill projections.
 entity wcl {
   name    = "WCL"
-  kind    = "tool"
+  kind    = :software
   summary = "A typed configuration & schema language by the same author; its `wdoc` renderer builds wscript's docs site and this wskill."
   audience = :both
   body {

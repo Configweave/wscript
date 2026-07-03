@@ -103,9 +103,11 @@ docs-build *ARGS:
 skill-build *ARGS:
 	wcl wdoc skill docs/wskills/wscript/wdoc/skill/main.wcl --out .claude/skills/wscript {{ARGS}}
 
-# Validate the wskill model and both projection templates
+# Validate the wskill model and every projection template
 [group('docs')]
 wskill-check:
 	wcl check docs/wskills/wscript/wskill.wcl
 	wcl check docs/wskills/wscript/wdoc/book/main.wcl
 	wcl check docs/wskills/wscript/wdoc/skill/main.wcl
+	@[ ! -f docs/wskills/wscript/wdoc/presentation/main.wcl ] || wcl check docs/wskills/wscript/wdoc/presentation/main.wcl
+	@[ ! -f docs/wskills/wscript/wdoc/training/main.wcl ] || wcl check docs/wskills/wscript/wdoc/training/main.wcl

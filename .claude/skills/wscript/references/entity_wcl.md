@@ -1,6 +1,6 @@
 # WCL
 
-_tool_
+_software_
 
 A typed configuration & schema language by the same author; its `wdoc` renderer builds wscript's docs site and this wskill.
 

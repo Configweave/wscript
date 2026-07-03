@@ -1,7 +1,7 @@
 ---
 name: wscript
 description: "Reference and processes for wscript — an embeddable, statically typed, Rust-flavored scripting language: bytecode-compiled, register-VM, with first-class Rust interop and reference-counted (no borrow-checker) semantics. Use when writing, checking, running or embedding wscript, or answering questions about its language, standard library, the `wscript` CLI, or the Rust embedding API."
-wskill_schema_version: 1.1.0
+wskill_schema_version: 1.0.0
 allowed-tools: []
 disallowed-tools: []
 disable-model-invocation: false
@@ -212,3 +212,11 @@ _How wscript was built, the tooling it rests on, and who maintains it._
 - [Milestones (M1-M7)](references/fact_milestones.md)
 
 - [WCL](references/entity_wcl.md)
+
+## Views
+
+Beyond this skill, the wskill ships these views — build them with `just render` in the wskill folder:
+
+- **book** (`wdoc/book/main.wcl`)
+
+- **ai skill** (`wdoc/skill/main.wcl`)

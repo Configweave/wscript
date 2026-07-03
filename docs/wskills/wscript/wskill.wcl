@@ -3,7 +3,7 @@
 // A complete reference for the wscript scripting language, its standard library,
 // the `wscript` command-line interface, and the Rust embedding API. `wcl check
 // wskill.wcl` validates the whole model; the wdoc template sets in wdoc/ project it
-// into the book (human reference) and the Claude Code skill.
+// into the four declared views (see the `artifact` blocks below).
 
 import <wdoc.wcl>
 import "./schema/base.wcl"
@@ -14,7 +14,7 @@ import "./schema/extensions.wcl"
 // and the curated index navigation.
 import "./data/main.wcl"
 
-schema_version = "1.1.0"
+schema_version = "1.0.0"
 
 topic wscript {
   name    = "wscript"
@@ -61,6 +61,11 @@ wcl.wskill::skill {
   }
 }
 
+// ---- Artifacts — the views this wskill ships ----
+
+artifact book     { kind = :book      entry = "wdoc/book/main.wcl"   output = "out/book" }
+artifact ai_skill { kind = :ai_skill  entry = "wdoc/skill/main.wcl"  output = "out/skill" }
+
 // ---- Sources (update-workflow metadata only) ----
 
 source wscript_repo {
@@ -101,4 +106,5 @@ wskill_ref wcl {
   name     = "wcl"
   relation = "wcl is a sibling project — a typed configuration & schema language by the same author; wscript's docs site is built with wcl's wdoc"
   status   = "exists"
+  url      = "https://wcl.dev"
 }

@@ -1,6 +1,6 @@
 # wscript
 
-_tool_
+_software_
 
 An embeddable, statically typed, Rust-flavored scripting language with a bytecode compiler, a register VM, and first-class Rust interop.
 
