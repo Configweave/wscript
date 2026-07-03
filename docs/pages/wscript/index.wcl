@@ -1,60 +1,189 @@
 // wscript landing page. `start = true` makes it the page served at `/`.
-// The site header already shows "wscript", so the page leads with the motivation.
+// Rendered through the stdlib `website` template: the banner and the footer
+// are named `region`s (slotted by the template), everything else is ordinary
+// page content built from the landing components in landing-parts.wcl. The
+// same content degrades to the Markdown / PDF backends — no parallel
+// fallback copy needed.
+
+// The wskill registry, discovered from the `include`s in main.wcl: every
+// member's book, plus the optional deck / training views (their entry
+// files exist only when a member ships that view).
+let wskill_books   = included_sites({ folder: "wskills", entry: "wdoc/book/main.wcl" })
+let wskill_decks   = included_sites({ folder: "wskills", entry: "wdoc/presentation/main.wcl", prefix: "decks" })
+let wskill_courses = included_sites({ folder: "wskills", entry: "wdoc/training/main.wcl", prefix: "training" })
+
+// Extra ` · [deck](…) · [course](…)` links appended to a member's card
+// when it ships those views.
+let wskill_view_links = fn(n: utf8) -> utf8 {
+  let d = join(map(filter(wskill_decks,   fn(x: IncludeEntry) -> bool { x.name == n }), fn(x: IncludeEntry) -> utf8 { $" · [deck](./${x.href})" }), "");
+  let c = join(map(filter(wskill_courses, fn(x: IncludeEntry) -> bool { x.name == n }), fn(x: IncludeEntry) -> utf8 { $" · [course](./${x.href})" }), "");
+  $"${d}${c}"
+}
+
+// Card icon per wskill; new members fall back to a generic book.
+let wskill_icon = fn(n: utf8) -> utf8
+  if n == "wscript" { "lucide.terminal" }
+  else { "lucide.book" }
+
+// One reference card per wskill book (data for `lp_cards`).
+let ref_cards = map(wskill_books, fn(s: IncludeEntry) -> LpRefCard {
+  {
+    name: s.name,
+    summary: s.summary ?? "",
+    href: $"./${s.href}",
+    icon: wskill_icon(s.name),
+    links: wskill_view_links(s.name),
+  }
+})
+
+// Every published view as a footer link (books, then decks, then courses).
+let ref_links = flatten([
+  map(wskill_books,   fn(s: IncludeEntry) -> LpFootlink { { label: s.name, href: $"./${s.href}" } }),
+  map(wskill_decks,   fn(s: IncludeEntry) -> LpFootlink { { label: $"${s.name} deck", href: $"./${s.href}" } }),
+  map(wskill_courses, fn(s: IncludeEntry) -> LpFootlink { { label: $"${s.name} course", href: $"./${s.href}" } }),
+])
+
 page index { sites = [:wscript]  title = "Why wscript?"  start = true
-  callout "Embeddable scripting for Rust" {
-    class = ["info"]
-    body  = "wscript is a statically typed, Rust-flavored scripting language that embeds in Rust applications the way **Lua embeds in C**. It compiles to bytecode and runs on a register-based VM."
-  }
-
-  h1 "Why wscript?"
-
-  p "Rust applications that need a scripting layer have had to choose between untyped embeddable languages (Lua, Rhai, Rune) and the friction of a full language. wscript takes a different bet: **static typing that reaches across the host boundary**. Type errors — including misuse of your registered Rust APIs — surface when the script *compiles*, not when it runs."
-
-  p "If you know Rust, you already know most of wscript — subtract the borrow checker, lifetimes, and generics, and you are there. If you don't, it's an afternoon read."
-
-  code rust {
-    source = <<'SRC'
-use math
-use fs
-
-struct Player { name: string, hp: int }
-
-trait Damageable { fn take_damage(self, amount: int) }
-
-impl Damageable for Player {
-    fn take_damage(self, amount: int) {
-        self.hp = math::imax(0, self.hp - amount)
+  region "banner" {
+    callout "Embeddable scripting for Rust" {
+      class = ["info"]
+      body  = "wscript embeds in Rust applications the way **Lua embeds in C** — statically typed, bytecode-compiled, run on a register VM."
     }
-}
-
-fn main() -> int {
-    let p = Player { name: "wil", hp: 100 }
-    let alias = p                  // reference semantics: same object
-    alias.take_damage(30)
-    fs::write("game.log", fmt("hp: {}", p.hp))?   // p.hp == 70
-    0
-}
-SRC
   }
 
-  h2 "What sets it apart"
+  lp_hero "Static typing that reaches across the host boundary." {
+    badge    = "Embeddable, statically typed scripting for Rust"
+    lede     = "Rust applications that need a scripting layer have had to choose between untyped embeddable languages (Lua, Rhai, Rune) and the friction of a full language. wscript takes a different bet: type errors — including misuse of your registered Rust APIs — surface when the script **compiles**, not when it runs."
+    footnote = "Open source · built in the open by Wil Taylor"
+    lp_cta "Get started"  { href = "#start"  primary = true }
+    lp_cta "View source"  { href = "https://github.com/wiltaylor/wscript" }
+  }
 
-  p "**Static typing with inference** — annotations on function signatures only; local inference everywhere else. Exhaustive `match`, `Option`/`Result` with `?`, and host-API misuse all caught at compile time."
+  lp_showcase {
+    id      = taste
+    eyebrow = "A taste"
+    heading = "If you know Rust, you already know wscript."
+    body    = "Subtract the borrow checker, lifetimes, and generics, and you are there — structs, enums, traits with `dyn` dispatch, exhaustive `match`, `Option`/`Result` with `?`. Reference types alias instead of copy, so mutation is visible through every alias: the Lua/Python mental model with Rust syntax. If you don't know Rust, it's an afternoon read."
+    code rust {
+      filename = "game.wscript"
+      source = <<'SRC'
+        use math
+        use fs
 
-  p "**First-class Rust interop** — exposing host functions and types is one `#[derive(Script)]` and one registration call, with plain Rust signatures. No manual value wrangling."
+        struct Player { name: string, hp: int }
 
-  p "**Rust-stripped syntax** — structs, enums, traits (incl. `dyn` dispatch), derives — familiar to Rust developers, learnable by anyone in an afternoon."
+        trait Damageable { fn take_damage(self, amount: int) }
 
-  p "**No borrow checker** — Rc-based memory with free aliased mutation, the Lua/Python mental model. Cycles leak (documented); `weak[T]` provided."
+        impl Damageable for Player {
+            fn take_damage(self, amount: int) {
+                self.hp = math::imax(0, self.hp - amount)
+            }
+        }
 
-  h2 "Reference"
+        fn main() -> int {
+            let p = Player { name: "wil", hp: 100 }
+            let alias = p                  // reference semantics: same object
+            alias.take_damage(30)
+            fs::write("game.log", fmt("hp: {}", p.hp))?   // p.hp == 70
+            0
+        }
+        SRC
+    }
+  }
 
-  p "wscript's reference is published as a **wskill** — a self-contained WCL model, projected into the book linked below and a Claude Code skill."
+  lp_features {
+    id      = features
+    eyebrow = "Why wscript"
+    title   = "The Rust mental models, without the hard parts."
+    lede    = "A small, statically typed scripting layer that keeps the host's guarantees and the scripter's freedom."
 
-  // One linked entry per wskill under docs/wskills/, discovered and built by the
-  // `include` in main.wcl. Title / summary come from the member's book site; the
-  // `wskills/<name>/` href is root-relative (this landing is the root site).
-  wdoc_repeater { each = included_sites({ folder: "wskills", entry: "wdoc/book/main.wcl" })  as = :s
-    p $"**[${s.title}](./${s.href})**${match s.summary { none => "", su => $" — ${su}" }}"
+    lp_feature "Static typing with inference" {
+      icon = "lucide.shield-check"
+      body = "Annotations on function signatures only; local inference everywhere else. No implicit numeric conversion, no truthiness — type errors are caught when the script compiles, not when it runs."
+    }
+    lp_feature "First-class Rust interop" {
+      icon = "lucide.plug"
+      body = "Exposing host functions and types is one `#[derive(Script)]` and one registration call, with plain Rust signatures. Misuse of a host API from a script is a **compile** error with a span."
+    }
+    lp_feature "Rust-stripped syntax" {
+      icon = "lucide.braces"
+      body = "Structs, enums, traits with static and `dyn` dispatch, and derives — familiar to Rust developers, learnable by anyone in an afternoon."
+    }
+    lp_feature "Exhaustive match, Option/Result and ?" {
+      icon = "lucide.git-branch"
+      body = "`match` is exhaustiveness-checked at compile time. `Option[T]` and `Result[T, E]` are always available, and `?` composes across the host boundary — host errors arrive as `Err`."
+    }
+    lp_feature "Reference semantics, no borrow checker" {
+      icon = "lucide.link-2"
+      body = "Reference types alias rather than copy; mutation is visible through every alias. Memory is pure reference counting; cycles leak (documented), broken with `weak[T]`."
+    }
+    lp_feature "A capability-style standard library" {
+      icon = "lucide.package"
+      body = "math, fs, process, and json/toml/xml over one shared `Value` type. Nothing is ambient: registering a module grants the capability, and each module is a Cargo feature gate."
+    }
+    lp_feature "Complete tooling" {
+      icon = "lucide.wrench"
+      body = "The `wscript` CLI runs and type-checks scripts, offers a persistent-binding REPL, and ships a language server. Host APIs live in diff-friendly `.wscripti` interface files, so the editor understands your registrations too."
+    }
+  }
+
+  lp_showcase {
+    id      = embed
+    eyebrow = "Embedding"
+    heading = "One derive, one registration call."
+    body    = "Register your API in a `Module`, build a `Context`, compile once — all script type errors, including misuse of your API, surface here — then run one `Vm` per thread and call script functions from Rust. The full flow is documented in the reference's **Embedding & interop** section."
+    code rust {
+      filename = "main.rs"
+      source = <<'SRC'
+        use wscript::{Context, Module, Vm};
+
+        let mut m = Module::new("term");
+        m.fn_("print_at", |x: i64, y: i64, s: &str| { /* ... */ });
+
+        let ctx  = Context::new().module(m);
+        let unit = ctx.compile(source)?;            // type errors (incl. host API) here
+        let mut vm = Vm::new(&ctx);
+        let n: i64 = vm.call_unit(&unit, "main", ())?;
+        SRC
+    }
+  }
+
+  lp_cards {
+    id      = reference
+    eyebrow = "Reference"
+    title   = "The manual"
+    lede    = "wscript's reference is published as a **wskill** — a self-contained WCL model projected into a readable book, a Claude Code skill, an overview deck, and a hands-on training course."
+    cards   = ref_cards
+  }
+
+  lp_steps {
+    id      = start
+    eyebrow = "Getting started"
+    title   = "Build the CLI and run your first script."
+    lede    = "wscript uses the standard Rust toolchain; the binary lands at `target/release/wscript`. For editor support, run `wscript lsp` and point a `wscript.toml` at your generated `.wscripti` interface files — the reference covers the full setup."
+
+    lp_step "Build the CLI"             { command = "cargo build --release" }
+    lp_step "Run a script"              { command = "wscript run hello.wscript" }
+    lp_step "Type-check without running" { command = "wscript check hello.wscript" }
+    lp_step "Explore in the REPL"       { command = "wscript repl" }
+  }
+
+  region "footer" {
+    lp_footer {
+      brand     = "wscript"
+      tagline   = "An embeddable, statically typed, Rust-flavored scripting language. Open source, built in the open."
+      copyright = "© 2026 wscript · Wil Taylor"
+
+      lp_footcol "wscript" {
+        lp_footlink "Home"            { href = "index" }
+        lp_footlink "Features"        { href = "#features" }
+        lp_footlink "Getting started" { href = "#start" }
+      }
+      lp_footcol "Reference" { links = ref_links }
+      lp_footcol "Project" {
+        lp_footlink "GitHub" { href = "https://github.com/wiltaylor/wscript" }
+        lp_footlink "Issues" { href = "https://github.com/wiltaylor/wscript/issues" }
+      }
+    }
   }
 }

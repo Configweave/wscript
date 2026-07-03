@@ -2,42 +2,51 @@
 //
 //   wcl wdoc serve docs/main.wcl                  # / = wscript landing
 //   wcl wdoc build docs/main.wcl --out docs/_site
-//     → docs/_site/index.html            wscript landing (webpage template)
-//       docs/_site/wskills/wscript/…      the wscript reference (book template)
+//     → docs/_site/index.html                wscript landing (website template)
+//       docs/_site/wskills/wscript/…          the wscript reference (book)
+//       docs/_site/decks/wscript/…            the overview deck
+//       docs/_site/training/wscript/…         the training course
 //
-// One document, one landing site, plus the wscript wskill included as a book under
-// /wskills/wscript/. The single `import <wdoc.wcl>` pulls in the embedded wdoc
-// standard library, so every stdlib block (`page` / `code` / `callout` / `table` /
-// `h1`..`h6` / …) is in scope here and in every imported page.
+// One document, one landing site, plus the wscript wskill's views included as
+// sub-sites. The single `import <wdoc.wcl>` pulls in the embedded wdoc standard
+// library, so every stdlib block (`page` / `code` / `callout` / `h1`..`h6` / …)
+// is in scope here and in every imported page.
 import <wdoc.wcl>
 
 // The reference content lives in a wskill — a self-contained WCL model under
-// docs/wskills/wscript, projected into a book (included here) and a Claude Code skill.
-// `include` builds the wskill's book under docs/_site/wskills/<name>/; the landing
-// page lists it via `included_sites(...)`.
+// docs/wskills/wscript, projected into a book, a Claude Code skill, a deck and
+// a training course. `include` builds each shipped view under its prefix; the
+// landing page enumerates them via `included_sites(...)`. A member without a
+// view's entry file is simply skipped.
 include "wskills" { entry = "wdoc/book/main.wcl" }
+include "wskills" { entry = "wdoc/presentation/main.wcl"  prefix = "decks" }
+include "wskills" { entry = "wdoc/training/main.wcl"      prefix = "training" }
 
-// The wscript landing: the `webpage` template (title header + top navbar).
-// `root = true` serves it at `/`; the reference book renders under
-// `/wskills/wscript/`. Nord theme, cyan accent.
+// Reusable styling class (available to landing prose).
+class accent {
+  color = "var(--wdoc-accent)"
+  bold  = true
+}
+
+// The wscript landing: the `website` template (sticky header, flat anchor
+// menu, theme toggle). `root = true` serves it at `/`; the reference book
+// renders under `/wskills/wscript/`. Nord theme, cyan accent.
 site wscript {
-  default_template = :webpage
+  default_template = :website
   title            = "wscript"
   root             = true
   theme            = :nord
   accent           = :cyan
+  theme_toggle     = true
   menu {
-    item "Home"            { page = index }
-    item "Features"        { page = features }
-    item "Getting started" { page = getting_started }
-    // The reference is the wscript wskill, built as its own sub-site; link by its
-    // root-relative output path (a `page =` here would only resolve within this site).
-    item "Reference"       { href = "wskills/wscript/" }
+    item "Features"        { href = "#features" }
+    item "Reference"       { href = "#reference" }
+    item "Getting started" { href = "#start" }
     item "Source"          { href = "https://github.com/wiltaylor/wscript" }
   }
 }
 
-// wscript landing pages (sites = [:wscript]).
+// wscript landing (sites = [:wscript]); landing-parts declares the lp_*
+// components the page is built from, so it must be imported first.
+import "./pages/wscript/landing-parts.wcl"
 import "./pages/wscript/index.wcl"
-import "./pages/wscript/features.wcl"
-import "./pages/wscript/getting-started.wcl"
