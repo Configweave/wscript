@@ -11,41 +11,18 @@ index getting_started {
   related = [wscript, cli_commands, run_script, check_script, use_repl]
   audience = :both
   body {
-    h2 "What wscript is"
     p "An embeddable, statically typed, Rust-flavored scripting language. It compiles to bytecode and runs on a register-based VM, with first-class Rust interop and reference-counted (no borrow-checker) semantics — the niche Lua fills for C, for Rust."
-
-    h2 "Build"
-    p "Standard Rust toolchain. The binary lands at `target/release/wscript`."
-    code "console" { source = <<'SRC'
-cargo build --release
-SRC
-    }
-
-    h2 "Write a script"
-    p "Execution starts at `fn main()`; its `int` return becomes the exit code (`unit` means 0). The file extension is `.wscript`."
+    p "Build with `cargo build --release` (binary at `target/release/wscript`). Execution starts at `fn main()`; its `int` return becomes the exit code (`unit` means 0); the extension is `.wscript`."
     code "rust" { source = <<'SRC'
 // hello.wscript
 fn main() -> int {
-    println(fmt("Hello, {}!", "wscript"))
+    let who = "wscript"
+    println("Hello, {who}!")     // string interpolation
     0
 }
 SRC
     }
-
-    h2 "Run it"
-    table {
-      header = ["Command", "Does"]
-      rows = [
-        ["`wscript run hello.wscript [args…]`", "compile + execute with the full stdlib"],
-        ["`wscript check hello.wscript`",       "compile only; honors `wscript.toml` / `.wscripti`"],
-        ["`wscript repl`",                      "persistent-binding REPL"],
-        ["`wscript lsp`",                       "language server (diagnostics, hover, goto, completions)"],
-      ]
-    }
-
-    h2 "Embed in Rust (five steps)"
-    p "1. Register your API in a `Module`. 2. Build a `Context` from your modules plus any stdlib modules. 3. `ctx.compile(source)` once — all type errors surface here. 4. Spin one `Vm` per thread. 5. Call script functions with `vm.call` / `unit.fn_handle`."
-    p "See the [Embedding](concept_embedding) concept and the **Embed wscript in a Rust application** process for the full story."
+    p "`wscript run hello.wscript` executes with the full stdlib; `check` compiles only (honors `wscript.toml`/`.wscripti`); `repl` and `lsp` cover exploration and editors — see [the CLI](fact_cli_commands). Embedding is five steps: `Module` → `Context` → `ctx.compile` (all type errors surface here) → one `Vm` per thread → `vm.call` / `unit.fn_handle`; see [Embedding](concept_embedding) and the **Embed wscript in a Rust application** process."
   }
 }
 
@@ -87,7 +64,7 @@ index modules_types {
 index stdlib {
   name    = "Standard Library"
   summary = "The prelude plus the capability-style stdlib modules."
-  related = [prelude_functions, math_functions, fs_functions, process_functions, data_formats, value_methods]
+  related = [prelude_functions, math_functions, fs_functions, process_functions, time_functions, regex_functions, data_formats, value_methods]
   audience = :both
 }
 
@@ -101,6 +78,6 @@ index embedding_interop {
 index project {
   name    = "Project & People"
   summary = "How wscript was built, the tooling it rests on, and who maintains it."
-  related = [milestones, wcl, wil_taylor]
+  related = [milestones, benchmarks, wcl, wil_taylor]
   audience = :both
 }

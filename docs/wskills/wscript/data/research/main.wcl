@@ -1,0 +1,7 @@
+// Research findings — durable outputs of investigations, one `research` block
+// each. A finding is dated (`checked`), evidence-linked (`source_ids` /
+// `locators`), and ships in the skill at references/research_<id>.md so
+// external consumers (e.g. a planning pipeline's researcher) can reuse it
+// instead of re-investigating. Flip `status` to :stale on an update sweep
+// when the subject may have moved; :superseded (+ `superseded_by`) when a
+// newer finding replaces it. Imported by ../main.wcl.

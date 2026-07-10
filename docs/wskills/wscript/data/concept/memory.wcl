@@ -1,5 +1,5 @@
 concept memory {
-  name     = "Memory: Reference Counting & weak[T]"
+  name     = "Memory: Reference Counting & weak references"
   summary  = "Pure reference counting; cycles leak by design; break them with weak references."
   related  = [reference_semantics, structs, faults]
   audience = :both

@@ -30,7 +30,7 @@ presentation nutshell {
         p "- The Lua/Python mental model, with Rust syntax"
         p "- Cycles leak by design; break them with `weak[T]`"
       }
-      speaker_notes = "Rust minus the hard parts: no lifetimes, no borrows, no generics. Scripters share and mutate freely; the host keeps its guarantees."
+      speaker_notes = "Rust minus the hard parts: no lifetimes, no borrows. Scripters share and mutate freely; the host keeps its guarantees."
     }
   }
 
@@ -108,7 +108,7 @@ presentation nutshell {
       unit  = modules
       body {
         p "- `use` imports host-registered modules; the prelude is ambient"
-        p "- math, fs, process, json/toml/xml — each feature-gated"
+        p "- math, fs, process, time, regex, json/toml/xml — each feature-gated"
         p "- The host decides what a script is *allowed* to touch"
       }
       speaker_notes = "No ambient authority: a script can only reach the modules its host registered. Sandboxing is the default posture, not an add-on."
@@ -126,14 +126,14 @@ presentation nutshell {
       }
     }
     pres_slide not_v1 {
-      title = "What v1 leaves out"
+      title = "What wscript leaves out"
       unit  = not_in_v1
       body {
-        p "- No borrow checker, lifetimes, or user generics"
-        p "- No `+=`, bitwise ops, string interpolation, async, or threads"
+        p "- No borrow checker or lifetimes; generic *functions* yes, generic types no"
+        p "- No bitwise ops, exceptions, async, or threads sharing values"
         p "- Subtractions, not gaps — the scripting layer stays small"
       }
-      speaker_notes = "Set expectations early so Rust muscle memory doesn't fight the language. Everything here is deliberate scope, documented in the PRD."
+      speaker_notes = "Set expectations early so Rust muscle memory doesn't fight the language. Everything here is deliberate scope."
     }
     pres_slide next {
       title = "Where to go next"

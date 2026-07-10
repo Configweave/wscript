@@ -8,18 +8,23 @@ A `struct` is a named record of typed fields. Methods are declared in an `impl` 
 struct Player { name: string, hp: int }
 
 impl Player {
+    fn new(name: string) -> Player {          // associated function:
+        Player { name: name, hp: 100 }        // no self, called as
+    }                                         // Player::new("wil")
     fn heal(self, amount: int) {
-        self.hp = self.hp + amount
+        self.hp += amount
     }
 }
 
-let p = Player { name: "wil", hp: 100 }
+let p = Player::new("wil")
 p.heal(20)                 // p.hp == 120
 ```
 
+Associated functions (no `self`) live in inherent `impl` blocks and are called `Type::func(...)` — the constructor idiom.
+
 > [!NOTE]
 > **Construction & mutation**
-> Construct with `Type { field: value, … }`. Fields are mutated in place (`p.hp = …`) — and because structs are reference types, that mutation is visible through every alias. See Reference Semantics.
+> Construct with `Type { field: value, … }` or an associated constructor. Fields are mutated in place (`p.hp = …`) — and because structs are reference types, that mutation is visible through every alias. See Reference Semantics.
 
 ## Examples
 

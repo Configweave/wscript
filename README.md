@@ -77,10 +77,13 @@ wscript lsp                         # language server (diagnostics, hover,
 
 ## Documentation
 
-- [Language tour](docs/tour.md)
-- [Embedding guide](docs/embedding.md)
-- [Stdlib reference](docs/stdlib.md)
-- [Benchmarks](docs/benchmarks.md) — beats Rhai, trades blows with Rune, trails Lua
+The docs are a wdoc/WCL site: `docs/main.wcl` is the landing page and
+`docs/wskills/wscript/` the full reference (language tour, stdlib,
+embedding guide, benchmarks), projected into a book, a Claude Code skill
+(`.claude/skills/wscript`), an overview deck and a training course.
+
+- `just docs-serve` — live-preview the site (needs [`wcl`](https://wcl.dev) on PATH)
+- `just docs-build` — render it into `docs/_site/`
 - [PRD](docs/PRD.md) — the design source of truth
 
 ## Building

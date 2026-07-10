@@ -118,3 +118,38 @@ term weak_reference {
   aliases    = ["weak"]
   audience   = :both
 }
+
+term string_interpolation {
+  term       = "string interpolation"
+  definition = "`{expr}` holes in any string literal, rendered like `str()`. Holes take one full expression (no format specs — use `fmt` for those); escape literal braces as `{{` / `}}`; `{}` and `{:spec}` stay literal for fmt-template compatibility."
+  aliases    = ["interpolation"]
+  audience   = :both
+}
+
+term generic_function {
+  term       = "generic function"
+  definition = "A top-level `fn f[T, U: Ord](...)` with type parameters bounded by the built-ins `Eq`/`Ord`/`Clone`. Instantiation is inferred at call sites; compilation is type-erased (one compiled body), so hosts cannot call generic fns directly. Generic structs/enums/traits do not exist."
+  aliases    = ["type parameter", "type erasure"]
+  audience   = :both
+}
+
+term script_import {
+  term       = "script import (multi-file)"
+  definition = "`use helpers` / `use \"./sub/x.wscript\" as x` imports another script file as a module named by its stem or alias. Host modules win name clashes; cycles are allowed; the whole graph compiles into one CompiledUnit; only the entry file's fns are host-callable."
+  aliases    = ["multi-file script"]
+  audience   = :both
+}
+
+term script_closure {
+  term       = "ScriptClosure"
+  definition = "The host-side type for receiving a script closure in a registered function: `ScriptClosure<Args, Ret>` plus a leading `&mut dyn HostCtx` parameter. Scripts see an ordinary `fn(...)` parameter, checked at compile time; callback faults and fuel compose with the calling script."
+  aliases    = ["script callback"]
+  audience   = :both
+}
+
+term fuel {
+  term       = "fuel (execution budget)"
+  definition = "An optional per-Vm instruction budget: `vm.set_fuel(Some(n))` charges 1 fuel per dispatched instruction and faults trappably with \"fuel exhausted\" when dry. Deterministic (counts instructions, not time); `set_fuel(None)` runs unmetered."
+  aliases    = ["execution budget"]
+  audience   = :both
+}

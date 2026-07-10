@@ -21,8 +21,11 @@ Cargo workspace per PRD §2: `wscript` (umbrella/embedding API), `wscript-core`
 `wscript-macros` (`#[derive(Script)]`), `wscript-cli` (binary `wscript`),
 `benchmarks`. Script behaviour tests live in `tests/scripts/*.wscript`
 (asserted by `wscript-cli/tests/scripts.rs` via `// expect:` directives).
-Docs: `docs/tour.md`, `docs/embedding.md`, `docs/stdlib.md`,
-`docs/benchmarks.md`.
+Docs are authored in wdoc/WCL: `docs/main.wcl` is the landing site and
+`docs/wskills/wscript/` the reference model (language, stdlib, CLI, embedding),
+projected into a book, the committed `.claude/skills/wscript` skill, a deck and
+a training course. `just docs-serve` previews; `just skill-build` regenerates
+the skill (delete `.claude/skills/wscript` first — stale files aren't wiped).
 
 ## Conventions
 

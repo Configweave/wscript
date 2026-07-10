@@ -2,7 +2,7 @@
 
 _Operators go through built-in traits; == on structs/enums requires an Eq impl._
 
-Operator overloading goes through built-in traits: `Add Sub Mul Div Rem Neg Eq Ord Display Index`. See [operator traits](../references/fact_operator_traits.md) for the full mapping.
+Operator overloading goes through built-in traits: `Add Sub Mul Div Rem Neg Eq Ord Display Index`. See [operator traits](../references/fact_operator_traits.md) for the full mapping. Compound assignment `+= -= *= /= %=` works on any assignable place — variables, fields, list/map elements — evaluates the place once, and dispatches through the same traits, so user types get it via their `Add`/`Sub`/`Mul`/`Div`/`Rem` impls.
 
 ```rust
 impl Add for Vec2 {

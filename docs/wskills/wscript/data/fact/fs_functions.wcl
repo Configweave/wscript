@@ -15,6 +15,9 @@ fact fs_functions {
         ["`create_dir`, `create_dir_all`", "`(string) -> Result[unit, string]`"],
         ["`copy`, `rename`", "`(string, string) -> Result[unit, string]`"],
         ["`remove_file`, `remove_dir`", "`(string) -> Result[unit, string]`"],
+        ["`size`",           "`(string) -> Result[int, string]` — file size in bytes"],
+        ["`mtime_unix`",     "`(string) -> Result[float, string]` — modification time as unix seconds"],
+        ["`walk`",           "`(string) -> Result[List[string], string]` — recursive file listing (sorted)"],
         ["`join`",           "`(string, string) -> string`"],
         ["`parent`, `file_name`, `ext`", "`(string) -> Option[string]`"],
       ]

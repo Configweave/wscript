@@ -1,4 +1,4 @@
-# Map\[K, V\] methods
+# Map methods
 
 Map literals are written `#{ k: v, … }`. Keys are `int`, `bool`, `char` or `string`.
 
@@ -7,7 +7,8 @@ Map literals are written `#{ k: v, … }`. Keys are `int`, `bool`, `char` or `st
 | Size | `len` `is_empty` `clear` |
 | Add/remove | `insert` `remove` |
 | Access | `get` (Option) `contains_key` `[k]` (faults if missing) |
-| Iterate | `keys` `values` |
+| Iterate | `keys` `values` `each(\|k, v\| …)` |
+| Transform | `map(\|k, v\| …) -> List[U]` `filter(\|k, v\| …) -> Map[K, V]` |
 | Copy | `clone` |
 
 ## Related

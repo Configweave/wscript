@@ -1,4 +1,4 @@
-# Memory: Reference Counting & weak\[T\]
+# Memory: Reference Counting & weak references
 
 _Pure reference counting; cycles leak by design; break them with weak references._
 

@@ -27,11 +27,15 @@ stack trace (most recent call first):
 
 Embedders get the same structure programmatically: `RuntimeError.trace` is a `Vec<TraceFrame>` (each a function name and an optional source span), innermost first, with `RuntimeError.span` mirroring the fault site. `vm.call*` returns `Err(Error::Runtime(_))` for faults.
 
+## Resource limits
+
+Runaway scripts fault trappably too. **Fuel:** `vm.set_fuel(Some(n))` budgets execution at one instruction = one fuel (structural ops like deep equality/clone/display are metered per element); running dry faults with "fuel exhausted", span and trace included. Fuel counts instructions, not time, so exhaustion is deterministic across machines. The tank belongs to the `Vm` and depletes across calls until reset — `vm.fuel()` reads the remainder; `set_fuel(None)` (the default) runs unmetered. **Call depth:** script recursion is capped by a configurable limit (`vm.set_call_depth_limit`, default `DEFAULT_CALL_DEPTH_LIMIT`); exceeding it faults instead of overflowing the native stack. Host→script re-entries (callbacks) are separately bounded at `REENTRY_DEPTH_LIMIT` (32).
+
 ## Related
 
 - [Option, Result & ?](../references/concept_options_results.md)
 
-- \[Memory: Reference Counting & weak\[T\]\](concept_memory)
+- [Memory: Reference Counting & weak references](../references/concept_memory.md)
 
 - [Embedding in Rust](../references/concept_embedding.md)
 

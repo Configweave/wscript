@@ -9,6 +9,7 @@ Commands & environment (capability: process control).
 | `set_env` | `(string, string)` |
 | `cwd` | `() -> Result[string, string]` |
 | `args` | `() -> List[string]` — arguments after the script path on the CLI |
+| `exit` | `(int)` — terminate the script with an exit code (a trappable exit fault, not an error) |
 
 `Output` is `{ status: int, stdout: string, stderr: string }`.
 

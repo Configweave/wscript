@@ -15,16 +15,17 @@ lesson first_script {
   related = [wscript, cli_commands, run_script]
   body {
     p "wscript ships as one binary. From a checkout of the repo, `cargo build --release` puts it at `target/release/wscript` — add that to your `PATH` or call it by path. (Inside the repo you can also run any script with `cargo run -q -p wscript-cli -- run file.wscript`.)"
-    p "Execution starts at `fn main()`. Its `int` return becomes the process exit code (a `unit` return means 0), and the file extension is `.wscript`. There is no string interpolation in wscript — formatting goes through `fmt(\"{}\", …)`."
+    p "Execution starts at `fn main()`. Its `int` return becomes the process exit code (a `unit` return means 0), and the file extension is `.wscript`. String literals interpolate: `\"Hello, {who}!\"` embeds any expression in `{…}` holes (escape literal braces as `{{`/`}}`); `fmt(\"{}\", …)` covers dynamic templates and format specs."
   }
   exercise hello {
     title     = "Hello, wscript"
-    task      = "Write a one-function script that formats a greeting with `fmt`, prints it, and exits 0."
+    task      = "Write a one-function script that builds a greeting with string interpolation, prints it, and exits 0."
     code_lang = "bash"
     code      = <<'SH'
 cat > hello.wscript <<'WSCRIPT'
 fn main() -> int {
-    println(fmt("Hello, {}!", "wscript"))
+    let who = "wscript"
+    println("Hello, {who}!")
     0
 }
 WSCRIPT
@@ -74,16 +75,16 @@ SH
 
 lesson strings_and_fmt {
   n       = 3
-  title   = "Strings and fmt"
-  summary = "Immutable strings, method chains, and fmt instead of interpolation."
+  title   = "Strings, interpolation and fmt"
+  summary = "Immutable strings, method chains, interpolation holes and fmt."
   objectives = [
-    "Concatenate with `+` and convert values with `str()`",
+    "Build strings with interpolation (`{expr}`), `+` and `str()`",
     "Chain string methods — every operation returns a new string",
     "Parse text into numbers with `parse_int`",
   ]
   related = [strings, string_methods]
   body {
-    p "Strings are immutable reference values: `to_upper`, `trim`, `replace` and friends all return new strings, and `len`/`slice`/`find` count characters, not bytes. `+` concatenates strings only — convert other values with `str()` first, or format everything at once with `fmt(\"{}\", …)`."
+    p "Strings are immutable reference values: `to_upper`, `trim`, `replace` and friends all return new strings, and `len`/`slice`/`find` count characters, not bytes. Any literal can embed expressions in `{…}` holes — full expressions, rendered like `str()`. `+` concatenates strings only — convert other values with `str()` first. `fmt(\"{}\", …)` remains the tool for dynamic templates and format specs (`{:.2}`, `{:>8}` — specs are not allowed inside interpolation holes)."
     p "`\"42\".parse_int()` returns `Option[int]` — parsing is the first place you meet wscript's no-exceptions error model."
   }
   exercise shout {
@@ -96,7 +97,7 @@ fn main() -> int {
     let name = "wil"
     let shout = ("hello, " + name).to_upper()
     println(shout)
-    println(fmt("{} chars, starts with HELLO: {}", shout.len(), shout.starts_with("HELLO")))
+    println("{shout.len()} chars, starts with HELLO: {shout.starts_with("HELLO")}")
     println(fmt("parsed: {}", "42".parse_int().unwrap_or(0)))
     0
 }
@@ -104,7 +105,7 @@ WSCRIPT
 wscript run strings.wscript
 SH
     expected = "Prints `HELLO, WIL`, then `10 chars, starts with HELLO: true`, then `parsed: 42`."
-    hint     = "`\"hello, \" + name` needs parentheses before `.to_upper()` so the method applies to the whole concatenation."
+    hint     = "`\"hello, \" + name` needs parentheses before `.to_upper()` so the method applies to the whole concatenation. Interpolation holes are real code — the inner `\"HELLO\"` uses plain quotes, no escaping."
   }
 }
 
@@ -115,11 +116,11 @@ lesson control_flow_basics {
   objectives = [
     "Loop over ranges (`0..10` exclusive, `0..=10` inclusive)",
     "Use `if` as a statement and remember conditions must be `bool`",
-    "Mutate an accumulator without `+=` (which doesn't exist)",
+    "Update an accumulator with compound assignment (`+=`, `-=`)",
   ]
   related = [control_flow, operators]
   body {
-    p "Statements end at newlines; semicolons are permitted but never required. `for` iterates ranges, list elements, map keys and string chars; `while` and `loop`/`break` work as in Rust. There is no compound assignment — write `total = total + i`."
+    p "Statements end at newlines; semicolons are permitted but never required. `for` iterates ranges, list elements, map keys and string chars; `while` and `loop`/`break` work as in Rust. Compound assignment (`+= -= *= /= %=`) works on any assignable place — variables, fields, list/map elements."
   }
   exercise evens {
     title     = "Sum the evens"
@@ -130,18 +131,18 @@ cat > flow.wscript <<'WSCRIPT'
 fn main() -> int {
     let total = 0
     for i in 1..=10 {
-        if i % 2 == 0 { total = total + i }
+        if i % 2 == 0 { total += i }
     }
     let n = 3
-    while n > 0 { n = n - 1 }
-    println(fmt("evens sum: {}, n: {}", total, n))
+    while n > 0 { n -= 1 }
+    println("evens sum: {total}, n: {n}")
     0
 }
 WSCRIPT
 wscript run flow.wscript
 SH
     expected = "Prints `evens sum: 30, n: 0`."
-    hint     = "`total += i` is a syntax error by design — v1 has no compound assignment. Spell it out."
+    hint     = "Ranges are header-only: `1..=10` exists only in a `for` header — `let r = 1..=10` is a compile error. And conditions must be `bool`: `while n { … }` won't compile either."
   }
 }
 
@@ -241,7 +242,7 @@ lesson structs_enums_methods {
   ]
   related = [structs, enums]
   body {
-    p "Structs are named-field records; enums have unit, tuple and struct variants (`Quit`, `Key(char)`, `Click { x: int, y: int }`). Methods live in `impl` blocks; `self` needs no type and is always a reference, so `self.hp = self.hp + amount` mutates the caller's object — there is no `&` in wscript at all."
+    p "Structs are named-field records; enums have unit, tuple and struct variants (`Quit`, `Key(char)`, `Click { x: int, y: int }`). Methods live in `impl` blocks; `self` needs no type and is always a reference, so `self.hp += amount` mutates the caller's object — there is no `&` in wscript at all."
   }
   exercise heal {
     title     = "Mutate through a method"
@@ -253,10 +254,10 @@ struct Player { name: string, hp: int }
 
 impl Player {
     fn heal(self, amount: int) {
-        self.hp = self.hp + amount
+        self.hp += amount
     }
     fn describe(self) -> string {
-        fmt("{} ({} hp)", self.name, self.hp)
+        "{self.name} ({self.hp} hp)"
     }
 }
 
@@ -475,7 +476,7 @@ lesson stdlib_and_check {
   ]
   related = [modules, fs_functions, data_formats, check_script]
   body {
-    p "`use fs` imports a host-registered module; the prelude (`print println str fmt same weak int float`) needs no import. The stdlib is capability-style: a host embeds only the modules it wants scripts to have, and under `wscript run` you get all of them — math, fs, process, json/toml/xml. The three data formats parse into one shared `Value` type, so formats compose."
+    p "`use fs` imports a host-registered module; the prelude (`print println str fmt same weak int float`) needs no import. The stdlib is capability-style: a host embeds only the modules it wants scripts to have, and under `wscript run` you get all of them — math, fs, process, time, regex, json/toml/xml. The three data formats parse into one shared `Value` type, so formats compose."
     p "`wscript check` compiles without executing — same diagnostics, no side effects — and honors `wscript.toml`/`.wscripti` so host APIs type-check too."
   }
   exercise config_tool {

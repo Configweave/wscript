@@ -1,24 +1,23 @@
-# Not in wscript v1 (by design)
+# Not in wscript (by design)
 
-Deliberately absent in v1:
+Deliberately absent:
 
 | Absent | Instead |
 | --- | --- |
 | borrow checker, `&`/`&mut`, lifetimes | reference counting; `self` is implicitly by reference |
-| user-defined generics | built-in `List[T]` / `Map[K,V]` only |
+| generic structs/enums/traits | generic \*functions\* (`fn f[T, U: Ord]`, type-erased) plus built-in `List[T]` / `Map[K,V]` |
 | exceptions | `Result` + `?`; trappable faults to the host |
 | async, threads sharing values | one VM per thread (`Rc`, not `Arc`) |
 | implicit conversions, truthiness | `int(x)`/`float(x)`; `bool` conditions |
 | a cycle collector | cycles leak; use `weak[T]` |
-| string interpolation | `fmt(template, args…)` |
-| compound assignment (`+=`), bitwise operators | write the full expression |
+| bitwise operators | `math` helpers or write the arithmetic out |
+| format specs in interpolation holes | `"{expr}"` only; use `fmt("{:.2}", x)` for formatting |
 | range values outside `for` headers | `0..n` only in a `for` header |
-| script-to-script imports | single-file scripts (planned for v2) |
 
 ## Related
 
 - [The Type System](../references/concept_type_system.md)
 
-- \[Memory: Reference Counting & weak\[T\]\](concept_memory)
+- [Memory: Reference Counting & weak references](../references/concept_memory.md)
 
 [← Back to SKILL.md](../SKILL.md)

@@ -63,7 +63,7 @@ page index { sites = [:wscript]  title = "Why wscript?"  start = true
     id      = taste
     eyebrow = "A taste"
     heading = "If you know Rust, you already know wscript."
-    body    = "Subtract the borrow checker, lifetimes, and generics, and you are there — structs, enums, traits with `dyn` dispatch, exhaustive `match`, `Option`/`Result` with `?`. Reference types alias instead of copy, so mutation is visible through every alias: the Lua/Python mental model with Rust syntax. If you don't know Rust, it's an afternoon read."
+    body    = "Subtract the borrow checker and lifetimes, and you are there — structs, enums, traits with `dyn` dispatch, generic functions, exhaustive `match`, `Option`/`Result` with `?`, string interpolation, multi-file scripts. Reference types alias instead of copy, so mutation is visible through every alias: the Lua/Python mental model with Rust syntax. If you don't know Rust, it's an afternoon read."
     code rust {
       filename = "game.wscript"
       source = <<'SRC'
@@ -84,7 +84,7 @@ page index { sites = [:wscript]  title = "Why wscript?"  start = true
             let p = Player { name: "wil", hp: 100 }
             let alias = p                  // reference semantics: same object
             alias.take_damage(30)
-            fs::write("game.log", fmt("hp: {}", p.hp))?   // p.hp == 70
+            fs::write("game.log", "hp: {p.hp}").unwrap() // p.hp == 70
             0
         }
         SRC
@@ -119,7 +119,7 @@ page index { sites = [:wscript]  title = "Why wscript?"  start = true
     }
     lp_feature "A capability-style standard library" {
       icon = "lucide.package"
-      body = "math, fs, process, and json/toml/xml over one shared `Value` type. Nothing is ambient: registering a module grants the capability, and each module is a Cargo feature gate."
+      body = "math, fs, process, time, regex, and json/toml/xml over one shared `Value` type. Nothing is ambient: registering a module grants the capability, and each module is a Cargo feature gate."
     }
     lp_feature "Complete tooling" {
       icon = "lucide.wrench"

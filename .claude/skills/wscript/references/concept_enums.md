@@ -14,7 +14,7 @@ enum Event {
 let e = Event::Click { x: 10, y: 20 }
 ```
 
-Construct a variant with `Enum::Variant`. Enums are consumed with [`match`](../references/concept_pattern_matching.md), which checks exhaustiveness at compile time. `Option[T]` and `Result[T, E]` are the two built-in enums.
+Construct a variant with `Enum::Variant`. Enums are consumed with [`match`](../references/concept_pattern_matching.md), which checks exhaustiveness at compile time. `Option[T]` and `Result[T, E]` are the two built-in enums. Enums take inherent `impl` blocks too — methods and associated functions (`Enum::helper(...)`); a variant with the same name wins over an associated function.
 
 ## Related
 

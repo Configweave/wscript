@@ -57,5 +57,27 @@ let on_key: wscript::ScriptFn<(KeyEvent,), bool> = unit.fn_handle("on_key")?;
 let quit = on_key.call(&mut vm, (key_event,))?;   // cheap thereafter
 SRC
     }
+    p "Generic script fns (`fn f[T]`) are not callable from the host — wrap them in a monomorphic script fn."
+    h2 "Script callbacks (host functions taking closures)"
+    p "A host function can receive a script closure and invoke it: declare a `ScriptClosure<Args, Ret>` parameter and take `&mut dyn HostCtx` as the *first* Rust parameter (it does not appear in the script-visible signature):"
+    code "rust" { source = <<'SRC'
+use wscript::{Fault, HostCtx, ScriptClosure};
+
+m.fn_(
+    "retry",
+    |ctx: &mut dyn HostCtx, cb: ScriptClosure<(i64,), bool>, times: i64| -> Fault<bool> {
+        for i in 0..times {
+            match cb.call(ctx, (i,)) {
+                Ok(true) => return Fault(Ok(true)),
+                Ok(false) => continue,
+                Err(e) => return Fault(Err(e)),   // propagate script faults
+            }
+        }
+        Fault(Ok(false))
+    },
+);
+SRC
+    }
+    p "Scripts see `fn retry(fn(int) -> bool, int) -> bool` — a mis-typed closure is a **compile-time** error like any other host signature misuse. Faults inside the callback arrive as a `HostError` carrying the callback's stack trace (propagate for one coherent trace, or match and recover); callback instructions draw fuel from the same tank; host→script re-entries nest at most `REENTRY_DEPTH_LIMIT` (32) deep, so mutual recursion faults trappably instead of overflowing the native stack."
   }
 }

@@ -13,7 +13,22 @@ is the language's defining property versus untyped embeddable languages.
 term::print_at("oops", 1, 2)   // COMPILE error with a span and help message
 ```
 
-There is no implicit numeric conversion and no truthiness (see [Values & Types](../references/concept_values.md)). Generics are not user-definable in v1 — only the built-in `List[T]` / `Map[K,V]` are generic.
+There is no implicit numeric conversion and no truthiness (see [Values & Types](../references/concept_values.md)).
+
+## Generic functions
+
+Top-level functions can declare type parameters, with the built-in bounds `Eq`, `Ord` and `Clone` (`Ord` implies `Eq`):
+
+```rust
+fn identity[T](x: T) -> T { x }
+fn max_of[T: Ord](a: T, b: T) -> T { if a > b { a } else { b } }
+fn dup[T: Clone](x: T) -> T { x.clone() }
+fn head[T](xs: List[T]) -> Option[T] { xs.first() }
+```
+
+Instantiation is inferred at the call site from argument types (and the expected type — `let xs: List[int] = empty_of()` works); there is no explicit `f[int](...)` syntax. Inside the body a `T` value supports moving, storing in containers, matching, `print`/`str`/interpolation, and whatever its bounds grant: `==` under `Eq`, comparisons (plus `sort`/`min`/`max`/`contains`) under `Ord`, `.clone()` under `Clone`. Everything else — arithmetic, field access, methods — needs a concrete type. Every type parameter must appear in the signature.
+
+Generics are \*erased\*: one compiled function serves all instantiations, so there is no code bloat and no host-visible monomorphization. The flip side: hosts cannot call generic fns directly — wrap them in a monomorphic fn. Generic structs/enums, methods and user-trait bounds are planned follow-ups; the built-in `List[T]` / `Map[K,V]` containers are special-cased.
 
 ## Related
 

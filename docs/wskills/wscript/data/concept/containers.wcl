@@ -4,7 +4,7 @@ concept containers {
   related  = [strings, control_flow, list_methods, map_methods]
   audience = :both
   body {
-    p "wscript ships two built-in, special-cased generic containers: `List[T]` and `Map[K, V]`. (User-defined generics do not exist in v1; these two are the exception.)"
+    p "wscript ships two built-in, special-cased generic containers: `List[T]` and `Map[K, V]`. (User-defined generic *types* do not exist — these two are special-cased; generic *functions* do, see [The Type System](concept_type_system).)"
     h2 "Lists"
     code "rust" { source = <<'SRC'
 let xs = [1, 2, 3]                 // List[int]

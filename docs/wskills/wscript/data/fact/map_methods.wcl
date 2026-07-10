@@ -1,5 +1,5 @@
 fact map_methods {
-  title    = "Map[K, V] methods"
+  title    = "Map methods"
   related  = [containers]
   audience = :both
   body {
@@ -10,7 +10,8 @@ fact map_methods {
         ["Size",       "`len` `is_empty` `clear`"],
         ["Add/remove", "`insert` `remove`"],
         ["Access",     "`get` (Option) `contains_key` `[k]` (faults if missing)"],
-        ["Iterate",    "`keys` `values`"],
+        ["Iterate",    "`keys` `values` `each(|k, v| …)`"],
+        ["Transform",  "`map(|k, v| …) -> List[U]` `filter(|k, v| …) -> Map[K, V]`"],
         ["Copy",       "`clone`"],
       ]
     }

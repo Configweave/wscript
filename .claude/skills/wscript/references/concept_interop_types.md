@@ -36,7 +36,7 @@ The script holds a reference to the live Rust value; `&mut` methods mutate it in
 
 > [!NOTE]
 > **Ambient types & registration**
-> Registered types are ambient in the script's type namespace — `use` only governs functions and constants. A type appearing only in a `ScriptFn` boundary still needs `Context::new().register_type::<KeyEvent>()`. `Shared<T>` is a host-side handle to a live script value; aliasing violations surface as `Err`, never panics.
+> Registered types are ambient in the script's type namespace — `use` only governs functions and constants. A type appearing only in a `ScriptFn` boundary still needs `Context::new().register_type::<KeyEvent>()`. `Shared<T>` is a host-side handle to a live script value; aliasing violations surface as `Err`, never panics. Functions cross too: `ScriptFn<Args, Ret>` is a typed host handle to a script fn, and `ScriptClosure<Args, Ret>` lets a host function receive a script closure — see [Embedding](../references/concept_embedding.md).
 
 ## Related
 

@@ -12,6 +12,7 @@ fact process_functions {
         ["`set_env`", "`(string, string)`"],
         ["`cwd`",     "`() -> Result[string, string]`"],
         ["`args`",    "`() -> List[string]` — arguments after the script path on the CLI"],
+        ["`exit`",    "`(int)` — terminate the script with an exit code (a trappable exit fault, not an error)"],
       ]
     }
     p "`Output` is `{ status: int, stdout: string, stderr: string }`."

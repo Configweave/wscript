@@ -2,7 +2,7 @@
 
 _Built-in List\[T\] and Map\[K, V\] with literal syntax and rich method sets._
 
-wscript ships two built-in, special-cased generic containers: `List[T]` and `Map[K, V]`. (User-defined generics do not exist in v1; these two are the exception.)
+wscript ships two built-in, special-cased generic containers: `List[T]` and `Map[K, V]`. (User-defined generic \*types\* do not exist — these two are special-cased; generic \*functions\* do, see [The Type System](../references/concept_type_system.md).)
 
 ## Lists
 
@@ -37,8 +37,8 @@ See [List methods](../references/fact_list_methods.md) and [Map methods](../refe
 
 - [Control Flow](../references/concept_control_flow.md)
 
-- \[List\[T\] methods\](fact_list_methods)
+- [List methods](../references/fact_list_methods.md)
 
-- \[Map\[K, V\] methods\](fact_map_methods)
+- [Map methods](../references/fact_map_methods.md)
 
 [← Back to SKILL.md](../SKILL.md)

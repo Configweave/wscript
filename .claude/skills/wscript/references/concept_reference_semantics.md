@@ -39,7 +39,7 @@ let copy = config.clone()  // deep copy — independent of the original
 
 - [Values & Types](../references/concept_values.md)
 
-- \[Memory: Reference Counting & weak\[T\]\](concept_memory)
+- [Memory: Reference Counting & weak references](../references/concept_memory.md)
 
 - [Structs & Methods](../references/concept_structs.md)
 
