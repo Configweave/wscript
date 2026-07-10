@@ -1273,7 +1273,32 @@ impl<'a> Checker<'a> {
                     }
                 }
                 if let Some(def) = self.enum_by_name(&first.name) {
+                    // Variants win over associated functions on a name
+                    // collision (documented).
+                    if self.variant_info(def, &second.name).is_some() {
+                        return self.check_variant_ctor(e, def, second, args);
+                    }
+                    if let Some(r) = self.check_assoc_call(e, callee, def, first, second, args) {
+                        return Some(r);
+                    }
+                    // Neither variant nor assoc fn: variant error (E0232).
                     return self.check_variant_ctor(e, def, second, args);
+                }
+                // Associated functions on structs: `Point::new(...)`.
+                if let Some(&def) = self.type_names.get(&first.name) {
+                    if let Some(r) = self.check_assoc_call(e, callee, def, first, second, args) {
+                        return Some(r);
+                    }
+                    let tname = first.name.clone();
+                    let fname = second.name.clone();
+                    self.error_help(
+                        "E0230",
+                        second.span,
+                        format!("type `{tname}` has no associated function `{fname}`"),
+                        "associated functions are `fn`s without `self` declared in an \
+                         inherent `impl` block",
+                    );
+                    return None;
                 }
                 if self.module_is_registered(&first.name) {
                     let name = first.name.clone();
@@ -1305,6 +1330,30 @@ impl<'a> Checker<'a> {
                 None
             }
         }
+    }
+
+    /// `Type::func(args)` — an associated function call, if one is
+    /// registered for `def` under that name.
+    fn check_assoc_call(
+        &mut self,
+        e: &Expr,
+        callee: &Expr,
+        def: DefId,
+        ty_name: &Ident,
+        fn_name: &Ident,
+        args: &[Expr],
+    ) -> Option<(CallKind, Type)> {
+        let &proto = self.assoc.get(&def)?.get(&fn_name.name)?;
+        let info = &self.out.fn_infos[proto as usize];
+        self.out.def_spans.insert(callee.id, info.span);
+        let sig = info.sig.clone();
+        self.check_args(
+            e.span,
+            &format!("`{}::{}`", ty_name.name, fn_name.name),
+            &sig.params,
+            args,
+        );
+        Some((CallKind::Proto(proto), sig.ret))
     }
 
     fn check_variant_ctor(

@@ -110,11 +110,18 @@ enum Event {
 }
 
 impl Player {
+    fn new(name: string) -> Player {          // associated function:
+        Player { name: name, hp: 100 }        // no self, called as
+    }                                         // Player::new("wil")
     fn heal(self, amount: int) {
-        self.hp = self.hp + amount
+        self.hp += amount
     }
 }
 ```
+
+Associated functions (no `self`) live in inherent `impl` blocks and are
+called `Type::func(...)` — the constructor idiom. On enums, a variant
+with the same name wins over an associated function.
 
 `self` is implicit in type and always by reference — there is no `&` in
 wscript at all.

@@ -328,6 +328,8 @@ pub struct Checker<'a> {
 
     // impls
     pub(crate) inherent: HashMap<DefId, HashMap<String, u32>>,
+    /// Associated functions (no-self fns in inherent impls): `Type::func`.
+    pub(crate) assoc: HashMap<DefId, HashMap<String, u32>>,
     /// (type, trait) → method protos in trait declaration order.
     pub(crate) trait_impls: HashMap<(DefId, DefId), Vec<u32>>,
     pub(crate) derives: HashMap<DefId, Derives>,
@@ -368,6 +370,7 @@ pub fn check(file: &SourceFile, registry: &Registry) -> CheckResult {
         modules_in_scope: HashMap::new(),
         imports: HashMap::new(),
         inherent: HashMap::new(),
+        assoc: HashMap::new(),
         trait_impls: HashMap::new(),
         derives: HashMap::new(),
         vtable_cache: HashMap::new(),
@@ -894,21 +897,25 @@ impl<'a> Checker<'a> {
         }
         let self_ty = Type::Named(ty_id);
 
-        // Allocate protos for every method in the block.
+        // Allocate protos for every method in the block. No-self fns in
+        // inherent impls are associated functions (`Type::func(...)`);
+        // trait impls still require `self` on every method.
         let mut method_protos: Vec<(String, u32, &FnDecl)> = Vec::new();
+        let mut assoc_protos: Vec<(String, u32, &FnDecl)> = Vec::new();
         for (fn_idx, f) in im.fns.iter().enumerate() {
-            if f.params.first().is_none_or(|p| !p.is_self) {
+            let has_self = f.params.first().is_some_and(|p| p.is_self);
+            if !has_self && im.trait_name.is_some() {
                 let span = f.name.span;
                 let msg = format!(
-                    "method `{}` must take `self` as its first parameter",
+                    "trait method `{}` must take `self` as its first parameter",
                     f.name.name
                 );
                 self.error_help(
                     "E0207",
                     span,
                     msg,
-                    "associated functions are not supported in v1; write a top-level fn \
-                     or add `self`",
+                    "trait impls provide methods only; associated functions go in an \
+                     inherent `impl` block",
                 );
                 continue;
             }
@@ -927,21 +934,58 @@ impl<'a> Checker<'a> {
                 span: f.sig_span,
                 pending: true,
             });
-            method_protos.push((f.name.name.clone(), proto, f));
+            if has_self {
+                method_protos.push((f.name.name.clone(), proto, f));
+            } else {
+                assoc_protos.push((f.name.name.clone(), proto, f));
+            }
         }
 
         match &im.trait_name {
             None => {
-                // Inherent impl.
-                let table = self.inherent.entry(ty_id).or_default();
+                // Inherent impl. Methods and associated functions share a
+                // namespace (like Rust) — duplicates across either are
+                // errors.
                 let mut dups = Vec::new();
-                for (name, proto, f) in &method_protos {
-                    if table.insert(name.clone(), *proto).is_some() {
-                        dups.push((f.name.span, name.clone()));
+                {
+                    let table = self.inherent.entry(ty_id).or_default();
+                    for (name, proto, f) in &method_protos {
+                        if table.insert(name.clone(), *proto).is_some() {
+                            dups.push((f.name.span, name.clone()));
+                        }
                     }
                 }
+                {
+                    let atable = self.assoc.entry(ty_id).or_default();
+                    for (name, proto, f) in &assoc_protos {
+                        if atable.insert(name.clone(), *proto).is_some() {
+                            dups.push((f.name.span, name.clone()));
+                        }
+                    }
+                }
+                let mut seen = HashSet::new();
+                let cross: Vec<(Span, String)> = assoc_protos
+                    .iter()
+                    .chain(method_protos.iter())
+                    .filter(|(name, ..)| {
+                        let in_both = self
+                            .inherent
+                            .get(&ty_id)
+                            .is_some_and(|t| t.contains_key(name))
+                            && self.assoc.get(&ty_id).is_some_and(|t| t.contains_key(name));
+                        in_both && seen.insert(name.clone())
+                    })
+                    .map(|(name, _, f)| (f.name.span, name.clone()))
+                    .collect();
                 for (span, name) in dups {
                     let msg = format!("duplicate method `{name}` for `{}`", im.ty_name.name);
+                    self.error("E0205", span, msg);
+                }
+                for (span, name) in cross {
+                    let msg = format!(
+                        "`{name}` is declared both with and without `self` for `{}`",
+                        im.ty_name.name
+                    );
                     self.error("E0205", span, msg);
                 }
             }
