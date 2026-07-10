@@ -7,3 +7,6 @@ license.workspace = true
 
 [dependencies]
 wscript-core.workspace = true
+
+[dev-dependencies]
+wscript-compiler.workspace = true

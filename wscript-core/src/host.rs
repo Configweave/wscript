@@ -39,7 +39,9 @@ impl std::error::Error for HostError {}
 /// Services the VM exposes to host functions while they run.
 pub trait HostCtx {
     fn defs(&self) -> &DefTable;
-    /// Render a value the way `print` would.
+    /// Render a value the way `print` would. Infallible: cyclic or
+    /// oversized values are truncated with a `…` marker (see
+    /// [`Value::display`]) rather than erroring.
     fn display_value(&self, v: &Value) -> String;
 }
 

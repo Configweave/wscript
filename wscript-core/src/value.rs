@@ -13,6 +13,24 @@ use std::rc::{Rc, Weak};
 use crate::bytecode::Const;
 use crate::defs::{DefId, DefKind, DefTable, VariantKind};
 
+/// Maximum structural nesting depth for the recursive value operations
+/// (equality, ordering, deep clone, display). Values are freely aliasable
+/// `Rc<RefCell<...>>` graphs, so scripts can build cyclic or arbitrarily
+/// deep data; the VM's structural ops fault past this depth instead of
+/// overflowing the native stack, and the infallible renderer truncates.
+///
+/// Sized so the deepest walk fits comfortably in a 2 MiB thread stack
+/// even in debug builds (the ops' native frames are several KiB there),
+/// mirroring Lua's C-call limit of the same order. 200 nesting levels is
+/// far beyond any sane script data.
+pub const MAX_VALUE_DEPTH: usize = 200;
+
+/// Output cap for the infallible [`Value::display`] renderer. Required in
+/// addition to the depth cap: a branching cycle (`a = [l, l]; l = [a, a]`)
+/// would otherwise do O(2^MAX_VALUE_DEPTH) work before every path hits the
+/// depth limit. Rendering stops with a `…` marker at this many bytes.
+pub const MAX_DISPLAY_BYTES: usize = 64 * 1024;
+
 /// A runtime value.
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -210,14 +228,26 @@ impl Value {
     /// Human-readable rendering used by `print`, `str()` and derived
     /// `Display` (debug-ish for structs/enums, PRD §3.8). Top-level strings
     /// render bare; strings nested in structures render quoted.
+    ///
+    /// Infallible by design (host boundary + REPL), so cyclic or oversized
+    /// values are *truncated* with a `…` marker rather than faulting: past
+    /// [`MAX_VALUE_DEPTH`] nesting levels or [`MAX_DISPLAY_BYTES`] of
+    /// output. The VM-side renderer (`print`/`str()` in scripts) faults on
+    /// too-deep values instead.
     pub fn display(&self, defs: &DefTable) -> String {
         let mut out = String::new();
-        self.fmt_into(defs, &mut out, false);
+        self.fmt_into(defs, &mut out, false, 0);
         out
     }
 
-    fn fmt_into(&self, defs: &DefTable, out: &mut String, nested: bool) {
+    fn fmt_into(&self, defs: &DefTable, out: &mut String, nested: bool, depth: usize) {
         use std::fmt::Write;
+        if depth >= MAX_VALUE_DEPTH || out.len() >= MAX_DISPLAY_BYTES {
+            if !out.ends_with('…') {
+                out.push('…');
+            }
+            return;
+        }
         match self {
             Value::Unit => out.push_str("()"),
             Value::Int(n) => {
@@ -250,22 +280,34 @@ impl Value {
             Value::List(items) => {
                 out.push('[');
                 for (i, v) in items.borrow().iter().enumerate() {
+                    if out.len() >= MAX_DISPLAY_BYTES {
+                        if !out.ends_with('…') {
+                            out.push('…');
+                        }
+                        break;
+                    }
                     if i > 0 {
                         out.push_str(", ");
                     }
-                    v.fmt_into(defs, out, true);
+                    v.fmt_into(defs, out, true, depth + 1);
                 }
                 out.push(']');
             }
             Value::Map(entries) => {
                 out.push_str("#{");
                 for (i, (k, v)) in entries.borrow().iter().enumerate() {
+                    if out.len() >= MAX_DISPLAY_BYTES {
+                        if !out.ends_with('…') {
+                            out.push('…');
+                        }
+                        break;
+                    }
                     if i > 0 {
                         out.push_str(", ");
                     }
-                    k.to_value().fmt_into(defs, out, true);
+                    k.to_value().fmt_into(defs, out, true, depth + 1);
                     out.push_str(": ");
-                    v.fmt_into(defs, out, true);
+                    v.fmt_into(defs, out, true, depth + 1);
                 }
                 out.push('}');
             }
@@ -284,6 +326,12 @@ impl Value {
                     .map(|sd| sd.fields.iter().map(|(n, _)| n.clone()).collect())
                     .unwrap_or_default();
                 for (i, v) in s.fields.borrow().iter().enumerate() {
+                    if out.len() >= MAX_DISPLAY_BYTES {
+                        if !out.ends_with('…') {
+                            out.push('…');
+                        }
+                        break;
+                    }
                     if i > 0 {
                         out.push_str(", ");
                     }
@@ -291,7 +339,7 @@ impl Value {
                         out.push_str(n);
                         out.push_str(": ");
                     }
-                    v.fmt_into(defs, out, true);
+                    v.fmt_into(defs, out, true, depth + 1);
                 }
                 out.push_str(" }");
             }
@@ -322,16 +370,28 @@ impl Value {
                     VariantKind::Tuple => {
                         out.push('(');
                         for (i, v) in fields.iter().enumerate() {
+                            if out.len() >= MAX_DISPLAY_BYTES {
+                                if !out.ends_with('…') {
+                                    out.push('…');
+                                }
+                                break;
+                            }
                             if i > 0 {
                                 out.push_str(", ");
                             }
-                            v.fmt_into(defs, out, true);
+                            v.fmt_into(defs, out, true, depth + 1);
                         }
                         out.push(')');
                     }
                     VariantKind::Struct => {
                         out.push_str(" { ");
                         for (i, v) in fields.iter().enumerate() {
+                            if out.len() >= MAX_DISPLAY_BYTES {
+                                if !out.ends_with('…') {
+                                    out.push('…');
+                                }
+                                break;
+                            }
                             if i > 0 {
                                 out.push_str(", ");
                             }
@@ -339,7 +399,7 @@ impl Value {
                                 out.push_str(n);
                                 out.push_str(": ");
                             }
-                            v.fmt_into(defs, out, true);
+                            v.fmt_into(defs, out, true, depth + 1);
                         }
                         out.push_str(" }");
                     }
@@ -351,9 +411,9 @@ impl Value {
             Value::Opaque(o) => {
                 let _ = write!(out, "<{}>", defs.name_of(o.def));
             }
-            Value::Dyn(d) => d.inner.fmt_into(defs, out, nested),
+            Value::Dyn(d) => d.inner.fmt_into(defs, out, nested, depth + 1),
             Value::WeakRef(_) => out.push_str("<weak>"),
-            Value::Cell(c) => c.borrow().fmt_into(defs, out, nested),
+            Value::Cell(c) => c.borrow().fmt_into(defs, out, nested, depth + 1),
         }
     }
 
@@ -376,5 +436,96 @@ impl Value {
             Value::WeakRef(_) => "weak",
             Value::Cell(_) => "cell",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn defs() -> DefTable {
+        DefTable::default()
+    }
+
+    /// `l = [l]` — a self-containing list.
+    fn cyclic_list() -> Value {
+        let l = Value::new_list(vec![]);
+        if let Value::List(rc) = &l {
+            rc.borrow_mut().push(l.clone());
+        }
+        l
+    }
+
+    #[test]
+    fn display_primitives() {
+        let d = defs();
+        assert_eq!(Value::Int(42).display(&d), "42");
+        assert_eq!(Value::Float(1.0).display(&d), "1.0");
+        assert_eq!(Value::Float(1.5).display(&d), "1.5");
+        assert_eq!(Value::Bool(true).display(&d), "true");
+        assert_eq!(Value::Unit.display(&d), "()");
+        // Top-level strings render bare; nested ones quoted.
+        assert_eq!(Value::Str(Rc::from("hi")).display(&d), "hi");
+        let list = Value::new_list(vec![Value::Str(Rc::from("hi")), Value::Char('a')]);
+        assert_eq!(list.display(&d), r#"["hi", 'a']"#);
+    }
+
+    #[test]
+    fn display_cyclic_list_truncates_finitely() {
+        let out = cyclic_list().display(&defs());
+        assert!(out.contains('…'), "missing truncation marker: {out}");
+        // Depth cap × small per-level overhead, plus the size-cap slack.
+        assert!(out.len() <= MAX_DISPLAY_BYTES + 4 * MAX_VALUE_DEPTH);
+    }
+
+    #[test]
+    fn display_branching_cycle_bounded() {
+        // a = [l, l]; l = [a, a] — exponential paths without the size cap.
+        let a = Value::new_list(vec![]);
+        let l = Value::new_list(vec![a.clone(), a.clone()]);
+        if let Value::List(rc) = &a {
+            rc.borrow_mut().push(l.clone());
+            rc.borrow_mut().push(l.clone());
+        }
+        let start = std::time::Instant::now();
+        let out = a.display(&defs());
+        assert!(out.contains('…'));
+        assert!(out.len() <= MAX_DISPLAY_BYTES + 4 * MAX_VALUE_DEPTH);
+        // The size cap bounds total work; without it this would never
+        // finish. Generous wall-clock guard against regressions.
+        assert!(start.elapsed().as_secs() < 10);
+    }
+
+    #[test]
+    fn key_from_value_roundtrip() {
+        for v in [
+            Value::Int(7),
+            Value::Bool(false),
+            Value::Char('x'),
+            Value::Str(Rc::from("k")),
+        ] {
+            let k = Key::from_value(&v).unwrap();
+            assert!(k.to_value().same(&v));
+        }
+        assert!(Key::from_value(&Value::new_list(vec![])).is_none());
+    }
+
+    #[test]
+    fn same_is_identity_for_refs_value_for_prims() {
+        let a = Value::new_list(vec![Value::Int(1)]);
+        let alias = a.clone();
+        let twin = Value::new_list(vec![Value::Int(1)]);
+        assert!(a.same(&alias));
+        assert!(!a.same(&twin));
+        assert!(Value::Int(1).same(&Value::Int(1)));
+    }
+
+    #[test]
+    fn weak_upgrade_lifecycle() {
+        let strong = Value::new_list(vec![Value::Int(1)]);
+        let weak = strong.downgrade().unwrap();
+        assert!(weak.upgrade().is_some());
+        drop(strong);
+        assert!(weak.upgrade().is_none());
     }
 }

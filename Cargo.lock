@@ -1882,6 +1882,7 @@ dependencies = [
 name = "wscript-vm"
 version = "0.2.0"
 dependencies = [
+ "wscript-compiler",
  "wscript-core",
 ]
 
