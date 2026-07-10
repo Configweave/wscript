@@ -196,6 +196,29 @@ impl Vm {
         self.inner.call_depth_limit()
     }
 
+    /// Set the fuel tank. `Some(n)`: subsequent execution may dispatch at
+    /// most `n` bytecode instructions before faulting with a trappable
+    /// "fuel exhausted" runtime error — set it to bound runaway scripts
+    /// (`loop { }`) deterministically. Every instruction costs 1 fuel; a
+    /// host call costs 1 for the dispatch, what the host function does
+    /// internally is not metered. The tank belongs to the `Vm` and
+    /// depletes across calls until set again — set it before each call
+    /// for a per-call budget, or once per tick for a shared one.
+    /// Accounting is exact but charged at control-transfer points
+    /// (jumps, calls, returns), so exhaustion surfaces at the end of
+    /// the current straight-line run of instructions — never past a
+    /// host call or a loop iteration. `None` (the default): execution
+    /// is unmetered.
+    pub fn set_fuel(&mut self, fuel: Option<u64>) {
+        self.inner.set_fuel(fuel);
+    }
+
+    /// Remaining fuel, or `None` if unmetered. Reading it after a
+    /// successful call tells you what the call cost.
+    pub fn fuel(&self) -> Option<u64> {
+        self.inner.fuel()
+    }
+
     /// One-shot typed call (PRD §6.4): converts arguments, checks the
     /// script function's signature at the boundary, runs, converts the
     /// result.

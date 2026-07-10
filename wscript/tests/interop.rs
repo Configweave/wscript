@@ -496,3 +496,166 @@ fn call_depth_limit_is_configurable() {
     let ok: i64 = vm.call_unit(&unit, "main", (100_i64,)).unwrap();
     assert_eq!(ok, 0);
 }
+
+// ------------------------------------------------------------------ fuel
+
+#[test]
+fn fuel_exhaustion_faults_with_trace() {
+    let ctx = Context::new();
+    let unit = ctx
+        .compile(
+            "fn spin() -> int { loop { } }\n\
+             fn main() -> int { spin() }",
+        )
+        .unwrap();
+    let mut vm = Vm::new(&ctx);
+    vm.set_fuel(Some(1_000));
+    let err = match vm.call_values(&unit, "main", vec![]) {
+        Err(Error::Runtime(e)) => e,
+        other => panic!("expected fuel exhaustion, got {other:?}"),
+    };
+    assert!(
+        err.message.contains("fuel exhausted"),
+        "unexpected message: {}",
+        err.message
+    );
+    let names: Vec<&str> = err.trace.iter().map(|f| f.function.as_str()).collect();
+    assert_eq!(names, ["spin", "main"]);
+    assert!(err.span.is_some());
+    assert_eq!(err.span, err.trace[0].span);
+    assert_eq!(vm.fuel(), Some(0));
+}
+
+#[test]
+fn fuel_exact_budget() {
+    // Golden instruction count for a fixed script — doubles as a
+    // bytecode-stability canary: if codegen changes, update K.
+    const K: u64 = 4;
+    let ctx = Context::new();
+    let unit = ctx.compile("fn main() -> int { 1 + 2 }").unwrap();
+    let mut vm = Vm::new(&ctx);
+
+    // Measure the cost against a generous tank and pin it.
+    vm.set_fuel(Some(1_000));
+    let ok: i64 = vm.call_unit(&unit, "main", ()).unwrap();
+    assert_eq!(ok, 3);
+    assert_eq!(vm.fuel(), Some(1_000 - K), "golden instruction count moved");
+
+    // Exactly K fuel succeeds and leaves an empty tank...
+    vm.set_fuel(Some(K));
+    let ok: i64 = vm.call_unit(&unit, "main", ()).unwrap();
+    assert_eq!(ok, 3);
+    assert_eq!(vm.fuel(), Some(0));
+
+    // ...and K - 1 faults.
+    vm.set_fuel(Some(K - 1));
+    let err = vm.call_unit::<_, i64>(&unit, "main", ()).unwrap_err();
+    assert!(err.to_string().contains("fuel exhausted"), "{err}");
+}
+
+#[test]
+fn fuel_zero_faults_before_any_call_completes() {
+    let ctx = Context::new();
+    let unit = ctx.compile("fn main() -> int { 0 }").unwrap();
+    let mut vm = Vm::new(&ctx);
+    vm.set_fuel(Some(0));
+    let err = vm.call_unit::<_, i64>(&unit, "main", ()).unwrap_err();
+    assert!(err.to_string().contains("fuel exhausted"), "{err}");
+}
+
+#[test]
+fn fuel_default_is_unmetered() {
+    let ctx = Context::new();
+    let unit = ctx
+        .compile(
+            "fn main() -> int {\n\
+                 let total = 0\n\
+                 for i in 0..1000000 { total = total + 1 }\n\
+                 total\n\
+             }",
+        )
+        .unwrap();
+    let mut vm = Vm::new(&ctx);
+    assert_eq!(vm.fuel(), None);
+    let n: i64 = vm.call_unit(&unit, "main", ()).unwrap();
+    assert_eq!(n, 1_000_000);
+    assert_eq!(vm.fuel(), None);
+}
+
+#[test]
+fn fuel_depletes_across_calls() {
+    // The tank belongs to the Vm, not to a call: host→script re-entry
+    // (repeated ScriptFn calls) draws from the same budget until the
+    // host sets it again.
+    let ctx = Context::new();
+    let unit = ctx
+        .compile("fn add(a: int, b: int) -> int { a + b }\nfn main() {}")
+        .unwrap();
+    let mut vm = Vm::new(&ctx);
+    let add: wscript::ScriptFn<(i64, i64), i64> = unit.fn_handle("add").unwrap();
+
+    vm.set_fuel(Some(1_000));
+    assert_eq!(add.call(&mut vm, (1, 2)).unwrap(), 3);
+    let after_one = vm.fuel().unwrap();
+    assert!(after_one < 1_000);
+    assert_eq!(add.call(&mut vm, (3, 4)).unwrap(), 7);
+    let after_two = vm.fuel().unwrap();
+    assert_eq!(1_000 - after_one, after_one - after_two);
+
+    // A tank sized for one call exhausts on the second.
+    let cost = 1_000 - after_one;
+    vm.set_fuel(Some(cost + cost - 1));
+    assert_eq!(add.call(&mut vm, (5, 6)).unwrap(), 11);
+    let err = add.call(&mut vm, (7, 8)).unwrap_err();
+    assert!(err.to_string().contains("fuel exhausted"), "{err}");
+}
+
+#[test]
+fn fuel_fault_is_not_script_observable() {
+    // Exhaustion is a VM fault, not a script-level Err: a script cannot
+    // catch its way past its budget with Result/match.
+    let ctx = Context::new();
+    let unit = ctx
+        .compile(
+            "fn spin() -> Result[int, string] { loop { } }\n\
+             fn main() -> int {\n\
+                 match spin() {\n\
+                     Ok(n) => n,\n\
+                     Err(e) => -1,\n\
+                 }\n\
+             }",
+        )
+        .unwrap();
+    let mut vm = Vm::new(&ctx);
+    vm.set_fuel(Some(1_000));
+    let err = vm.call_unit::<_, i64>(&unit, "main", ()).unwrap_err();
+    assert!(err.to_string().contains("fuel exhausted"), "{err}");
+}
+
+#[test]
+fn vm_is_reusable_after_fuel_exhaustion() {
+    let ctx = Context::new();
+    let unit = ctx
+        .compile(
+            "fn spin() -> int { loop { } }\n\
+             fn burn() -> int { spin() }\n\
+             fn add(a: int, b: int) -> int { a + b }\n\
+             fn main() {}",
+        )
+        .unwrap();
+    let mut vm = Vm::new(&ctx);
+
+    vm.set_fuel(Some(500));
+    let err = vm.call_unit::<_, i64>(&unit, "burn", ()).unwrap_err();
+    assert!(err.to_string().contains("fuel exhausted"), "{err}");
+
+    // Refuelled, the same Vm works as after any other fault...
+    vm.set_fuel(Some(1_000));
+    let n: i64 = vm.call_unit(&unit, "add", (20_i64, 22_i64)).unwrap();
+    assert_eq!(n, 42);
+
+    // ...and unmetered again with None.
+    vm.set_fuel(None);
+    let n: i64 = vm.call_unit(&unit, "add", (1_i64, 2_i64)).unwrap();
+    assert_eq!(n, 3);
+}

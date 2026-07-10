@@ -205,6 +205,7 @@ impl Damageable for Point {
 - Call convention supports host calls and script calls uniformly; `ScriptFn` handles (§6.4) resolve to a function index once.
 - Values: a `Value` enum with inline primitives and Rc payloads for reference types. NaN-boxing is an *optional* optimization — do not start there; start with a plain enum and benchmark later.
 - Bytecode format is **internal and unstable** in v1 (no serialization guarantee). Design the instruction set in its own module with docs, since it will be revisited.
+- Optional deterministic **fuel metering**: `Vm::set_fuel(Some(n))` budgets execution at 1 fuel per dispatched instruction; exhaustion is an ordinary trappable fault ("fuel exhausted"). Unset (default) execution is unmetered.
 
 ---
 

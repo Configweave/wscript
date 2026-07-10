@@ -12,17 +12,17 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 
 [workspace.dependencies]
-wscript-core = { path = "wscript-core", version = "0.1.0" }
-wscript-compiler = { path = "wscript-compiler", version = "0.1.0" }
-wscript-vm = { path = "wscript-vm", version = "0.1.0" }
-wscript-std = { path = "wscript-std", version = "0.1.0" }
-wscript-macros = { path = "wscript-macros", version = "0.1.0" }
-wscript = { path = "wscript", version = "0.1.0" }
+wscript-core = { path = "wscript-core", version = "0.2.0" }
+wscript-compiler = { path = "wscript-compiler", version = "0.2.0" }
+wscript-vm = { path = "wscript-vm", version = "0.2.0" }
+wscript-std = { path = "wscript-std", version = "0.2.0" }
+wscript-macros = { path = "wscript-macros", version = "0.2.0" }
+wscript = { path = "wscript", version = "0.2.0" }
 
 [profile.release]
 lto = "thin"

@@ -136,6 +136,8 @@ pub struct Vm {
     frames: Vec<Frame>,
     /// Recursion guard; see [`Vm::set_call_depth_limit`].
     depth_limit: usize,
+    /// Execution budget; see [`Vm::set_fuel`]. `None` means unmetered.
+    fuel: Option<u64>,
 }
 
 /// Default script call-depth limit (frames, not bytes — script frames
@@ -152,6 +154,7 @@ impl Vm {
             stack: Vec::new(),
             frames: Vec::new(),
             depth_limit: DEFAULT_CALL_DEPTH_LIMIT,
+            fuel: None,
         }
     }
 
@@ -166,6 +169,28 @@ impl Vm {
     /// The current script call-depth limit.
     pub fn call_depth_limit(&self) -> usize {
         self.depth_limit
+    }
+
+    /// Set the fuel tank. `Some(n)`: subsequent execution may dispatch at
+    /// most `n` instructions (1 instruction = 1 fuel, uniformly; a host
+    /// call costs 1 for the dispatch, what the host function does
+    /// internally is not metered) before faulting with a trappable
+    /// "fuel exhausted" [`RuntimeError`]. `None` (the default): execution
+    /// is unmetered. The tank belongs to the `Vm` and depletes across
+    /// calls until set again. Accounting is exact but charged at
+    /// control-transfer points (jumps, calls, returns), so exhaustion —
+    /// including the `Some(0)` edge — surfaces at the end of the current
+    /// straight-line run of instructions: never past a host call or a
+    /// loop iteration.
+    pub fn set_fuel(&mut self, fuel: Option<u64>) {
+        self.fuel = fuel;
+    }
+
+    /// Remaining fuel, or `None` if unmetered. Exact after a successful
+    /// call and after exhaustion (0); a call that ends in some *other*
+    /// fault leaves its final straight-line run uncharged.
+    pub fn fuel(&self) -> Option<u64> {
+        self.fuel
     }
 
     /// Load (or find the cached copy of) a compiled unit.
@@ -324,6 +349,33 @@ impl Vm {
     // --------------------------------------------------------- dispatch
 
     fn execute(&mut self, entry_depth: usize) -> Result<Value, RuntimeError> {
+        // Monomorphized dispatch: the unmetered loop carries no fuel
+        // bookkeeping at all, and the metered loop charges fuel in
+        // straight-line blocks rather than per instruction (the
+        // benchmark gate for this feature was ≤2% unmetered / ≤5%
+        // metered; a per-instruction check blew both). The tank lives
+        // in a local the optimizer can hold in a register; it syncs
+        // with `self.fuel` around builtin calls, the one dispatch arm
+        // that re-enters a nested `execute` loop (closures via
+        // map/filter, custom eq/cmp/display impls). Sound because
+        // nothing can set fuel mid-execution — host functions only see
+        // `HostCtx`, not `&mut Vm`.
+        match self.fuel {
+            Some(tank) => {
+                let mut fuel = tank;
+                let result = self.execute_impl::<true>(entry_depth, &mut fuel);
+                self.fuel = Some(fuel);
+                result
+            }
+            None => self.execute_impl::<false>(entry_depth, &mut 0),
+        }
+    }
+
+    fn execute_impl<const METERED: bool>(
+        &mut self,
+        entry_depth: usize,
+        fuel: &mut u64,
+    ) -> Result<Value, RuntimeError> {
         macro_rules! reg {
             ($base:expr, $r:expr) => {
                 self.stack[$base + $r as usize]
@@ -372,6 +424,30 @@ impl Vm {
                             other.kind_name()
                         )));
                     }
+                }
+            };
+        }
+
+        // Fuel accounting (METERED only): 1 instruction = 1 fuel, exact,
+        // but charged in straight-line blocks — `block_start` marks the
+        // pc where the current uncharged run began, and every arm that
+        // transfers control (taken jumps, calls, returns) charges the
+        // run's length before doing so, then resets `block_start`.
+        // Straight-line dispatch therefore carries zero fuel overhead.
+        // Exhaustion surfaces at the charge point: up to one basic block
+        // may run past the budget, but never a host call or a loop
+        // iteration. Faults abandon their block uncharged — `fuel()` is
+        // specified after successful calls and after exhaustion (0).
+        let mut block_start = self.frames.last().unwrap().pc;
+        macro_rules! charge {
+            () => {
+                if METERED {
+                    let ran = (self.frames.last().unwrap().pc - block_start) as u64;
+                    let Some(rest) = fuel.checked_sub(ran) else {
+                        *fuel = 0;
+                        return Err(self.fault("fuel exhausted"));
+                    };
+                    *fuel = rest;
                 }
             };
         }
@@ -500,19 +576,25 @@ impl Vm {
                 }
 
                 Instr::Jump { off } => {
+                    charge!();
                     let frame = self.frames.last_mut().unwrap();
                     frame.pc = (frame.pc as i64 + off as i64) as usize;
+                    block_start = frame.pc;
                 }
                 Instr::JumpIfFalse { cond, off } => {
                     if !boolean!(base, cond) {
+                        charge!();
                         let frame = self.frames.last_mut().unwrap();
                         frame.pc = (frame.pc as i64 + off as i64) as usize;
+                        block_start = frame.pc;
                     }
                 }
                 Instr::JumpIfTrue { cond, off } => {
                     if boolean!(base, cond) {
+                        charge!();
                         let frame = self.frames.last_mut().unwrap();
                         frame.pc = (frame.pc as i64 + off as i64) as usize;
+                        block_start = frame.pc;
                     }
                 }
 
@@ -522,12 +604,15 @@ impl Vm {
                     nargs,
                     target,
                 } => {
+                    charge!();
                     let args_at = base + abase as usize;
                     match target {
                         CallTarget::Proto(p) => {
                             self.push_call(p, args_at, nargs, base + dst as usize, None)?;
+                            block_start = 0;
                         }
                         CallTarget::Host(h) => {
+                            block_start = self.frames.last().unwrap().pc;
                             let args: Vec<Value> = (0..nargs as usize)
                                 .map(|i| self.stack[args_at + i].clone())
                                 .collect();
@@ -542,8 +627,19 @@ impl Vm {
                             }
                         }
                         CallTarget::Builtin(b) => {
-                            let v = self.call_builtin(b, args_at, nargs)?;
-                            reg!(base, dst) = v;
+                            block_start = self.frames.last().unwrap().pc;
+                            // Builtins may re-enter a nested dispatch
+                            // loop, which draws from `self.fuel` — sync
+                            // the local tank across the call (also on
+                            // Err, so the caller's write-back is right).
+                            if METERED {
+                                self.fuel = Some(*fuel);
+                            }
+                            let r = self.call_builtin(b, args_at, nargs);
+                            if METERED {
+                                *fuel = self.fuel.unwrap_or(0);
+                            }
+                            reg!(base, dst) = r?;
                         }
                     }
                 }
@@ -553,6 +649,7 @@ impl Vm {
                     base: abase,
                     nargs,
                 } => {
+                    charge!();
                     let callee = reg!(base, f).clone();
                     match callee {
                         Value::Closure(c) => {
@@ -563,6 +660,7 @@ impl Vm {
                                 base + dst as usize,
                                 Some(c),
                             )?;
+                            block_start = 0;
                         }
                         other => {
                             return Err(
@@ -577,6 +675,7 @@ impl Vm {
                     nargs,
                     slot,
                 } => {
+                    charge!();
                     let args_at = base + abase as usize;
                     let recv = self.stack[args_at].clone();
                     let Value::Dyn(d) = recv else {
@@ -593,22 +692,27 @@ impl Vm {
                     // Unwrap the receiver for the concrete method.
                     self.stack[args_at] = d.inner.clone();
                     self.push_call(p, args_at, nargs, base + dst as usize, None)?;
+                    block_start = 0;
                 }
                 Instr::Ret { src } => {
+                    charge!();
                     let v = reg!(base, src).clone();
                     let frame = self.frames.pop().unwrap();
                     self.stack.truncate(frame.base);
                     if self.frames.len() == entry_depth {
                         return Ok(v);
                     }
+                    block_start = self.frames.last().unwrap().pc;
                     self.stack[frame.ret_slot] = v;
                 }
                 Instr::RetUnit => {
+                    charge!();
                     let frame = self.frames.pop().unwrap();
                     self.stack.truncate(frame.base);
                     if self.frames.len() == entry_depth {
                         return Ok(Value::Unit);
                     }
+                    block_start = self.frames.last().unwrap().pc;
                     self.stack[frame.ret_slot] = Value::Unit;
                 }
 

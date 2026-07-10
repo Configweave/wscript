@@ -158,19 +158,35 @@ code never observes a Rust panic.
 
 ## Resource limits
 
-Two limits are enforced, one is deliberately not:
+Three limits are enforced, one is deliberately not:
 
 - **Call depth.** Script recursion faults ("stack overflow") past a
   per-VM limit — default 10,000 frames, tune it with
   `vm.set_call_depth_limit(n)`. Frames live on a heap-allocated register
   stack, so the limit counts calls, not thread-stack bytes.
+- **Fuel.** `vm.set_fuel(Some(n))` gives the VM an execution budget:
+  every dispatched instruction costs 1 fuel (a host call costs 1 for the
+  dispatch; what the host function does internally is not metered), and
+  running dry faults ("fuel exhausted") with the usual span and stack
+  trace. Fuel counts instructions, not time, so exhaustion is
+  deterministic across machines. Accounting is exact but charged at
+  control-transfer points (jumps, calls, returns), so the fault lands at
+  the end of the current straight-line run of instructions — never past
+  a host call or a loop iteration. The tank belongs to the `Vm` and
+  depletes across calls until you set it again — set it before each call
+  for a per-call budget, or once per tick for a shared one. `vm.fuel()`
+  reads the remainder (what a call cost is `before - after`);
+  `set_fuel(None)` (the default) runs unmetered. A possible follow-up is
+  letting host functions charge fuel for expensive operations via
+  `HostCtx`; today host-op cost is host-side only.
 - **Nesting.** The compiler rejects pathologically nested/chained source
   (E0114/E0271) long before it could exhaust the compile stack.
 - **Memory is not limited.** A script can allocate until the allocator
   refuses (`let mut l = []` + a hot `push` loop will get there). If you
   run untrusted scripts and OOM matters, sandbox at the process level
   (cgroups, job objects, a worker process) — the VM does not meter
-  allocations.
+  allocations. (Fuel indirectly caps the allocation *rate* per budget,
+  which is often the practical concern.)
 
 ## Threading
 
