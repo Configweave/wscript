@@ -198,7 +198,7 @@ fn render_expr(e: &Expr, out: &mut String, depth: usize) {
             render_expr(lhs, out, depth + 1);
             render_expr(rhs, out, depth + 1);
         }
-        ExprKind::Assign { target, value } => {
+        ExprKind::Assign { target, value, .. } => {
             out.push_str("assign\n");
             render_expr(target, out, depth + 1);
             render_expr(value, out, depth + 1);

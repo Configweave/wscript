@@ -151,7 +151,7 @@ fn expr_index(file: &ast::SourceFile) -> Vec<(wscript::Span, ast::NodeId)> {
                 stack.push(Work::E(lhs));
                 stack.push(Work::E(rhs));
             }
-            Assign { target, value } => {
+            Assign { target, value, .. } => {
                 stack.push(Work::E(target));
                 stack.push(Work::E(value));
             }

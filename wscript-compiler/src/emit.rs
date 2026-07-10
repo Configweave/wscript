@@ -226,7 +226,7 @@ fn find_closure(file: &SourceFile, node: NodeId) -> Option<(usize, &Expr)> {
                 ExprKind::Binary { lhs, rhs, .. } => {
                     self.in_expr(lhs).or_else(|| self.in_expr(rhs))
                 }
-                ExprKind::Assign { target, value } => {
+                ExprKind::Assign { target, value, .. } => {
                     self.in_expr(target).or_else(|| self.in_expr(value))
                 }
                 ExprKind::Call { callee, args } => self
@@ -526,8 +526,8 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
             ExprKind::Path(_) => self.emit_path(e, dst),
             ExprKind::Unary { expr, .. } => self.emit_unary(e, expr, dst),
             ExprKind::Binary { lhs, rhs, .. } => self.emit_binary(e, lhs, rhs, dst),
-            ExprKind::Assign { target, value } => {
-                self.emit_assign(target, value);
+            ExprKind::Assign { target, value, op } => {
+                self.emit_assign(e, target, value, op.is_some());
                 self.push(Instr::LoadUnit { dst });
             }
             ExprKind::Call { callee, args } => self.emit_call(e, callee, args, dst),
@@ -1007,28 +1007,63 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
         self.push(i);
     }
 
-    fn emit_assign(&mut self, target: &Expr, value: &Expr) {
+    fn emit_assign(&mut self, e: &Expr, target: &Expr, value: &Expr, compound: bool) {
+        // Compound assignment: the checker recorded the operator lowering
+        // under the Assign node's id. The place is evaluated ONCE — read
+        // current value, apply the operator, write back.
+        let arith = if compound {
+            self.em.res.bin_ops.get(&e.id).cloned()
+        } else {
+            None
+        };
+        if compound && arith.is_none() {
+            // Checker rejected the operator; evaluate for effects.
+            let tmp = self.alloc_temp();
+            self.emit_into(value, tmp);
+            return;
+        }
         match &target.kind {
             ExprKind::Path(_) => match self.em.res.var_refs.get(&target.id) {
                 Some(VarRes::Local(l)) => {
                     let l = *l;
                     let reg = self.local_reg(l);
                     if self.captured.contains(&l) {
-                        let tmp = self.alloc_temp();
-                        self.emit_into(value, tmp);
+                        let cur = self.alloc_temp();
+                        if let Some(kind) = &arith {
+                            self.push(Instr::CellGet {
+                                dst: cur,
+                                cell: reg,
+                            });
+                            let tmp = self.alloc_temp();
+                            self.emit_into(value, tmp);
+                            self.emit_arith_kind(kind, cur, tmp, cur);
+                        } else {
+                            self.emit_into(value, cur);
+                        }
                         self.push(Instr::CellSet {
                             cell: reg,
-                            src: tmp,
+                            src: cur,
                         });
+                    } else if let Some(kind) = &arith {
+                        let tmp = self.alloc_temp();
+                        self.emit_into(value, tmp);
+                        self.emit_arith_kind(kind, reg, tmp, reg);
                     } else {
                         self.emit_into(value, reg);
                     }
                 }
                 Some(VarRes::Capture(slot)) => {
                     let cell = self.cap_reg(*slot);
-                    let tmp = self.alloc_temp();
-                    self.emit_into(value, tmp);
-                    self.push(Instr::CellSet { cell, src: tmp });
+                    let cur = self.alloc_temp();
+                    if let Some(kind) = &arith {
+                        self.push(Instr::CellGet { dst: cur, cell });
+                        let tmp = self.alloc_temp();
+                        self.emit_into(value, tmp);
+                        self.emit_arith_kind(kind, cur, tmp, cur);
+                    } else {
+                        self.emit_into(value, cur);
+                    }
+                    self.push(Instr::CellSet { cell, src: cur });
                 }
                 None => {
                     let tmp = self.alloc_temp();
@@ -1037,34 +1072,74 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
             },
             ExprKind::Field { obj, .. } => {
                 let o = self.emit_value(obj);
-                let tmp = self.alloc_temp();
-                self.emit_into(value, tmp);
                 let idx = *self.em.res.fields.get(&target.id).unwrap_or(&0);
-                self.push(Instr::SetField {
-                    obj: o,
-                    idx,
-                    src: tmp,
-                });
+                let tmp = self.alloc_temp();
+                if let Some(kind) = &arith {
+                    let cur = self.alloc_temp();
+                    self.push(Instr::GetField {
+                        dst: cur,
+                        obj: o,
+                        idx,
+                    });
+                    self.emit_into(value, tmp);
+                    self.emit_arith_kind(kind, cur, tmp, cur);
+                    self.push(Instr::SetField {
+                        obj: o,
+                        idx,
+                        src: cur,
+                    });
+                } else {
+                    self.emit_into(value, tmp);
+                    self.push(Instr::SetField {
+                        obj: o,
+                        idx,
+                        src: tmp,
+                    });
+                }
             }
             ExprKind::Index { obj, idx } => {
-                let kind = self.em.res.indexes.get(&target.id).cloned();
+                let index_kind = self.em.res.indexes.get(&target.id).cloned();
                 let o = self.emit_value(obj);
                 let i = self.emit_value(idx);
                 let tmp = self.alloc_temp();
-                self.emit_into(value, tmp);
-                match kind {
+                let src = if let Some(kind) = &arith {
+                    let cur = self.alloc_temp();
+                    match index_kind {
+                        Some(IndexKind::Map) => {
+                            self.push(Instr::MapIndexGet {
+                                dst: cur,
+                                map: o,
+                                key: i,
+                            });
+                        }
+                        _ => {
+                            self.push(Instr::ListIndexGet {
+                                dst: cur,
+                                list: o,
+                                idx: i,
+                            });
+                        }
+                    }
+                    self.emit_into(value, tmp);
+                    self.emit_arith_kind(kind, cur, tmp, cur);
+                    cur
+                } else {
+                    self.emit_into(value, tmp);
+                    tmp
+                };
+                match index_kind {
                     Some(IndexKind::Map) => {
                         self.push(Instr::MapIndexSet {
                             map: o,
                             key: i,
-                            src: tmp,
+                            src,
                         });
                     }
                     _ => {
                         self.push(Instr::ListIndexSet {
                             list: o,
                             idx: i,
-                            src: tmp,
+                            src,
                         });
                     }
                 }
@@ -1073,6 +1148,55 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
                 // Checker rejected; evaluate for effects.
                 let tmp = self.alloc_temp();
                 self.emit_into(value, tmp);
+            }
+        }
+    }
+
+    /// Emit `dst = a <op> b` for an arithmetic lowering the checker
+    /// recorded (compound assignment read-modify-write).
+    fn emit_arith_kind(&mut self, kind: &BinOpKind, a: u16, b: u16, dst: u16) {
+        use crate::ast::BinOp as B;
+        match kind {
+            BinOpKind::IntArith(op) => {
+                let i = match op {
+                    B::Add => Instr::AddI { dst, a, b },
+                    B::Sub => Instr::SubI { dst, a, b },
+                    B::Mul => Instr::MulI { dst, a, b },
+                    B::Div => Instr::DivI { dst, a, b },
+                    _ => Instr::RemI { dst, a, b },
+                };
+                self.push(i);
+            }
+            BinOpKind::FloatArith(op) => {
+                let i = match op {
+                    B::Add => Instr::AddF { dst, a, b },
+                    B::Sub => Instr::SubF { dst, a, b },
+                    B::Mul => Instr::MulF { dst, a, b },
+                    B::Div => Instr::DivF { dst, a, b },
+                    _ => Instr::RemF { dst, a, b },
+                };
+                self.push(i);
+            }
+            BinOpKind::Concat => {
+                self.push(Instr::ConcatStr { dst, a, b });
+            }
+            BinOpKind::ArithCall { proto } => {
+                let base = self.alloc_window(2);
+                self.push(Instr::Move { dst: base, src: a });
+                self.push(Instr::Move {
+                    dst: base + 1,
+                    src: b,
+                });
+                self.push(Instr::Call {
+                    dst,
+                    base,
+                    nargs: 2,
+                    target: CallTarget::Proto(*proto),
+                });
+            }
+            // Not an arithmetic lowering (checker error path).
+            _ => {
+                self.push(Instr::LoadUnit { dst });
             }
         }
     }

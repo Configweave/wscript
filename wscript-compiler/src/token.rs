@@ -58,6 +58,11 @@ pub enum TokenKind {
     Eq,
     EqEq,
     NotEq,
+    PlusEq,    // `+=`
+    MinusEq,   // `-=`
+    StarEq,    // `*=`
+    SlashEq,   // `/=`
+    PercentEq, // `%=`
     Lt,
     Le,
     Gt,
@@ -132,6 +137,11 @@ impl TokenKind {
             TokenKind::Eq => "`=`".into(),
             TokenKind::EqEq => "`==`".into(),
             TokenKind::NotEq => "`!=`".into(),
+            TokenKind::PlusEq => "`+=`".into(),
+            TokenKind::MinusEq => "`-=`".into(),
+            TokenKind::StarEq => "`*=`".into(),
+            TokenKind::SlashEq => "`/=`".into(),
+            TokenKind::PercentEq => "`%=`".into(),
             TokenKind::Lt => "`<`".into(),
             TokenKind::Le => "`<=`".into(),
             TokenKind::Gt => "`>`".into(),

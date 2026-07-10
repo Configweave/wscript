@@ -1122,20 +1122,34 @@ impl Parser {
 
     fn assign_expr_inner(&mut self) -> Expr {
         let lhs = self.range_expr();
-        if self.at(&TokenKind::Eq) {
-            self.bump();
-            self.skip_newlines();
-            let value = self.assign_expr();
-            let span = lhs.span.to(value.span);
-            return self.mk(
-                ExprKind::Assign {
-                    target: Box::new(lhs),
-                    value: Box::new(value),
-                },
-                span,
-            );
-        }
-        lhs
+        let op = match self.kind() {
+            TokenKind::Eq => None,
+            TokenKind::PlusEq => Some(BinOp::Add),
+            TokenKind::MinusEq => Some(BinOp::Sub),
+            TokenKind::StarEq => Some(BinOp::Mul),
+            TokenKind::SlashEq => Some(BinOp::Div),
+            TokenKind::PercentEq => Some(BinOp::Rem),
+            _ => return lhs,
+        };
+        self.bump();
+        self.skip_newlines();
+        // Plain `=` chains right-associatively (`a = b = c`); compound
+        // assignment does not chain (`a += b += c` is a type error: the
+        // RHS would be unit).
+        let value = if op.is_none() {
+            self.assign_expr()
+        } else {
+            self.range_expr()
+        };
+        let span = lhs.span.to(value.span);
+        self.mk(
+            ExprKind::Assign {
+                target: Box::new(lhs),
+                value: Box::new(value),
+                op,
+            },
+            span,
+        )
     }
 
     fn range_expr(&mut self) -> Expr {

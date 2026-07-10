@@ -454,6 +454,11 @@ impl<'s> Lexer<'s> {
             (b'>', Some(b'=')) => (TokenKind::Ge, 2),
             (b'&', Some(b'&')) => (TokenKind::AndAnd, 2),
             (b'|', Some(b'|')) => (TokenKind::OrOr, 2),
+            (b'+', Some(b'=')) => (TokenKind::PlusEq, 2),
+            (b'-', Some(b'=')) => (TokenKind::MinusEq, 2),
+            (b'*', Some(b'=')) => (TokenKind::StarEq, 2),
+            (b'/', Some(b'=')) => (TokenKind::SlashEq, 2),
+            (b'%', Some(b'=')) => (TokenKind::PercentEq, 2),
             (b'.', Some(b'.')) => {
                 if self.peek(2) == Some(b'=') {
                     (TokenKind::DotDotEq, 3)

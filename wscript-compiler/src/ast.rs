@@ -261,9 +261,13 @@ pub enum ExprKind {
         rhs: Box<Expr>,
     },
     /// `place = value` (an expression of type unit, Rust-style).
+    /// `op` is `Some` for compound assignment (`place += value` reads,
+    /// applies the operator, and writes back — the place is evaluated
+    /// once).
     Assign {
         target: Box<Expr>,
         value: Box<Expr>,
+        op: Option<BinOp>,
     },
     Call {
         callee: Box<Expr>,

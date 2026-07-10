@@ -131,6 +131,15 @@ p.hp                       // 70 — mutation visible through both
 same(p, alias)             // true — reference identity builtin
 ```
 
+Compound assignment works on any assignable place — variables, fields,
+list/map elements — and evaluates the place once:
+
+```rust
+hp -= 10
+scores["wil"] += 1
+p.hp *= 2          // user types via their Add/Sub/Mul/Div/Rem impls
+```
+
 Plain assignment never clones. Deep cloning is explicit:
 
 ```rust
@@ -349,5 +358,5 @@ weak int float`.
 By design: borrow checker, `&`/`&mut`, lifetimes, user-defined generics
 (the built-in containers are special-cased), exceptions, async, threads
 (one VM per thread), implicit conversions, truthiness, a cycle collector,
-string interpolation (use `fmt`), compound assignment (`+=`), bitwise
-operators, range values outside `for` headers.
+string interpolation (use `fmt`), bitwise operators, range values
+outside `for` headers.

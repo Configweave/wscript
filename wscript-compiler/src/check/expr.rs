@@ -181,7 +181,7 @@ impl<'a> Checker<'a> {
             ExprKind::Path(segments) => self.check_path_expr(e, segments),
             ExprKind::Unary { op, expr } => self.check_unary(e, *op, expr),
             ExprKind::Binary { op, lhs, rhs } => self.check_binary(e, *op, lhs, rhs),
-            ExprKind::Assign { target, value } => self.check_assign(target, value),
+            ExprKind::Assign { target, value, op } => self.check_assign(e, target, value, *op),
             ExprKind::Call { callee, args } => self.check_call(e, callee, args),
             ExprKind::MethodCall { recv, name, args } => {
                 self.check_method_call(e, recv, name, args)
@@ -763,25 +763,32 @@ impl<'a> Checker<'a> {
             "arithmetic requires both operands to have the same type \
              (use `int(x)` / `float(x)` to convert)",
         );
-        let t = self.resolve(&lt);
+        self.arith_result(e.id, e.span, op, &lt)
+    }
+
+    /// Classify an arithmetic operator application over `operand_ty`,
+    /// recording the lowering into `bin_ops` under `node` (a Binary expr
+    /// or a compound Assign) and returning the result type.
+    fn arith_result(&mut self, node: NodeId, span: Span, op: BinOp, operand_ty: &Type) -> Type {
+        let t = self.resolve(operand_ty);
         match &t {
             Type::Int => {
-                self.out.bin_ops.insert(e.id, BinOpKind::IntArith(op));
+                self.out.bin_ops.insert(node, BinOpKind::IntArith(op));
                 Type::Int
             }
             Type::Float => {
-                self.out.bin_ops.insert(e.id, BinOpKind::FloatArith(op));
+                self.out.bin_ops.insert(node, BinOpKind::FloatArith(op));
                 Type::Float
             }
             Type::Str if op == BinOp::Add => {
-                self.out.bin_ops.insert(e.id, BinOpKind::Concat);
+                self.out.bin_ops.insert(node, BinOpKind::Concat);
                 Type::Str
             }
             Type::Var(_) => {
                 // Unconstrained operands (e.g. closure params used only
                 // here) default to int.
                 if self.infer.unify(&Type::Int, &t).is_ok() {
-                    self.out.bin_ops.insert(e.id, BinOpKind::IntArith(op));
+                    self.out.bin_ops.insert(node, BinOpKind::IntArith(op));
                     Type::Int
                 } else {
                     Type::Error
@@ -800,14 +807,14 @@ impl<'a> Checker<'a> {
                     let proto = protos[0];
                     self.out
                         .bin_ops
-                        .insert(e.id, BinOpKind::ArithCall { proto });
+                        .insert(node, BinOpKind::ArithCall { proto });
                     Type::Named(def)
                 } else {
                     let name = self.out.defs.name_of(def).to_string();
                     let tr = self.out.defs.name_of(trait_id).to_string();
                     self.error_help(
                         "E0234",
-                        e.span,
+                        span,
                         format!("no `{}` operator for `{name}`", op_symbol(op)),
                         format!("implement the `{tr}` trait: `impl {tr} for {name}`"),
                     );
@@ -825,7 +832,7 @@ impl<'a> Checker<'a> {
                 };
                 self.error_help(
                     "E0234",
-                    e.span,
+                    span,
                     format!("no `{}` operator for `{ts}`", op_symbol(op)),
                     help,
                 );
@@ -1000,26 +1007,26 @@ impl<'a> Checker<'a> {
 
     // ------------------------------------------------------- assignments
 
-    fn check_assign(&mut self, target: &Expr, value: &Expr) -> Type {
-        match &target.kind {
+    fn check_assign(&mut self, e: &Expr, target: &Expr, value: &Expr, op: Option<BinOp>) -> Type {
+        let place_ty = match &target.kind {
             ExprKind::Path(segments) if segments.len() == 1 => {
                 let target_ty = self.check_expr(target, None);
                 if self.out.var_refs.contains_key(&target.id) {
-                    self.check_coerce(value, &target_ty);
-                } else if !matches!(target_ty, Type::Error) {
-                    self.error_help(
-                        "E0236",
-                        target.span,
-                        "invalid assignment target",
-                        "only variables, fields, and list/map elements can be assigned",
-                    );
+                    Some(target_ty)
+                } else {
+                    if !matches!(target_ty, Type::Error) {
+                        self.error_help(
+                            "E0236",
+                            target.span,
+                            "invalid assignment target",
+                            "only variables, fields, and list/map elements can be assigned",
+                        );
+                    }
                     self.check_expr(value, None);
+                    None
                 }
             }
-            ExprKind::Field { .. } => {
-                let field_ty = self.check_expr(target, None);
-                self.check_coerce(value, &field_ty);
-            }
+            ExprKind::Field { .. } => Some(self.check_expr(target, None)),
             ExprKind::Index { .. } => {
                 let elem_ty = self.check_expr(target, None);
                 if let Some(IndexKind::UserGet { .. }) = self.out.indexes.get(&target.id) {
@@ -1030,7 +1037,7 @@ impl<'a> Checker<'a> {
                         "the `Index` trait is read-only in v1",
                     );
                 }
-                self.check_coerce(value, &elem_ty);
+                Some(elem_ty)
             }
             _ => {
                 self.error_help(
@@ -1041,6 +1048,28 @@ impl<'a> Checker<'a> {
                 );
                 self.check_expr(target, None);
                 self.check_expr(value, None);
+                None
+            }
+        };
+        if let Some(place_ty) = place_ty {
+            match op {
+                None => {
+                    self.check_coerce(value, &place_ty);
+                }
+                Some(op) => {
+                    // `place op= value` — the operator runs between the
+                    // place's current value and `value`; the lowering is
+                    // recorded under the Assign node's id.
+                    let vt = self.check_expr(value, Some(&place_ty));
+                    self.unify_or_err(
+                        &place_ty,
+                        &vt,
+                        value.span,
+                        "compound assignment requires the value to match the place's \
+                         type (use `int(x)` / `float(x)` to convert)",
+                    );
+                    self.arith_result(e.id, e.span, op, &place_ty);
+                }
             }
         }
         Type::Unit
