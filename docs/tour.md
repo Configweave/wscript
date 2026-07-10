@@ -31,6 +31,8 @@ let pi = 3.14              // required nowhere
 
 let log = "hp: " + str(99) // + concatenates strings; str() converts
 let msg = fmt("{} of {}", 3, 10)   // {} placeholder formatting
+let hex = fmt("{:>8} {:.2} {:x}", "hi", 3.14159, 255)  // specs: width/align,
+                                   // precision, int bases (see stdlib docs)
 ```
 
 There is **no implicit numeric conversion**: `1 + 2.0` is a type error.

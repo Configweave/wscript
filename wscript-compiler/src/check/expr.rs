@@ -1390,28 +1390,41 @@ impl<'a> Checker<'a> {
                     self.check_expr(a, None);
                 }
                 // If the template is a literal, validate the placeholder
-                // count right here at compile time.
+                // count and every format spec right here at compile time
+                // (same grammar the VM applies: wscript_core::fmt_spec).
                 if let ExprKind::StrLit(template) = &args[0].kind {
-                    let placeholders = count_placeholders(template);
-                    if placeholders != args.len() - 1 {
-                        let span = args[0].span;
-                        self.error_help(
-                            "E0239",
-                            span,
-                            format!(
-                                "format template has {placeholders} `{{}}` placeholder{} \
-                                 but {} argument{} given",
-                                if placeholders == 1 { "" } else { "s" },
-                                args.len() - 1,
-                                if args.len() - 1 == 1 {
-                                    " was"
-                                } else {
-                                    "s were"
-                                }
-                            ),
-                            "each `{}` consumes one argument; escape literal braces as \
-                             `{{` and `}}`",
-                        );
+                    match wscript_core::fmt_spec::analyze_template(template) {
+                        Ok(placeholders) => {
+                            if placeholders != args.len() - 1 {
+                                let span = args[0].span;
+                                self.error_help(
+                                    "E0239",
+                                    span,
+                                    format!(
+                                        "format template has {placeholders} placeholder{} \
+                                         but {} argument{} given",
+                                        if placeholders == 1 { "" } else { "s" },
+                                        args.len() - 1,
+                                        if args.len() - 1 == 1 {
+                                            " was"
+                                        } else {
+                                            "s were"
+                                        }
+                                    ),
+                                    "each `{}` or `{:spec}` consumes one argument; escape \
+                                     literal braces as `{{` and `}}`",
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            self.error_help(
+                                "E0243",
+                                args[0].span,
+                                format!("invalid format spec in template: {e}"),
+                                "the spec grammar is `{:[[fill]align][0][width][.prec][type]}` \
+                                 with align `< ^ >` and type `x X b o`",
+                            );
+                        }
                     }
                 }
                 Some(Type::Str)
@@ -2246,26 +2259,4 @@ fn op_symbol(op: BinOp) -> &'static str {
         BinOp::And => "&&",
         BinOp::Or => "||",
     }
-}
-
-/// Count `{}` placeholders, honouring `{{`/`}}` escapes.
-pub(crate) fn count_placeholders(template: &str) -> usize {
-    let bytes = template.as_bytes();
-    let mut count = 0;
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'{' {
-            if i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-                i += 2;
-                continue;
-            }
-            if i + 1 < bytes.len() && bytes[i + 1] == b'}' {
-                count += 1;
-                i += 2;
-                continue;
-            }
-        }
-        i += 1;
-    }
-    count
 }

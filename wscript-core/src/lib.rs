@@ -8,6 +8,7 @@
 pub mod bytecode;
 pub mod defs;
 pub mod diag;
+pub mod fmt_spec;
 pub mod host;
 pub mod module;
 pub mod registry;

@@ -9,6 +9,7 @@ use std::rc::Rc;
 
 use wscript_core::bytecode::Builtin;
 use wscript_core::defs::{DEF_OPTION, TAG_NONE, TAG_SOME};
+use wscript_core::fmt_spec::{self, FmtNum, FmtSpec};
 use wscript_core::value::{Key, Value};
 
 use crate::{RuntimeError, Vm};
@@ -147,6 +148,27 @@ impl Vm {
                             }
                             arg_i += 1;
                             i += 2;
+                        }
+                        // `{:spec}` — format-spec placeholder. The grammar
+                        // lives in wscript_core::fmt_spec, shared with the
+                        // checker's compile-time validation.
+                        b'{' if bytes.get(i + 1) == Some(&b':') => {
+                            let Some(end) = template[i + 2..].find('}') else {
+                                return Err(self.fault("fmt: unterminated `{:` format placeholder"));
+                            };
+                            let spec = match fmt_spec::parse_spec(&template[i + 2..i + 2 + end]) {
+                                Ok(s) => s,
+                                Err(e) => return Err(self.fault(format!("fmt: {e}"))),
+                            };
+                            let Some(v) = args.get(arg_i).cloned() else {
+                                return Err(
+                                    self.fault("fmt: more `{}` placeholders than arguments")
+                                );
+                            };
+                            let rendered = self.format_with_spec(&spec, &v)?;
+                            out.push_str(&rendered);
+                            arg_i += 1;
+                            i += 2 + end + 1;
                         }
                         _ => {
                             let c = template[i..].chars().next().unwrap();
@@ -614,6 +636,41 @@ impl Vm {
     fn as_key(&self, v: &Value) -> Result<Key, RuntimeError> {
         Key::from_value(v)
             .ok_or_else(|| self.fault(format!("invalid map key of type {}", v.kind_name())))
+    }
+
+    /// Render one value under a `{:spec}` format spec. Base conversion and
+    /// precision happen here (they need the typed value); padding is the
+    /// shared `fmt_spec::pad_spec`.
+    fn format_with_spec(&mut self, spec: &FmtSpec, v: &Value) -> Result<String, RuntimeError> {
+        let plain = if let Some(num) = spec.num {
+            let Value::Int(n) = v else {
+                return Err(self.fault(format!(
+                    "fmt: `{{:x}}`-style base formats require an int, found {}",
+                    v.kind_name()
+                )));
+            };
+            match num {
+                FmtNum::HexLower => format!("{n:x}"),
+                FmtNum::HexUpper => format!("{n:X}"),
+                FmtNum::Binary => format!("{n:b}"),
+                FmtNum::Octal => format!("{n:o}"),
+            }
+        } else if let Some(p) = spec.prec {
+            match v {
+                Value::Float(f) => format!("{f:.p$}"),
+                Value::Str(_) => self.display_value(v)?.chars().take(p).collect(),
+                other => {
+                    return Err(self.fault(format!(
+                        "fmt: a `.{p}` precision requires a float or string, found {}",
+                        other.kind_name()
+                    )));
+                }
+            }
+        } else {
+            self.display_value(v)?
+        };
+        let numeric = matches!(v, Value::Int(_) | Value::Float(_));
+        Ok(fmt_spec::pad_spec(spec, plain, numeric))
     }
 }
 
