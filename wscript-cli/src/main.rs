@@ -90,6 +90,10 @@ fn cmd_run(path: &str, script_args: Vec<String>) -> ExitCode {
         // Exit code from main's return: int, or unit → 0 (PRD §8).
         Ok(Value::Int(code)) => ExitCode::from((code & 0xff) as u8),
         Ok(_) => ExitCode::SUCCESS,
+        // process::exit — a requested exit, not an error to render.
+        Err(Error::Runtime(e)) if e.exit_code.is_some() => {
+            ExitCode::from((e.exit_code.unwrap() & 0xff) as u8)
+        }
         Err(Error::Runtime(e)) => {
             diag_render::render_runtime(path, &source, &e);
             ExitCode::FAILURE

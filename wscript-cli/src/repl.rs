@@ -322,6 +322,11 @@ impl Repl {
         let mut vm = wscript::Vm::new(&self.ctx);
         match vm.call_values(&unit, "__line", self.args()) {
             Ok(value) => Some(value),
+            // process::exit in the REPL: report, keep the session alive.
+            Err(wscript::Error::Runtime(e)) if e.exit_code.is_some() => {
+                println!("script requested exit with code {}", e.exit_code.unwrap());
+                None
+            }
             Err(wscript::Error::Runtime(e)) => {
                 diag_render::render_runtime("<repl>", src, &e);
                 None

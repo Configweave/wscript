@@ -18,15 +18,36 @@ use crate::value::{Key, Value};
 #[derive(Debug, Clone)]
 pub struct HostError {
     pub message: String,
+    /// Set by `process::exit`-style host functions: the fault is a
+    /// requested process exit, not a failure. Embedders (and the CLI)
+    /// that honor it should terminate with this code instead of
+    /// rendering an error.
+    pub exit_code: Option<i32>,
 }
 
 impl HostError {
     pub fn msg(message: impl Into<String>) -> HostError {
         HostError {
             message: message.into(),
+            exit_code: None,
+        }
+    }
+
+    /// A requested process exit (see [`HostError::exit_code`]).
+    pub fn exit(code: i32) -> HostError {
+        HostError {
+            message: format!("process exited with code {code}"),
+            exit_code: Some(code),
         }
     }
 }
+
+/// Host-function return wrapper whose `Err` becomes a **raw VM fault**
+/// (a trappable `RuntimeError` delivered to the embedder), not a
+/// script-level `Result` value. The script-visible signature is `T`'s.
+/// Use for faults scripts should never handle — `process::exit`,
+/// invalid-argument programming errors.
+pub struct Fault<T>(pub Result<T, HostError>);
 
 impl fmt::Display for HostError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -77,6 +98,19 @@ pub fn type_mismatch(expected: &str, got: &Value) -> HostError {
         "type mismatch at host boundary: expected {expected}, got {}",
         got.kind_name()
     ))
+}
+
+impl<T: IntoValue> IntoValue for Fault<T> {
+    fn into_value(self, defs: &DefTable) -> Result<Value, HostError> {
+        self.0.and_then(|v| v.into_value(defs))
+    }
+}
+
+impl<T: ScriptType> ScriptType for Fault<T> {
+    fn script_type(defs: &mut DefTable) -> Type {
+        // The fault channel is invisible to scripts — the signature is T's.
+        T::script_type(defs)
+    }
 }
 
 macro_rules! prim_conv {

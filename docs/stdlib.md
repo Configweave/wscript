@@ -92,6 +92,7 @@ let out = process::run("git", ["status", "--short"])?
 | `set_env` | `(string, string)` |
 | `cwd` | `() -> Result[string, string]` |
 | `args` | `() -> List[string]` — arguments after the script path on the CLI |
+| `exit` | `(int)` — terminate with the code; surfaces to embedders as a trappable fault with `exit_code` set (the CLI honors it) |
 
 ## The shared `Value` type (json / toml / xml)
 

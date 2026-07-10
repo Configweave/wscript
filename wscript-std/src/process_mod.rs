@@ -2,6 +2,7 @@
 //! registering this module grants scripts process control.
 
 use wscript_core::Module;
+use wscript_core::host::{Fault, HostError};
 use wscript_macros::Script;
 
 /// Result of `process::run` (PRD §7).
@@ -54,5 +55,9 @@ pub fn process_with_args(script_args: Vec<String>) -> Module {
     });
     m.doc_next("Arguments passed after the script path on the command line");
     m.fn_("args", move || script_args.clone());
+    m.doc_next("Terminate the script with an exit code (a trappable exit fault, not an error)");
+    m.fn_("exit", |code: i64| -> Fault<()> {
+        Fault(Err(HostError::exit(code as i32)))
+    });
     m
 }

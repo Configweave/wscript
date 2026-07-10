@@ -50,6 +50,10 @@ pub struct RuntimeError {
     pub span: Option<Span>,
     /// Stack trace, innermost frame first.
     pub trace: Vec<TraceFrame>,
+    /// Set when the fault is a requested process exit (`process::exit`),
+    /// not a failure — honor it by terminating with this code instead of
+    /// rendering an error.
+    pub exit_code: Option<i32>,
 }
 
 impl fmt::Display for RuntimeError {
@@ -250,6 +254,7 @@ impl Vm {
                 message: format!("no function named `{name}` in the compiled script"),
                 span: None,
                 trace: vec![],
+                exit_code: None,
             });
         };
         self.call_proto(unit, proto, args)
@@ -361,6 +366,7 @@ impl Vm {
             message: message.into(),
             span,
             trace,
+            exit_code: None,
         }
     }
 
@@ -1054,6 +1060,7 @@ impl Vm {
 
     fn host_fault(&self, e: HostError) -> RuntimeError {
         let mut f = self.fault(e.message);
+        f.exit_code = e.exit_code;
         f.trace.insert(
             0,
             TraceFrame {

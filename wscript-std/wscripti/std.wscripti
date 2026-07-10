@@ -117,6 +117,8 @@ mod process {
     fn cwd() -> Result[string, string]
     /// Arguments passed after the script path on the command line
     fn args() -> List[string]
+    /// Terminate the script with an exit code (a trappable exit fault, not an error)
+    fn exit(a0: int)
 }
 
 /// Clocks and sleeping (capability: clock access, thread blocking)
