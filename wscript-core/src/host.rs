@@ -23,6 +23,11 @@ pub struct HostError {
     /// that honor it should terminate with this code instead of
     /// rendering an error.
     pub exit_code: Option<i32>,
+    /// A script fault preserved across the host boundary: set when a
+    /// script callback invoked via [`HostCtx::call_value`] faulted, so
+    /// re-raising keeps the callback's stack trace. Hosts may also match
+    /// on it to recover from callback faults.
+    pub fault: Option<Box<crate::fault::ScriptFault>>,
 }
 
 impl HostError {
@@ -30,6 +35,7 @@ impl HostError {
         HostError {
             message: message.into(),
             exit_code: None,
+            fault: None,
         }
     }
 
@@ -38,6 +44,7 @@ impl HostError {
         HostError {
             message: format!("process exited with code {code}"),
             exit_code: Some(code),
+            fault: None,
         }
     }
 }
@@ -64,6 +71,17 @@ pub trait HostCtx {
     /// oversized values are truncated with a `…` marker (see
     /// [`Value::display`]) rather than erroring.
     fn display_value(&self, v: &Value) -> String;
+    /// Re-enter the VM to call a script function value (a closure the
+    /// host received as a [`ScriptClosure`] parameter). A fault inside
+    /// the callback arrives as a `HostError` whose `fault` preserves the
+    /// callback's stack trace — propagate it with `?` (the VM re-raises
+    /// it with full context) or match on it to recover.
+    fn call_value(&mut self, f: &Value, args: Vec<Value>) -> Result<Value, HostError> {
+        let _ = (f, args);
+        Err(HostError::msg(
+            "script re-entry is not available in this context",
+        ))
+    }
 }
 
 /// A registered host function, type-erased. The typed registration sugar
@@ -525,4 +543,96 @@ pub fn lookup_def<T: 'static>(defs: &DefTable) -> Result<crate::defs::DefId, Hos
                 std::any::type_name::<T>()
             ))
         })
+}
+
+// ----------------------------------------------------- script callbacks
+
+/// Argument tuples for [`ScriptClosure::call`]: statically typed, so the
+/// checker-facing signature and the runtime conversion agree.
+pub trait ScriptArgs {
+    fn types(defs: &mut DefTable) -> Vec<Type>;
+    fn into_values(self, defs: &DefTable) -> Result<Vec<Value>, HostError>;
+}
+
+impl ScriptArgs for () {
+    fn types(_defs: &mut DefTable) -> Vec<Type> {
+        vec![]
+    }
+    fn into_values(self, _defs: &DefTable) -> Result<Vec<Value>, HostError> {
+        Ok(vec![])
+    }
+}
+
+macro_rules! impl_script_args {
+    ($($name:ident : $idx:tt),+) => {
+        impl<$($name: IntoValue + ScriptType),+> ScriptArgs for ($($name,)+) {
+            fn types(defs: &mut DefTable) -> Vec<Type> {
+                vec![$(<$name as ScriptType>::script_type(defs)),+]
+            }
+            fn into_values(self, defs: &DefTable) -> Result<Vec<Value>, HostError> {
+                Ok(vec![$(self.$idx.into_value(defs)?),+])
+            }
+        }
+    };
+}
+
+impl_script_args!(A: 0);
+impl_script_args!(A: 0, B: 1);
+impl_script_args!(A: 0, B: 1, C: 2);
+impl_script_args!(A: 0, B: 1, C: 2, D: 3);
+impl_script_args!(A: 0, B: 1, C: 2, D: 3, E: 4);
+impl_script_args!(A: 0, B: 1, C: 2, D: 3, E: 4, F: 5);
+
+/// A script closure received by a host function (PRD §6.6 direction:
+/// host↔script callbacks). Declaring a parameter of this type makes the
+/// host function take a `fn(A...) -> R` in the script's signature — the
+/// checker then rejects mis-typed closures at script compile time, with
+/// no extra registration code:
+///
+/// ```ignore
+/// m.fn_("on_key", |ctx: &mut dyn HostCtx, cb: ScriptClosure<(char,), bool>| {
+///     Fault(cb.call(ctx, ('q',)))
+/// });
+/// ```
+///
+/// Scoped use only in this release: call it while the host function
+/// runs (through its `HostCtx`); storing it for later requires keeping
+/// the value alive and re-entering through a live VM — a stored-callback
+/// API is a planned follow-up.
+pub struct ScriptClosure<A, R> {
+    /// The underlying closure value (kind-checked at conversion; the
+    /// signature was already enforced by the checker).
+    pub value: Value,
+    _pd: std::marker::PhantomData<fn(A) -> R>,
+}
+
+impl<A, R> FromValue for ScriptClosure<A, R> {
+    fn from_value(v: Value, _defs: &DefTable) -> Result<Self, HostError> {
+        match v {
+            Value::Closure(_) => Ok(ScriptClosure {
+                value: v,
+                _pd: std::marker::PhantomData,
+            }),
+            other => Err(type_mismatch("function", &other)),
+        }
+    }
+}
+
+impl<A: ScriptArgs, R: ScriptType> ScriptType for ScriptClosure<A, R> {
+    fn script_type(defs: &mut DefTable) -> Type {
+        let params = A::types(defs);
+        let ret = R::script_type(defs);
+        Type::Fn(Box::new(crate::types::FnSig::new(params, ret)))
+    }
+}
+
+impl<A: ScriptArgs, R: FromValue> ScriptClosure<A, R> {
+    /// Invoke the closure through the running host function's context.
+    /// Faults inside the callback arrive as `HostError`s carrying the
+    /// callback's stack trace (`HostError::fault`).
+    pub fn call(&self, ctx: &mut dyn HostCtx, args: A) -> Result<R, HostError> {
+        let vals = args.into_values(ctx.defs())?;
+        let ret = ctx.call_value(&self.value, vals)?;
+        R::from_value(ret, ctx.defs())
+    }
 }

@@ -26,7 +26,10 @@ use std::sync::Arc;
 pub use wscript_core::bytecode::CompiledUnit;
 pub use wscript_core::defs::DefTable;
 pub use wscript_core::diag::{Diagnostic, Severity, default_help as diag_default_help};
-pub use wscript_core::host::{FromValue, HostError, IntoValue, ScriptOpaque, ScriptType};
+pub use wscript_core::host::{
+    Fault, FromValue, HostCtx, HostError, IntoValue, ScriptArgs, ScriptClosure, ScriptOpaque,
+    ScriptType,
+};
 pub use wscript_core::module::Module;
 pub use wscript_core::registry::Registry;
 pub use wscript_core::span::Span;

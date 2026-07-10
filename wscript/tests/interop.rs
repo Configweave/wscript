@@ -683,3 +683,144 @@ fn generic_fns_rejected_at_host_boundary() {
     let n: i64 = vm.call_unit(&unit, "identity_int", (7_i64,)).unwrap();
     assert_eq!(n, 7);
 }
+
+// ------------------------------------------------- script callbacks (§6.6)
+
+fn callback_module() -> Module {
+    use wscript::{Fault, HostCtx, ScriptClosure};
+    let mut m = Module::new("cbs");
+    // Applies the script closure twice; callback faults propagate as raw
+    // VM faults with the callback's trace preserved.
+    m.fn_(
+        "apply_twice",
+        |ctx: &mut dyn HostCtx, cb: ScriptClosure<(i64,), i64>, x: i64| -> Fault<i64> {
+            Fault(cb.call(ctx, (x,)).and_then(|y| cb.call(ctx, (y,))))
+        },
+    );
+    // Catches a callback fault and recovers — the VM must stay usable.
+    m.fn_(
+        "call_or",
+        |ctx: &mut dyn HostCtx, cb: ScriptClosure<(i64,), i64>, dflt: i64| -> i64 {
+            cb.call(ctx, (1,)).unwrap_or(dflt)
+        },
+    );
+    // Calls the closure once — used to build host↔script ping-pong.
+    m.fn_(
+        "reenter",
+        |ctx: &mut dyn HostCtx, cb: ScriptClosure<(i64,), i64>, x: i64| -> Fault<i64> {
+            Fault(cb.call(ctx, (x,)))
+        },
+    );
+    m
+}
+
+#[test]
+fn callbacks_round_trip() {
+    let ctx = Context::new().module(callback_module());
+    let unit = ctx
+        .compile(
+            "use cbs\n\
+             fn main() -> int { cbs::apply_twice(|x| x * 2, 5) }",
+        )
+        .unwrap();
+    let mut vm = Vm::new(&ctx);
+    let n: i64 = vm.call_unit(&unit, "main", ()).unwrap();
+    assert_eq!(n, 20);
+}
+
+#[test]
+fn callback_signature_checked_at_compile_time() {
+    let ctx = Context::new().module(callback_module());
+    let err = ctx
+        .compile(
+            "use cbs\n\
+             fn main() -> int { cbs::apply_twice(|s: string| 1, 5) }",
+        )
+        .unwrap_err();
+    let text = format!("{err:?}");
+    assert!(text.contains("E022") || text.contains("type"), "{text}");
+}
+
+#[test]
+fn callback_fault_carries_three_segment_trace() {
+    let ctx = Context::new().module(callback_module());
+    let unit = ctx
+        .compile(
+            "use cbs\n\
+             fn main() -> int { cbs::apply_twice(|x| x / 0, 5) }",
+        )
+        .unwrap();
+    let mut vm = Vm::new(&ctx);
+    let err = vm.call_unit::<_, i64>(&unit, "main", ()).unwrap_err();
+    let wscript::Error::Runtime(e) = err else {
+        panic!("expected a runtime fault");
+    };
+    assert_eq!(e.message, "division by zero");
+    let names: Vec<&str> = e.trace.iter().map(|f| f.function.as_str()).collect();
+    // Callback frame first, then the host marker, then the outer frames.
+    assert!(names[0].starts_with("<closure"), "{names:?}");
+    assert!(names.contains(&"<host function>"), "{names:?}");
+    assert_eq!(*names.last().unwrap(), "main", "{names:?}");
+    // The innermost span points at the fault site inside the closure.
+    assert!(e.trace[0].span.is_some());
+}
+
+#[test]
+fn host_catches_callback_fault_and_vm_stays_usable() {
+    let ctx = Context::new().module(callback_module());
+    let unit = ctx
+        .compile(
+            "use cbs\n\
+             fn boom() -> int { cbs::call_or(|x| x / 0, -7) }\n\
+             fn fine() -> int { cbs::call_or(|x| x + 1, -7) }\n\
+             fn main() {}",
+        )
+        .unwrap();
+    let mut vm = Vm::new(&ctx);
+    // The host recovered from the callback fault — no error escapes...
+    let n: i64 = vm.call_unit(&unit, "boom", ()).unwrap();
+    assert_eq!(n, -7);
+    // ...and the same VM keeps working (frames were unwound).
+    let n: i64 = vm.call_unit(&unit, "fine", ()).unwrap();
+    assert_eq!(n, 2);
+}
+
+#[test]
+fn fuel_meters_callback_instructions() {
+    let ctx = Context::new().module(callback_module());
+    let unit = ctx
+        .compile(
+            "use cbs\n\
+             fn main() -> int {\n\
+                 cbs::reenter(|x| { let n = 0; while true { n = n + 1 }; n }, 1)\n\
+             }",
+        )
+        .unwrap();
+    let mut vm = Vm::new(&ctx);
+    vm.set_fuel(Some(10_000));
+    let err = vm.call_unit::<_, i64>(&unit, "main", ()).unwrap_err();
+    assert!(err.to_string().contains("fuel exhausted"), "{err}");
+    assert_eq!(vm.fuel(), Some(0));
+}
+
+#[test]
+fn host_script_ping_pong_faults_trappably() {
+    let ctx = Context::new().module(callback_module());
+    let unit = ctx
+        .compile(
+            "use cbs\n\
+             fn ping(x: int) -> int { cbs::reenter(|y| ping(y), x) }\n\
+             fn main() -> int { ping(1) }",
+        )
+        .unwrap();
+    let mut vm = Vm::new(&ctx);
+    let err = vm.call_unit::<_, i64>(&unit, "main", ()).unwrap_err();
+    assert!(
+        err.to_string().contains("re-entry too deep"),
+        "expected trappable re-entry fault, got: {err}"
+    );
+    // Still usable afterwards.
+    let unit2 = ctx.compile("fn ok() -> int { 3 }\nfn main() {}").unwrap();
+    let n: i64 = vm.call_unit(&unit2, "ok", ()).unwrap();
+    assert_eq!(n, 3);
+}

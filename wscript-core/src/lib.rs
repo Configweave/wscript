@@ -8,6 +8,7 @@
 pub mod bytecode;
 pub mod defs;
 pub mod diag;
+pub mod fault;
 pub mod fmt_spec;
 pub mod host;
 pub mod module;
@@ -19,7 +20,11 @@ pub mod value;
 pub use bytecode::{Builtin, CallTarget, CompiledUnit, Const, FnProto, Instr};
 pub use defs::{DefId, DefKind, DefTable, EnumDef, StructDef, TraitDef, VariantDef, VariantKind};
 pub use diag::{Diagnostic, Severity};
-pub use host::{FromValue, HostCallable, HostCtx, HostError, IntoValue, ScriptType};
+pub use fault::{ScriptFault, TraceFrame};
+pub use host::{
+    Fault, FromValue, HostCallable, HostCtx, HostError, IntoValue, ScriptArgs, ScriptClosure,
+    ScriptType,
+};
 pub use module::Module;
 pub use registry::{ModuleDef, Registry};
 pub use span::Span;

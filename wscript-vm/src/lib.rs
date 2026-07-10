@@ -18,57 +18,20 @@ mod builtins;
 mod ops;
 
 use std::collections::HashMap;
-use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use wscript_core::bytecode::{CallTarget, CompiledUnit, FaultCode, Instr};
 use wscript_core::host::{HostCallable, HostCtx, HostError};
 use wscript_core::registry::Registry;
-use wscript_core::span::Span;
 use wscript_core::value::{Closure, DynObj, Key, Value};
 
-/// One frame of a runtime stack trace, innermost first.
-#[derive(Debug, Clone)]
-pub struct TraceFrame {
-    /// Name of the function this frame is executing.
-    pub function: String,
-    /// Span of the instruction the frame was executing when the fault
-    /// propagated through it — the fault site for the innermost frame, the
-    /// call site for outer frames. `None` when no span is available (e.g.
-    /// a synthetic `<host function>` frame).
-    pub span: Option<Span>,
-}
-
-/// A trappable runtime fault. Carries the source span of the faulting
-/// instruction and a script-level stack trace.
-#[derive(Debug, Clone)]
-pub struct RuntimeError {
-    pub message: String,
-    /// Span of the faulting instruction. Equal to `trace[0].span`; kept as
-    /// a convenience for callers that only want the fault site.
-    pub span: Option<Span>,
-    /// Stack trace, innermost frame first.
-    pub trace: Vec<TraceFrame>,
-    /// Set when the fault is a requested process exit (`process::exit`),
-    /// not a failure — honor it by terminating with this code instead of
-    /// rendering an error.
-    pub exit_code: Option<i32>,
-}
-
-impl fmt::Display for RuntimeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Source-free fallback: callers with the source (CLI/REPL) render a
-        // richer trace with line numbers via `diag_render`.
-        write!(f, "runtime error: {}", self.message)?;
-        for frame in &self.trace {
-            write!(f, "\n  in {}", frame.function)?;
-        }
-        Ok(())
-    }
-}
-
-impl std::error::Error for RuntimeError {}
+/// The fault types live in `wscript-core` so `HostError` can carry a
+/// script fault across the host boundary (script callbacks); the VM's
+/// historical names are aliases.
+pub use wscript_core::fault::TraceFrame;
+/// A trappable runtime fault (alias of [`wscript_core::ScriptFault`]).
+pub type RuntimeError = wscript_core::fault::ScriptFault;
 
 // ------------------------------------------------------------ print hook
 //
@@ -142,7 +105,18 @@ pub struct Vm {
     depth_limit: usize,
     /// Execution budget; see [`Vm::set_fuel`]. `None` means unmetered.
     fuel: Option<u64>,
+    /// Live host→script re-entries (`HostCtx::call_value`). Each one adds
+    /// *native* stack (a nested dispatch loop plus the host closure), so
+    /// it gets its own, much smaller limit than script frame depth.
+    reentry_depth: usize,
 }
+
+/// Maximum concurrently-nested host→script re-entries; see
+/// [`Vm::reentry_depth`]. Each level holds a full nested dispatch-loop
+/// native frame (tens of KiB in debug builds), so this is sized to fit
+/// a 2 MiB thread stack with a wide margin — host↔script ping-pong
+/// deeper than this is pathological.
+pub const REENTRY_DEPTH_LIMIT: usize = 32;
 
 /// Default script call-depth limit (frames, not bytes — script frames
 /// live on the heap-allocated register stack).
@@ -159,6 +133,7 @@ impl Vm {
             frames: Vec::new(),
             depth_limit: DEFAULT_CALL_DEPTH_LIMIT,
             fuel: None,
+            reentry_depth: 0,
         }
     }
 
@@ -324,6 +299,29 @@ impl Vm {
         }
     }
 
+    /// Host→script re-entry (`HostCtx::call_value`): run a script
+    /// function value from inside a running host function. Unlike
+    /// `call_function`, frames are unwound on `Err` — the host may catch
+    /// the error and continue, so no stale frames can be left behind.
+    fn reenter(&mut self, f: &Value, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        if self.reentry_depth >= REENTRY_DEPTH_LIMIT {
+            return Err(
+                self.fault("host re-entry too deep (host function and script calling each other?)")
+            );
+        }
+        self.reentry_depth += 1;
+        let entry_depth = self.frames.len();
+        let result = self.call_function(f, args);
+        if result.is_err() {
+            while self.frames.len() > entry_depth {
+                let fr = self.frames.pop().unwrap();
+                self.stack.truncate(fr.base);
+            }
+        }
+        self.reentry_depth -= 1;
+        result
+    }
+
     pub(crate) fn call_proto_nested(
         &mut self,
         proto: u32,
@@ -391,11 +389,12 @@ impl Vm {
         // benchmark gate for this feature was ≤2% unmetered / ≤5%
         // metered; a per-instruction check blew both). The tank lives
         // in a local the optimizer can hold in a register; it syncs
-        // with `self.fuel` around builtin calls, the one dispatch arm
-        // that re-enters a nested `execute` loop (closures via
-        // map/filter, custom eq/cmp/display impls). Sound because
-        // nothing can set fuel mid-execution — host functions only see
-        // `HostCtx`, not `&mut Vm`.
+        // with `self.fuel` around builtin AND host calls — the two
+        // dispatch arms that can re-enter a nested `execute` loop
+        // (builtins via map/filter/custom impls; host functions via
+        // HostCtx::call_value script callbacks). Sound because those
+        // synced paths are the only way anything can touch fuel
+        // mid-execution.
         match self.fuel {
             Some(tank) => {
                 let mut fuel = tank;
@@ -653,10 +652,20 @@ impl Vm {
                                 .map(|i| self.stack[args_at + i].clone())
                                 .collect();
                             let imp = self.host_fns[h as usize].clone();
+                            // Host functions may re-enter the VM through
+                            // HostCtx::call_value (script callbacks) —
+                            // sync the fuel tank like the builtin arm so
+                            // callback instructions draw from it.
+                            if METERED {
+                                self.fuel = Some(*fuel);
+                            }
                             let result = {
                                 let mut ctx = VmHostCtx { vm: self };
                                 imp.call(&mut ctx, args)
                             };
+                            if METERED {
+                                *fuel = self.fuel.unwrap_or(0);
+                            }
                             match result {
                                 Ok(v) => reg!(base, dst) = v,
                                 Err(e) => return Err(self.host_fault(e)),
@@ -1067,6 +1076,20 @@ impl Vm {
     }
 
     fn host_fault(&self, e: HostError) -> RuntimeError {
+        // A fault raised inside a script callback (HostCtx::call_value)
+        // that the host function propagated: re-raise it with the
+        // callback's own frames first, a <host function> marker, then
+        // the outer script frames — one coherent trace across the
+        // boundary.
+        if let Some(inner) = e.fault {
+            let mut f = *inner;
+            f.trace.push(TraceFrame {
+                function: "<host function>".into(),
+                span: None,
+            });
+            f.trace.extend(self.fault("").trace);
+            return f;
+        }
         let mut f = self.fault(e.message);
         f.exit_code = e.exit_code;
         f.trace.insert(
@@ -1094,5 +1117,13 @@ impl<'a> HostCtx for VmHostCtx<'a> {
         // Structural rendering (custom Display impls are not consulted at
         // the host boundary — documented limitation).
         v.display(self.defs())
+    }
+
+    fn call_value(&mut self, f: &Value, args: Vec<Value>) -> Result<Value, HostError> {
+        self.vm.reenter(f, args).map_err(|e| HostError {
+            message: e.message.clone(),
+            exit_code: e.exit_code,
+            fault: Some(Box::new(e)),
+        })
     }
 }

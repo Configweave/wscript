@@ -275,7 +275,7 @@ let quit = on_key.call(&mut vm, ('q',))?;   // cheap thereafter
 
 ### 6.6 Deferred to v2
 
-Script types implementing *host* traits (Rust code taking `Box<dyn Widget>` backed by a script object). Use `ScriptFn` callbacks for plugin patterns in v1.
+Script types implementing *host* traits (Rust code taking `Box<dyn Widget>` backed by a script object). Use `ScriptFn` callbacks for plugin patterns in v1. *(Shipped post-v1: host functions can take script closures — `ScriptClosure<A, R>` parameters with `&mut dyn HostCtx` re-entry, compile-time signature checking, composed faults/fuel; see embedding.md.)*
 
 ---
 

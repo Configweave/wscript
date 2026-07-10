@@ -232,6 +232,10 @@ pub trait HostFunction<Marker>: Send + Sync + 'static {
 
 /// Marker: a parameter taken by value.
 pub struct OwnArg<T>(std::marker::PhantomData<T>);
+/// Marker: a leading `&mut dyn HostCtx` parameter (excluded from the
+/// script-visible signature) — lets a host fn re-enter the VM for
+/// script callbacks (`ScriptClosure`).
+pub struct CtxArg;
 /// Marker: a `&str` parameter.
 pub struct StrArg;
 /// Marker: `&T` opaque receiver.
@@ -286,6 +290,49 @@ macro_rules! impl_host_fn_owned {
         }
     };
 }
+
+/// Host fns whose first Rust parameter is `&mut dyn HostCtx`: the ctx
+/// gives access to `HostCtx::call_value` for invoking `ScriptClosure`
+/// parameters; it does not appear in the script-visible signature.
+macro_rules! impl_host_fn_ctx {
+    ($n:expr; $($A:ident : $idx:tt),*) => {
+        impl<Func, Ret, $($A,)*> HostFunction<(CtxArg, $(OwnArg<$A>,)*)> for Func
+        where
+            Func: Fn(&mut dyn HostCtx, $($A),*) -> Ret + Send + Sync + 'static,
+            Ret: IntoValue + ScriptType,
+            $($A: FromValue + ScriptType + 'static,)*
+        {
+            fn sig(defs: &mut DefTable) -> FnSig {
+                FnSig::new(
+                    vec![$(<$A as ScriptType>::script_type(defs)),*],
+                    <Ret as ScriptType>::script_type(defs),
+                )
+            }
+            fn into_callable(self) -> Arc<dyn HostCallable> {
+                Arc::new(
+                    move |ctx: &mut dyn HostCtx, args: Vec<Value>| -> Result<Value, HostError> {
+                        check_arity(&args, $n)?;
+                        // Conversions end their borrow of ctx before the
+                        // closure takes it mutably.
+                        $(let $A = {
+                            #[allow(unused_variables)]
+                            let defs = ctx.defs();
+                            <$A as FromValue>::from_value(args[$idx].clone(), defs)?
+                        };)*
+                        let ret = (self)(ctx, $($A),*);
+                        ret.into_value(ctx.defs())
+                    },
+                )
+            }
+        }
+    };
+}
+
+impl_host_fn_ctx!(0;);
+impl_host_fn_ctx!(1; A0: 0);
+impl_host_fn_ctx!(2; A0: 0, A1: 1);
+impl_host_fn_ctx!(3; A0: 0, A1: 1, A2: 2);
+impl_host_fn_ctx!(4; A0: 0, A1: 1, A2: 2, A3: 3);
 
 impl_host_fn_owned!(0;);
 impl_host_fn_owned!(1; A0: 0);

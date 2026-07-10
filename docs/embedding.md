@@ -126,7 +126,55 @@ let quit = on_key.call(&mut vm, (key_event,))?;   // cheap thereafter
 ```
 
 `fn_handle` fails with `Error::Signature` if the script function's
-signature doesn't match `(A...) -> R`.
+signature doesn't match `(A...) -> R`. Generic script fns (`fn f[T]`)
+are not callable from the host — wrap them in a monomorphic script fn.
+
+## Script callbacks (host functions taking closures)
+
+A host function can receive a script closure and invoke it: declare a
+`ScriptClosure<Args, Ret>` parameter and take `&mut dyn HostCtx` as the
+*first* Rust parameter (it does not appear in the script-visible
+signature):
+
+```rust
+use wscript::{Fault, HostCtx, ScriptClosure};
+
+m.fn_(
+    "retry",
+    |ctx: &mut dyn HostCtx, cb: ScriptClosure<(i64,), bool>, times: i64| -> Fault<bool> {
+        for i in 0..times {
+            match cb.call(ctx, (i,)) {
+                Ok(true) => return Fault(Ok(true)),
+                Ok(false) => continue,
+                Err(e) => return Fault(Err(e)),   // propagate script faults
+            }
+        }
+        Fault(Ok(false))
+    },
+);
+```
+
+Scripts see `fn retry(fn(int) -> bool, int) -> bool` — passing a
+mis-typed closure is a **compile-time** error like any other host
+signature misuse. What you get:
+
+- **Faults compose.** A fault inside the callback arrives as a
+  `HostError` whose `.fault` carries the callback's stack trace.
+  Propagate it (as above) and the embedder sees one coherent trace:
+  callback frames → `<host function>` → outer script frames. Or match
+  on it and recover — the VM unwinds the callback's frames either way.
+- **Fuel composes.** Callback instructions draw from the same tank as
+  the rest of the script; a runaway callback faults with "fuel
+  exhausted" like any other code.
+- **Ping-pong is bounded.** Host→script re-entries nest at most
+  `REENTRY_DEPTH_LIMIT` (32) deep — mutual host/script recursion faults
+  trappably instead of overflowing the native stack.
+
+Scoped use only in this release: call the closure while your host
+function runs. A stored-callback API (`Vm::call_closure` on a kept
+value) is a planned follow-up. Callbacks are for free functions;
+opaque-type *methods* cannot take `HostCtx` yet (the receiver borrow
+would be held across re-entry).
 
 ## Shared live values
 
