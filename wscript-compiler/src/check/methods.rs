@@ -14,10 +14,13 @@ use wscript_core::types::{FnSig, Type};
 pub enum SchemeConstraint {
     /// Element type must support `==`.
     EqElem,
-    /// Element type must be orderable (int/float/char/string).
+    /// Element type must be orderable (`ord_able`: primitives, containers
+    /// of orderables, or types with an `Ord` impl).
     OrdElem,
     /// Element type must be `string`.
     StrElem,
+    /// Element type must be numeric (int or float) — `sum`.
+    NumElem,
 }
 
 pub struct Scheme {
@@ -141,6 +144,50 @@ fn list_method(name: &str) -> Option<Scheme> {
         "slice" => s(vec![Type::Int, Type::Int], list(p(0)), ListSlice),
         "concat" => s(vec![list(p(0))], list(p(0)), ListConcat),
         "clone" => s(vec![], list(p(0)), ListClone),
+        "any" => s(vec![func(vec![p(0)], Type::Bool)], Type::Bool, ListAny),
+        "all" => s(vec![func(vec![p(0)], Type::Bool)], Type::Bool, ListAll),
+        "find" => s(vec![func(vec![p(0)], Type::Bool)], opt(p(0)), ListFind),
+        "position" => s(
+            vec![func(vec![p(0)], Type::Bool)],
+            opt(Type::Int),
+            ListPosition,
+        ),
+        "count" => s(vec![func(vec![p(0)], Type::Bool)], Type::Int, ListCount),
+        // `sum`'s builtin is refined to ListSumFloat by the checker when
+        // the element type resolves to float (see apply_scheme).
+        "sum" => Scheme {
+            constraint: Some(SchemeConstraint::NumElem),
+            ..s(vec![], p(0), ListSumInt)
+        },
+        "min" => Scheme {
+            constraint: Some(SchemeConstraint::OrdElem),
+            ..s(vec![], opt(p(0)), ListMin)
+        },
+        "max" => Scheme {
+            constraint: Some(SchemeConstraint::OrdElem),
+            ..s(vec![], opt(p(0)), ListMax)
+        },
+        "sort_by" => s(
+            vec![func(vec![p(0), p(0)], Type::Int)],
+            Type::Unit,
+            ListSortBy,
+        ),
+        "map_indexed" => Scheme {
+            fresh: 1,
+            ..s(
+                vec![func(vec![Type::Int, p(0)], p(1))],
+                list(p(1)),
+                ListMapIndexed,
+            )
+        },
+        "zip_with" => Scheme {
+            fresh: 2,
+            ..s(
+                vec![list(p(1)), func(vec![p(0), p(1)], p(2))],
+                list(p(2)),
+                ListZipWith,
+            )
+        },
         _ => return None,
     })
 }
@@ -158,7 +205,22 @@ fn map_method(name: &str) -> Option<Scheme> {
         "keys" => s(vec![], list(p(0)), MapKeys),
         "values" => s(vec![], list(p(1)), MapValues),
         "clear" => s(vec![], Type::Unit, MapClear),
-        "clone" => s(vec![], map_ty, MapClone),
+        "clone" => s(vec![], map_ty.clone(), MapClone),
+        // Two-parameter (key, value) closures — the tuple-free surface.
+        "each" => s(
+            vec![func(vec![p(0), p(1)], Type::Unit)],
+            Type::Unit,
+            MapEach,
+        ),
+        "map" => Scheme {
+            fresh: 1,
+            ..s(
+                vec![func(vec![p(0), p(1)], p(2))],
+                list(p(2)),
+                MapMapEntries,
+            )
+        },
+        "filter" => s(vec![func(vec![p(0), p(1)], Type::Bool)], map_ty, MapFilter),
         _ => return None,
     })
 }

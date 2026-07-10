@@ -1583,14 +1583,12 @@ impl<'a> Checker<'a> {
             let elem = self.resolve(subst.first().unwrap_or(&Type::Error));
             let ok = match c {
                 SchemeConstraint::EqElem => self.eq_able(&elem),
-                SchemeConstraint::OrdElem => {
-                    matches!(
-                        elem,
-                        Type::Int | Type::Float | Type::Char | Type::Str | Type::Error
-                    )
-                }
+                SchemeConstraint::OrdElem => self.ord_able(&elem),
                 SchemeConstraint::StrElem => {
                     matches!(elem, Type::Str | Type::Error) || matches!(elem, Type::Var(_))
+                }
+                SchemeConstraint::NumElem => {
+                    matches!(elem, Type::Int | Type::Float | Type::Error)
                 }
             };
             if !ok {
@@ -1602,19 +1600,31 @@ impl<'a> Checker<'a> {
                     ),
                     SchemeConstraint::OrdElem => (
                         format!("`{mname}` requires orderable elements, but found `{es}`"),
-                        "sortable element types are int, float, char, and string",
+                        "orderable element types are primitives, strings, containers of \
+                         orderables, and types with an Ord impl",
                     ),
                     SchemeConstraint::StrElem => (
                         format!("`{mname}` requires `List[string]`, but elements are `{es}`"),
                         "use `.map(...)` to convert elements to strings first",
                     ),
+                    SchemeConstraint::NumElem => (
+                        format!("`{mname}` requires int or float elements, but found `{es}`"),
+                        "annotate the list's element type if it is empty or unresolved",
+                    ),
                 };
                 self.error_help("E0242", name_span, msg, help);
             }
         }
-        self.out
-            .methods
-            .insert(e.id, MethodRes::Builtin(scheme.builtin));
+        // `sum` compiles to a typed builtin so an empty List[float] sums
+        // to 0.0, not 0 — the VM cannot know the element type at runtime.
+        let mut builtin = scheme.builtin;
+        if matches!(builtin, wscript_core::bytecode::Builtin::ListSumInt) {
+            let elem = self.resolve(subst.first().unwrap_or(&Type::Error));
+            if matches!(elem, Type::Float) {
+                builtin = wscript_core::bytecode::Builtin::ListSumFloat;
+            }
+        }
+        self.out.methods.insert(e.id, MethodRes::Builtin(builtin));
         ret
     }
 

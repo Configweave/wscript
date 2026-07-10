@@ -114,6 +114,26 @@ pub enum Builtin {
     ListConcat,
     ListIsEmpty,
     ListClone,
+    /// `any`/`all`/`find`/`position`/`count` — short-circuiting predicate
+    /// combinators.
+    ListAny,
+    ListAll,
+    ListFind,
+    ListPosition,
+    ListCount,
+    /// `sum` — the checker selects Int vs Float from the element type so
+    /// empty lists stay type-correct.
+    ListSumInt,
+    ListSumFloat,
+    ListMin,
+    ListMax,
+    /// `sort_by(cmp)` — stable sort with a script comparator returning
+    /// negative/0/positive.
+    ListSortBy,
+    /// `map_indexed(|i, x| ...)` / `zip_with(other, |a, b| ...)` — the
+    /// tuple-free stand-ins for enumerate/zip.
+    ListMapIndexed,
+    ListZipWith,
     // ---- map methods ----
     MapLen,
     MapInsert,
@@ -125,6 +145,11 @@ pub enum Builtin {
     MapClear,
     MapIsEmpty,
     MapClone,
+    /// `each`/`map`/`filter` over (key, value) pairs — two-parameter
+    /// closures replace tuple-returning `entries()`.
+    MapEach,
+    MapMapEntries,
+    MapFilter,
     // ---- option methods ----
     OptionIsSome,
     OptionIsNone,

@@ -418,12 +418,195 @@ impl Vm {
                 Value::Unit
             }
             Builtin::ListSort => {
-                // Elements are primitives (checker-enforced), so a static
-                // comparator suffices.
                 let l = list_arg!(0);
-                let mut items = l.borrow_mut();
-                items.sort_by(prim_cmp);
+                // Fast path for primitive elements (homogeneous by the
+                // checker); structural/Ord-impl elements go through the
+                // fallible value_cmp merge sort.
+                let is_prim = matches!(
+                    l.borrow().first(),
+                    None | Some(
+                        Value::Int(_)
+                            | Value::Float(_)
+                            | Value::Char(_)
+                            | Value::Str(_)
+                            | Value::Bool(_)
+                    )
+                );
+                if is_prim {
+                    l.borrow_mut().sort_by(prim_cmp);
+                } else {
+                    let snapshot = l.borrow().clone();
+                    let sorted = self.merge_sort(snapshot, &mut |vm, a, b| vm.value_cmp(a, b))?;
+                    *l.borrow_mut() = sorted;
+                }
                 Value::Unit
+            }
+            Builtin::ListSortBy => {
+                let l = list_arg!(0);
+                let f = args[1].clone();
+                // Snapshot semantics like map/filter: the comparator
+                // re-enters script code and may mutate the receiver.
+                let snapshot = l.borrow().clone();
+                let sorted = self.merge_sort(snapshot, &mut |vm, a, b| match vm
+                    .call_function(&f, vec![a.clone(), b.clone()])?
+                {
+                    Value::Int(n) => Ok(n),
+                    other => Err(vm.fault(format!(
+                        "sort_by: comparator returned {}, expected int (negative/0/positive)",
+                        other.kind_name()
+                    ))),
+                })?;
+                *l.borrow_mut() = sorted;
+                Value::Unit
+            }
+            Builtin::ListAny | Builtin::ListAll => {
+                let snapshot = list_arg!(0).borrow().clone();
+                let f = args[1].clone();
+                let mname = if matches!(b, Builtin::ListAny) {
+                    "any"
+                } else {
+                    "all"
+                };
+                let mut result = matches!(b, Builtin::ListAll);
+                for item in snapshot {
+                    match self.call_function(&f, vec![item])? {
+                        Value::Bool(hit) => {
+                            if hit != result {
+                                result = hit;
+                                break; // short-circuit
+                            }
+                        }
+                        other => {
+                            return Err(self.fault(format!(
+                                "{mname}: predicate returned {}, expected bool",
+                                other.kind_name()
+                            )));
+                        }
+                    }
+                }
+                Value::Bool(result)
+            }
+            Builtin::ListFind | Builtin::ListPosition => {
+                let snapshot = list_arg!(0).borrow().clone();
+                let f = args[1].clone();
+                let mname = if matches!(b, Builtin::ListFind) {
+                    "find"
+                } else {
+                    "position"
+                };
+                let mut hit = none();
+                for (i, item) in snapshot.into_iter().enumerate() {
+                    match self.call_function(&f, vec![item.clone()])? {
+                        Value::Bool(true) => {
+                            hit = if matches!(b, Builtin::ListFind) {
+                                some(item)
+                            } else {
+                                some(Value::Int(i as i64))
+                            };
+                            break;
+                        }
+                        Value::Bool(false) => {}
+                        other => {
+                            return Err(self.fault(format!(
+                                "{mname}: predicate returned {}, expected bool",
+                                other.kind_name()
+                            )));
+                        }
+                    }
+                }
+                hit
+            }
+            Builtin::ListCount => {
+                let snapshot = list_arg!(0).borrow().clone();
+                let f = args[1].clone();
+                let mut n: i64 = 0;
+                for item in snapshot {
+                    match self.call_function(&f, vec![item])? {
+                        Value::Bool(true) => n += 1,
+                        Value::Bool(false) => {}
+                        other => {
+                            return Err(self.fault(format!(
+                                "count: predicate returned {}, expected bool",
+                                other.kind_name()
+                            )));
+                        }
+                    }
+                }
+                Value::Int(n)
+            }
+            Builtin::ListSumInt => {
+                let snapshot = list_arg!(0).borrow().clone();
+                let mut acc: i64 = 0;
+                for item in snapshot {
+                    match item {
+                        Value::Int(n) => acc = acc.wrapping_add(n),
+                        other => {
+                            return Err(self.fault(format!(
+                                "type confusion: sum over {} elements",
+                                other.kind_name()
+                            )));
+                        }
+                    }
+                }
+                Value::Int(acc)
+            }
+            Builtin::ListSumFloat => {
+                let snapshot = list_arg!(0).borrow().clone();
+                let mut acc: f64 = 0.0;
+                for item in snapshot {
+                    match item {
+                        Value::Float(f) => acc += f,
+                        other => {
+                            return Err(self.fault(format!(
+                                "type confusion: sum over {} elements",
+                                other.kind_name()
+                            )));
+                        }
+                    }
+                }
+                Value::Float(acc)
+            }
+            Builtin::ListMin | Builtin::ListMax => {
+                let snapshot = list_arg!(0).borrow().clone();
+                let want_min = matches!(b, Builtin::ListMin);
+                let mut best: Option<Value> = None;
+                for item in snapshot {
+                    best = Some(match best {
+                        None => item,
+                        Some(cur) => {
+                            let c = self.value_cmp(&item, &cur)?;
+                            if (want_min && c < 0) || (!want_min && c > 0) {
+                                item
+                            } else {
+                                cur
+                            }
+                        }
+                    });
+                }
+                match best {
+                    Some(v) => some(v),
+                    None => none(),
+                }
+            }
+            Builtin::ListMapIndexed => {
+                let snapshot = list_arg!(0).borrow().clone();
+                let f = args[1].clone();
+                let mut out = Vec::with_capacity(snapshot.len());
+                for (i, item) in snapshot.into_iter().enumerate() {
+                    out.push(self.call_function(&f, vec![Value::Int(i as i64), item])?);
+                }
+                Value::new_list(out)
+            }
+            Builtin::ListZipWith => {
+                let a = list_arg!(0).borrow().clone();
+                let bs = list_arg!(1).borrow().clone();
+                let f = args[2].clone();
+                let n = a.len().min(bs.len());
+                let mut out = Vec::with_capacity(n);
+                for i in 0..n {
+                    out.push(self.call_function(&f, vec![a[i].clone(), bs[i].clone()])?);
+                }
+                Value::new_list(out)
             }
             Builtin::ListJoin => {
                 let snapshot = list_arg!(0).borrow().clone();
@@ -564,6 +747,43 @@ impl Vm {
                 }
                 Value::new_map(out)
             }
+            Builtin::MapEach => {
+                let snapshot = map_arg!(0).borrow().clone();
+                let f = args[1].clone();
+                for (k, v) in snapshot {
+                    self.call_function(&f, vec![k.to_value(), v])?;
+                }
+                Value::Unit
+            }
+            Builtin::MapMapEntries => {
+                let snapshot = map_arg!(0).borrow().clone();
+                let f = args[1].clone();
+                let mut out = Vec::with_capacity(snapshot.len());
+                for (k, v) in snapshot {
+                    out.push(self.call_function(&f, vec![k.to_value(), v])?);
+                }
+                Value::new_list(out)
+            }
+            Builtin::MapFilter => {
+                let snapshot = map_arg!(0).borrow().clone();
+                let f = args[1].clone();
+                let mut out = BTreeMap::new();
+                for (k, v) in snapshot {
+                    match self.call_function(&f, vec![k.to_value(), v.clone()])? {
+                        Value::Bool(true) => {
+                            out.insert(k, v);
+                        }
+                        Value::Bool(false) => {}
+                        other => {
+                            return Err(self.fault(format!(
+                                "filter: predicate returned {}, expected bool",
+                                other.kind_name()
+                            )));
+                        }
+                    }
+                }
+                Value::new_map(out)
+            }
 
             // ------------------------------------------ option / result
             Builtin::OptionIsSome => Value::Bool(enum_arg!(0).tag == TAG_SOME),
@@ -636,6 +856,38 @@ impl Vm {
     fn as_key(&self, v: &Value) -> Result<Key, RuntimeError> {
         Key::from_value(v)
             .ok_or_else(|| self.fault(format!("invalid map key of type {}", v.kind_name())))
+    }
+
+    /// Stable merge sort threading a fallible, script-re-entering
+    /// comparator (`Vec::sort_by` can neither fail nor take `&mut Vm`).
+    /// Operates on a snapshot; callers write the result back. Ties keep
+    /// the left/earlier element (stability).
+    fn merge_sort(
+        &mut self,
+        items: Vec<Value>,
+        cmp: &mut impl FnMut(&mut Vm, &Value, &Value) -> Result<i64, RuntimeError>,
+    ) -> Result<Vec<Value>, RuntimeError> {
+        if items.len() < 2 {
+            return Ok(items);
+        }
+        let mid = items.len() / 2;
+        let mut right = items;
+        let left = self.merge_sort(right.drain(..mid).collect(), cmp)?;
+        let right = self.merge_sort(right, cmp)?;
+        let mut out = Vec::with_capacity(left.len() + right.len());
+        let (mut li, mut ri) = (0, 0);
+        while li < left.len() && ri < right.len() {
+            if cmp(self, &right[ri], &left[li])? < 0 {
+                out.push(right[ri].clone());
+                ri += 1;
+            } else {
+                out.push(left[li].clone());
+                li += 1;
+            }
+        }
+        out.extend_from_slice(&left[li..]);
+        out.extend_from_slice(&right[ri..]);
+        Ok(out)
     }
 
     /// Render one value under a `{:spec}` format spec. Base conversion and

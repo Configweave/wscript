@@ -205,9 +205,23 @@ ages["nope"]                       // faults — use .get for Option
 
 Map keys are `int`, `bool`, `char` or `string`. List methods:
 `len is_empty push pop get set insert remove clear contains index_of
-reverse sort join map filter fold first last slice concat clone`.
+reverse sort sort_by join map filter fold any all find position count
+sum min max map_indexed zip_with first last slice concat clone`.
 Map methods: `len is_empty insert remove get contains_key keys values
-clear clone`.
+each map filter clear clone`.
+
+```rust
+xs.any(|x| x > 2)                     // short-circuits
+xs.sort_by(|a, b| b - a)              // comparator: negative/0/positive
+xs.map_indexed(|i, x| fmt("{}: {}", i, x))   // enumerate, tuple-free
+xs.zip_with(ys, |a, b| a + b)         // zip, tuple-free
+ages.each(|k, v| println(k))          // map iteration with (key, value)
+ages.filter(|k, v| v > 18)            // new Map
+```
+
+`sort`/`min`/`max` work on primitives and on types with an `Ord` impl;
+`sort_by` takes any comparator. `sum` needs `List[int]` or `List[float]`
+(annotate empty lists).
 
 Strings are immutable; all operations are methods returning new strings.
 `len`, `slice`, `find` work in characters (not bytes — `bytes_len` exists):
