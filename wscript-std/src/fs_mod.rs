@@ -67,6 +67,42 @@ pub fn fs() -> Module {
         std::fs::remove_dir(path).map_err(err_str)
     });
 
+    // metadata
+    m.fn_("size", |path: &str| -> Result<i64, String> {
+        std::fs::metadata(path)
+            .map(|m| m.len() as i64)
+            .map_err(err_str)
+    });
+    m.fn_("mtime_unix", |path: &str| -> Result<f64, String> {
+        let mtime = std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .map_err(err_str)?;
+        Ok(match mtime.duration_since(std::time::UNIX_EPOCH) {
+            Ok(d) => d.as_secs_f64(),
+            Err(e) => -e.duration().as_secs_f64(), // pre-1970 mtimes
+        })
+    });
+    m.fn_("walk", |dir: &str| -> Result<Vec<String>, String> {
+        // Recursive listing: every entry (files and directories) under
+        // `dir`, as paths joined onto the argument, sorted. Iterative with
+        // an explicit stack; unreadable subdirectories propagate as Err,
+        // consistent with list_dir.
+        let mut out = Vec::new();
+        let mut stack = vec![std::path::PathBuf::from(dir)];
+        while let Some(d) = stack.pop() {
+            for entry in std::fs::read_dir(&d).map_err(err_str)? {
+                let entry = entry.map_err(err_str)?;
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path.clone());
+                }
+                out.push(path.to_string_lossy().into_owned());
+            }
+        }
+        out.sort();
+        Ok(out)
+    });
+
     // path helpers (pure string manipulation)
     m.fn_("join", |a: &str, b: &str| {
         Path::new(a).join(b).to_string_lossy().into_owned()

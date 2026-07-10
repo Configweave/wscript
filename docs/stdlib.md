@@ -52,6 +52,29 @@ All fallible operations return `Result[..., string]`.
 | `remove_file`, `remove_dir` | `(string) -> Result[unit, string]` |
 | `join` | `(string, string) -> string` |
 | `parent`, `file_name`, `ext` | `(string) -> Option[string]` |
+| `size` | `(string) -> Result[int, string]` — file size in bytes |
+| `mtime_unix` | `(string) -> Result[float, string]` — modification time, unix seconds |
+| `walk` | `(string) -> Result[List[string], string]` — recursive listing (files *and* dirs), paths joined onto the argument, sorted |
+
+## `time` — clocks & sleeping (capability: clock access, blocking)
+
+```rust
+use time
+
+let t = time::instant()
+time::sleep(50)
+println(time::elapsed(t))               // ~0.05
+println(time::format_iso(time::now_unix()))
+```
+
+| function | signature |
+|---|---|
+| `now_unix` | `() -> float` — unix seconds (fractional) |
+| `now_millis` | `() -> int` — unix milliseconds |
+| `instant` | `() -> float` — monotonic seconds since a process-wide anchor |
+| `elapsed` | `(float) -> float` — seconds since an `instant()` value |
+| `sleep` | `(int)` — milliseconds; blocks the VM thread (not interruptible by fuel); negatives clamp to 0 |
+| `format_iso` | `(float) -> string` — UTC ISO-8601 (`1970-01-01T00:00:00Z`); sub-second truncated |
 
 ## `process` — commands & environment (capability: process control)
 
@@ -137,8 +160,8 @@ shapes.get("shape").unwrap().len()             // 2 — repeated → List
 
 ## Cargo features
 
-`wscript-std` features (default = all): `math`, `fs`, `process`, `json`,
-`toml`, `xml`. The shared `Value` type and its module are always
+`wscript-std` features (default = all): `math`, `fs`, `process`, `time`,
+`json`, `toml`, `xml`. The shared `Value` type and its module are always
 compiled. Embedders wanting a minimal build:
 
 ```toml

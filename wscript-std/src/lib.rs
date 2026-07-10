@@ -18,6 +18,8 @@ mod json_mod;
 mod math_mod;
 #[cfg(feature = "process")]
 mod process_mod;
+#[cfg(feature = "time")]
+mod time_mod;
 #[cfg(feature = "toml")]
 mod toml_mod;
 mod value;
@@ -35,6 +37,8 @@ pub use json_mod::json;
 pub use math_mod::math;
 #[cfg(feature = "process")]
 pub use process_mod::{Output, process, process_with_args};
+#[cfg(feature = "time")]
+pub use time_mod::time;
 #[cfg(feature = "toml")]
 pub use toml_mod::toml;
 #[cfg(feature = "xml")]
@@ -53,6 +57,8 @@ pub fn all_modules(script_args: Vec<String>) -> Vec<wscript_core::Module> {
     mods.push(process_with_args(script_args));
     #[cfg(not(feature = "process"))]
     let _ = script_args;
+    #[cfg(feature = "time")]
+    mods.push(time());
     #[cfg(feature = "json")]
     mods.push(json());
     #[cfg(feature = "toml")]

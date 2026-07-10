@@ -6,10 +6,11 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = ["math", "fs", "process", "json", "toml", "xml"]
+default = ["math", "fs", "process", "time", "json", "toml", "xml"]
 math = []
 fs = []
 process = []
+time = []
 # json/toml/xml share the dynamic Value type (always compiled in).
 json = ["dep:serde_json"]
 toml = ["dep:toml"]

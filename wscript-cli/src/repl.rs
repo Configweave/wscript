@@ -30,6 +30,10 @@ pub fn run(ctx: Context) -> ExitCode {
         eprintln!("error: cannot initialize the line editor");
         return ExitCode::FAILURE;
     };
+    let history = history_path();
+    if let Some(path) = &history {
+        let _ = editor.load_history(path); // absent on first run — fine
+    }
     let defs = ctx.registry().defs.clone();
     let mut repl = Repl {
         ctx,
@@ -78,7 +82,32 @@ pub fn run(ctx: Context) -> ExitCode {
         let _ = editor.add_history_entry(trimmed);
         repl.handle(trimmed);
     }
+    if let Some(path) = &history {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = editor.save_history(path);
+    }
     ExitCode::SUCCESS
+}
+
+/// Where REPL history lives: `$WSCRIPT_HISTORY` override, else
+/// `$XDG_STATE_HOME/wscript/history`, else `~/.local/state/wscript/history`,
+/// else `~/.wscript_history`. `None` when no home directory is resolvable.
+fn history_path() -> Option<std::path::PathBuf> {
+    if let Ok(p) = std::env::var("WSCRIPT_HISTORY")
+        && !p.is_empty()
+    {
+        return Some(p.into());
+    }
+    if let Ok(state) = std::env::var("XDG_STATE_HOME")
+        && !state.is_empty()
+    {
+        return Some(std::path::Path::new(&state).join("wscript/history"));
+    }
+    let home = std::env::var("HOME").ok().filter(|h| !h.is_empty())?;
+    let home = std::path::Path::new(&home);
+    Some(home.join(".local/state/wscript/history"))
 }
 
 /// Read one logical input, continuing across lines while delimiters are
