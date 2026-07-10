@@ -131,6 +131,21 @@ mod time {
     fn format_iso(a0: float) -> string
 }
 
+/// Regular expressions (pure; invalid patterns fault)
+mod regex {
+    fn is_match(a0: string, a1: string) -> bool
+    /// First match, or None
+    fn find(a0: string, a1: string) -> Option[string]
+    /// Every non-overlapping match, in order
+    fn find_all(a0: string, a1: string) -> List[string]
+    /// Replace every match; `$1`/`$name` expand capture groups
+    fn replace(a0: string, a1: string, a2: string) -> string
+    /// Capture groups of the first match: group 0 (whole match) first; non-participating groups are empty strings
+    fn captures(a0: string, a1: string) -> Option[List[string]]
+    /// Split around every match
+    fn split(a0: string, a1: string) -> List[string]
+}
+
 /// JSON parsing and serialization (shared Value type)
 mod json {
     fn parse(a0: string) -> Result[Value, string]

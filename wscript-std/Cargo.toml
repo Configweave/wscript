@@ -6,11 +6,12 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = ["math", "fs", "process", "time", "json", "toml", "xml"]
+default = ["math", "fs", "process", "time", "regex", "json", "toml", "xml"]
 math = []
 fs = []
 process = []
 time = []
+regex = ["dep:regex"]
 # json/toml/xml share the dynamic Value type (always compiled in).
 json = ["dep:serde_json"]
 toml = ["dep:toml"]
@@ -19,6 +20,7 @@ xml = ["dep:quick-xml"]
 [dependencies]
 wscript-core.workspace = true
 wscript-macros.workspace = true
+regex = { version = "1", optional = true }
 serde_json = { version = "1", optional = true }
 toml = { version = "0.8", optional = true }
 quick-xml = { version = "0.37", optional = true }

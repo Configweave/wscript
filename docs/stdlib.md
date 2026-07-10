@@ -76,6 +76,28 @@ println(time::format_iso(time::now_unix()))
 | `sleep` | `(int)` — milliseconds; blocks the VM thread (not interruptible by fuel); negatives clamp to 0 |
 | `format_iso` | `(float) -> string` — UTC ISO-8601 (`1970-01-01T00:00:00Z`); sub-second truncated |
 
+## `regex` — regular expressions (pure)
+
+Patterns are strings, compiled through a process-wide cache — hot loops
+don't recompile. **An invalid pattern is a trappable fault** (it's a
+programming error), not a `Result`.
+
+```rust
+use regex
+
+regex::find_all("[0-9]+", "12 34")                     // ["12", "34"]
+regex::replace("(\\w+)@(\\w+)", s, "$2.$1")            // $1/$name groups
+```
+
+| function | signature |
+|---|---|
+| `is_match` | `(string, string) -> bool` — pattern, subject |
+| `find` | `(string, string) -> Option[string]` — first match |
+| `find_all` | `(string, string) -> List[string]` |
+| `replace` | `(string, string, string) -> string` — replaces **all** matches; `$1`/`$name` expand groups |
+| `captures` | `(string, string) -> Option[List[string]]` — group 0 first; non-participating groups are `""` |
+| `split` | `(string, string) -> List[string]` |
+
 ## `process` — commands & environment (capability: process control)
 
 ```rust
@@ -162,8 +184,8 @@ shapes.get("shape").unwrap().len()             // 2 — repeated → List
 ## Cargo features
 
 `wscript-std` features (default = all): `math`, `fs`, `process`, `time`,
-`json`, `toml`, `xml`. The shared `Value` type and its module are always
-compiled. Embedders wanting a minimal build:
+`regex`, `json`, `toml`, `xml`. The shared `Value` type and its module
+are always compiled. Embedders wanting a minimal build:
 
 ```toml
 wscript-std = { version = "...", default-features = false, features = ["math"] }
