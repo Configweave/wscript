@@ -52,6 +52,7 @@ pub fn emit(file: &SourceFile, res: &CheckResult) -> CompiledUnit {
             .collect(),
         impls: res.impl_maps.clone(),
         exports: res.exports.clone(),
+        generic_fns: res.generic_fns.clone(),
     }
 }
 

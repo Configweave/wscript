@@ -150,6 +150,9 @@ impl Infer {
             }
             (Type::Named(d1), Type::Named(d2)) if d1 == d2 => Ok(()),
             (Type::Dyn(t1), Type::Dyn(t2)) if t1 == t2 => Ok(()),
+            // Rigid type parameters (generic fn bodies): `T` unifies only
+            // with itself.
+            (Type::Param(p1), Type::Param(p2)) if p1 == p2 => Ok(()),
             _ => Err(UnifyError {
                 expected: a,
                 found: b,

@@ -63,6 +63,9 @@ pub struct UseDecl {
 #[derive(Debug)]
 pub struct FnDecl {
     pub name: Ident,
+    /// `fn f[T, U: Ord](...)` — generic type parameters (top-level fns
+    /// only; empty for monomorphic fns).
+    pub type_params: Vec<TypeParam>,
     pub params: Vec<Param>,
     pub ret: Option<TypeExpr>,
     pub body: Block,
@@ -72,6 +75,13 @@ pub struct FnDecl {
     pub span: Span,
     /// Span of `fn name(params) -> ret` for hover/goto.
     pub sig_span: Span,
+}
+
+/// One declared type parameter: `T` or `T: Ord`.
+#[derive(Debug)]
+pub struct TypeParam {
+    pub name: Ident,
+    pub bound: Option<Ident>,
 }
 
 #[derive(Debug)]

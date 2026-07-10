@@ -391,6 +391,12 @@ impl UnitExt for CompiledUnit {
         name: &str,
     ) -> Result<ScriptFn<A, R>, Error> {
         let Some((proto, sig)) = self.exports.get(name) else {
+            if self.generic_fns.iter().any(|f| f == name) {
+                return Err(Error::Signature(format!(
+                    "`{name}` is generic; the host cannot call generic script functions \
+                     — wrap it in a monomorphic script fn"
+                )));
+            }
             return Err(Error::Signature(format!(
                 "the script does not define a function named `{name}`"
             )));

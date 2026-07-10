@@ -191,6 +191,20 @@ impl<'a> Loader<'a> {
         for item in &m.items {
             match item {
                 Item::Fn(f) => {
+                    if !f.type_params.is_empty() {
+                        self.diags.push(
+                            Diagnostic::error(
+                                "E0254",
+                                f.name.span,
+                                "generic host functions are not supported",
+                            )
+                            .with_help(
+                                "host functions are monomorphic Rust closures; declare \
+                                 concrete overloads instead",
+                            ),
+                        );
+                        continue;
+                    }
                     self.index
                         .module_items
                         .insert((m.name.name.clone(), f.name.name.clone()), f.name.span);

@@ -556,6 +556,10 @@ pub struct CompiledUnit {
     /// Top-level script functions callable from the host: name → (proto
     /// index, signature). Signatures are checked at the host boundary.
     pub exports: HashMap<String, (u32, FnSig)>,
+    /// Names of top-level *generic* fns — not exported (their erased
+    /// signatures can never match host types); kept so the host boundary
+    /// can explain why a lookup failed.
+    pub generic_fns: Vec<String>,
 }
 
 impl CompiledUnit {

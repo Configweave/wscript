@@ -392,6 +392,11 @@ impl Parser {
     fn fn_decl(&mut self, allow_self: bool, doc: Option<String>) -> Option<FnDecl> {
         let kw = self.bump().span; // `fn`
         let name = self.expect_ident("function name after `fn`")?;
+        let type_params = if self.at(&TokenKind::LBracket) {
+            self.type_param_list()
+        } else {
+            Vec::new()
+        };
         self.expect(&TokenKind::LParen, "`(` to start the parameter list")?;
         let params = self.params(allow_self);
         let mut ret = None;
@@ -405,6 +410,7 @@ impl Parser {
             let id = self.id();
             return Some(FnDecl {
                 name,
+                type_params,
                 params,
                 ret,
                 body: Block {
@@ -423,6 +429,7 @@ impl Parser {
         let span = kw.to(body.span);
         Some(FnDecl {
             name,
+            type_params,
             params,
             ret,
             body,
@@ -1106,6 +1113,72 @@ impl Parser {
             kind,
             span,
             id: self.id(),
+        }
+    }
+
+    /// `[T, U: Ord]` — a fn declaration's type-parameter list (cursor on
+    /// the `[`). Bounds are single identifiers; the checker validates
+    /// them (only `Eq`, `Ord`, `Clone` in this release).
+    fn type_param_list(&mut self) -> Vec<TypeParam> {
+        let open = self.bump().span; // `[`
+        let mut out = Vec::new();
+        loop {
+            self.skip_newlines();
+            if self.eat(&TokenKind::RBracket) {
+                break;
+            }
+            let Some(name) = self.expect_ident("type parameter name") else {
+                self.recover_to_close_bracket();
+                break;
+            };
+            let bound = if self.eat(&TokenKind::Colon) {
+                self.expect_ident("bound name after `:` (e.g. `T: Ord`)")
+            } else {
+                None
+            };
+            out.push(TypeParam { name, bound });
+            self.skip_newlines();
+            if !self.eat(&TokenKind::Comma) {
+                if !self.eat(&TokenKind::RBracket) {
+                    let found = self.kind().describe();
+                    let span = self.span();
+                    self.error(
+                        "E0100",
+                        span,
+                        format!("expected `]` to close the type parameter list, found {found}"),
+                    );
+                    self.recover_to_close_bracket();
+                }
+                break;
+            }
+        }
+        if out.is_empty() {
+            self.diags.push(
+                Diagnostic::error(
+                    "E0255",
+                    open.to(self.prev_span()),
+                    "empty type parameter list",
+                )
+                .with_help("declare at least one parameter (`fn f[T](...)`) or drop the `[]`"),
+            );
+        }
+        out
+    }
+
+    /// Skip tokens until just past a `]` (or a newline/EOF) — recovery
+    /// for malformed type-parameter lists.
+    fn recover_to_close_bracket(&mut self) {
+        loop {
+            match self.kind() {
+                TokenKind::RBracket => {
+                    self.bump();
+                    break;
+                }
+                TokenKind::Newline | TokenKind::Eof | TokenKind::LBrace => break,
+                _ => {
+                    self.bump();
+                }
+            }
         }
     }
 

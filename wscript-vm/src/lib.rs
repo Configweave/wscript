@@ -250,8 +250,16 @@ impl Vm {
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
         let Some(&(proto, _)) = unit.exports.get(name) else {
+            let message = if unit.generic_fns.iter().any(|f| f == name) {
+                format!(
+                    "`{name}` is generic; the host cannot call generic script functions \
+                     — wrap it in a monomorphic script fn"
+                )
+            } else {
+                format!("no function named `{name}` in the compiled script")
+            };
             return Err(RuntimeError {
-                message: format!("no function named `{name}` in the compiled script"),
+                message,
                 span: None,
                 trace: vec![],
                 exit_code: None,

@@ -143,6 +143,11 @@ impl Damageable for Point {
 
 ### 3.6 Generics: the deliberate cut
 
+*(Shipped post-v1, stage 1: type-erased generic **functions** —
+`fn f[T: Ord](...)` with Eq/Ord/Clone bounds, inference-only call
+sites, one proto per fn. Generic types/methods and further bounds
+remain future stages; the rest of this section records the v1 stance.)*
+
 - **No user-defined generics in v1.** All user functions are monomorphic.
 - `List[T]`, `Map[K, V]`, `Option[T]`, `Result[T, E]`, `weak[T]` are **compiler-special-cased built-ins**. The checker knows their methods' type schemes internally; users instantiate them but cannot define their own generic types or functions.
 - Square-bracket type application (`List[int]`) is reserved syntax so v2 user generics don't need a syntax break.

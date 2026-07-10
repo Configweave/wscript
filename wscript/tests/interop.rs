@@ -659,3 +659,27 @@ fn vm_is_reusable_after_fuel_exhaustion() {
     let n: i64 = vm.call_unit(&unit, "add", (1_i64, 2_i64)).unwrap();
     assert_eq!(n, 3);
 }
+
+#[test]
+fn generic_fns_rejected_at_host_boundary() {
+    let ctx = Context::new();
+    let unit = ctx
+        .compile(
+            "fn identity[T](x: T) -> T { x }\n\
+             fn identity_int(x: int) -> int { identity(x) }\n\
+             fn main() {}",
+        )
+        .unwrap();
+
+    // A typed handle on a generic fn is rejected with a targeted message.
+    let handle: Result<wscript::ScriptFn<(i64,), i64>, _> = unit.fn_handle("identity");
+    let Err(err) = handle else {
+        panic!("generic fn_handle unexpectedly succeeded");
+    };
+    assert!(err.to_string().contains("is generic"), "{err}");
+
+    // The monomorphic wrapper works.
+    let mut vm = Vm::new(&ctx);
+    let n: i64 = vm.call_unit(&unit, "identity_int", (7_i64,)).unwrap();
+    assert_eq!(n, 7);
+}

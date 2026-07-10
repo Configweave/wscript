@@ -203,10 +203,31 @@ pub enum FnSource {
     Synthesized,
 }
 
+/// A built-in bound on a generic type parameter (`fn f[T: Ord]`).
+/// `Ord` implies `Eq` (mirroring the derive rule).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoundKind {
+    Eq,
+    Ord,
+    Clone,
+}
+
+/// A generic call deferred to end-of-function bound/inference checking.
+pub(crate) struct PendingInstantiation {
+    pub span: Span,
+    pub fn_name: String,
+    pub type_params: Vec<(String, Option<BoundKind>)>,
+    /// The fresh inference vars the call was instantiated with.
+    pub subst: Vec<Type>,
+}
+
 #[derive(Debug, Clone)]
 pub struct FnInfo {
     pub name: String,
     pub sig: FnSig,
+    /// Generic type parameters (name, bound) — the sig's `Type::Param(i)`
+    /// indices refer to this list. Empty for monomorphic fns.
+    pub type_params: Vec<(String, Option<BoundKind>)>,
     pub source: FnSource,
     /// Total locals (params first). Filled after body checking.
     pub n_locals: u32,
@@ -264,6 +285,8 @@ pub struct CheckResult {
     /// Exprs needing a `MakeDyn` wrap after evaluation → vtable id.
     pub dyn_wraps: HashMap<NodeId, u32>,
     pub fn_infos: Vec<FnInfo>,
+    /// Names of top-level generic fns (not exported; see collect_exports).
+    pub generic_fns: Vec<String>,
     /// vtable id → method slot targets (script proto indices).
     pub vtables: Vec<Vec<u32>>,
     pub impl_maps: ImplMaps,
@@ -330,6 +353,14 @@ pub struct Checker<'a> {
     pub(crate) inherent: HashMap<DefId, HashMap<String, u32>>,
     /// Associated functions (no-self fns in inherent impls): `Type::func`.
     pub(crate) assoc: HashMap<DefId, HashMap<String, u32>>,
+    /// Type parameters in scope — set while resolving a generic fn's
+    /// signature and while checking its body. `Type::Param(i)` indexes
+    /// this list (rigid: unifies only with itself).
+    pub(crate) current_type_params: Vec<(String, Option<BoundKind>)>,
+    /// Generic calls whose instantiation wasn't resolved at the callsite:
+    /// re-checked (bounds + inference) when the enclosing top-level fn
+    /// finishes. (call span, fn name, type_params, fresh instantiation).
+    pub(crate) pending_instantiations: Vec<PendingInstantiation>,
     /// (type, trait) → method protos in trait declaration order.
     pub(crate) trait_impls: HashMap<(DefId, DefId), Vec<u32>>,
     pub(crate) derives: HashMap<DefId, Derives>,
@@ -371,6 +402,8 @@ pub fn check(file: &SourceFile, registry: &Registry) -> CheckResult {
         imports: HashMap::new(),
         inherent: HashMap::new(),
         assoc: HashMap::new(),
+        current_type_params: Vec::new(),
+        pending_instantiations: Vec::new(),
         trait_impls: HashMap::new(),
         derives: HashMap::new(),
         vtable_cache: HashMap::new(),
@@ -828,11 +861,33 @@ impl<'a> Checker<'a> {
                 self.error("E0205", span, msg);
                 continue;
             }
+            // Generic fns: validate the type-parameter list and resolve
+            // the signature with those params in scope.
+            let type_params = self.collect_type_params(f);
+            self.current_type_params = type_params.clone();
             let sig = self.fn_decl_sig(f, None);
+            self.current_type_params.clear();
+            for (i, (name, _)) in type_params.iter().enumerate() {
+                if !sig_mentions_param(&sig, i as u32) {
+                    let span = f
+                        .type_params
+                        .get(i)
+                        .map(|tp| tp.name.span)
+                        .unwrap_or(f.sig_span);
+                    self.error_help(
+                        "E0255",
+                        span,
+                        format!("type parameter `{name}` is never used in the signature"),
+                        "every type parameter must appear in a parameter type or the \
+                         return type (there is no explicit instantiation syntax)",
+                    );
+                }
+            }
             let proto = self.out.fn_infos.len() as u32;
             self.out.fn_infos.push(FnInfo {
                 name: f.name.name.clone(),
                 sig,
+                type_params,
                 source: FnSource::Top { item: item_idx },
                 n_locals: 0,
                 captured: HashSet::new(),
@@ -847,6 +902,47 @@ impl<'a> Checker<'a> {
             let Item::Impl(im) = item else { continue };
             self.collect_impl(item_idx, im);
         }
+    }
+
+    /// Validate a fn's declared type parameters → (name, bound) list.
+    fn collect_type_params(&mut self, f: &FnDecl) -> Vec<(String, Option<BoundKind>)> {
+        let mut out: Vec<(String, Option<BoundKind>)> = Vec::new();
+        for tp in &f.type_params {
+            if out.iter().any(|(n, _)| *n == tp.name.name) {
+                let span = tp.name.span;
+                let msg = format!("duplicate type parameter `{}`", tp.name.name);
+                self.error("E0255", span, msg);
+                continue;
+            }
+            if self.type_names.contains_key(&tp.name.name) {
+                let span = tp.name.span;
+                let msg = format!("type parameter `{}` shadows an existing type", tp.name.name);
+                self.error_help("E0255", span, msg, "rename the type parameter");
+                // Declared anyway so the body doesn't cascade.
+            }
+            let bound = match &tp.bound {
+                None => None,
+                Some(b) => match b.name.as_str() {
+                    "Eq" => Some(BoundKind::Eq),
+                    "Ord" => Some(BoundKind::Ord),
+                    "Clone" => Some(BoundKind::Clone),
+                    other => {
+                        let span = b.span;
+                        let msg = format!("unsupported bound `{other}`");
+                        self.error_help(
+                            "E0254",
+                            span,
+                            msg,
+                            "only the built-in bounds `Eq`, `Ord` and `Clone` are \
+                             supported in this release",
+                        );
+                        None
+                    }
+                },
+            };
+            out.push((tp.name.name.clone(), bound));
+        }
+        out
     }
 
     fn collect_impl(&mut self, item_idx: usize, im: &ImplDecl) {
@@ -903,6 +999,16 @@ impl<'a> Checker<'a> {
         let mut method_protos: Vec<(String, u32, &FnDecl)> = Vec::new();
         let mut assoc_protos: Vec<(String, u32, &FnDecl)> = Vec::new();
         for (fn_idx, f) in im.fns.iter().enumerate() {
+            if !f.type_params.is_empty() {
+                let span = f.name.span;
+                self.error_help(
+                    "E0254",
+                    span,
+                    "generic methods are not supported yet",
+                    "only top-level `fn`s take type parameters in this release",
+                );
+                continue;
+            }
             let has_self = f.params.first().is_some_and(|p| p.is_self);
             if !has_self && im.trait_name.is_some() {
                 let span = f.name.span;
@@ -924,6 +1030,7 @@ impl<'a> Checker<'a> {
             self.out.fn_infos.push(FnInfo {
                 name: format!("{}::{}", im.ty_name.name, f.name.name),
                 sig,
+                type_params: Vec::new(),
                 source: FnSource::Method {
                     item: item_idx,
                     fn_idx,
@@ -1239,8 +1346,69 @@ impl<'a> Checker<'a> {
             Type::Map(_, v) => self.eq_able(v),
             Type::Result(a, b) => self.eq_able(a) && self.eq_able(b),
             Type::Named(id) => self.named_has_eq(*id),
+            Type::Param(i) => self.param_has_bound(*i, BoundKind::Eq),
             Type::Error => true,
             _ => false,
+        }
+    }
+
+    /// Does the in-scope type parameter `i` carry (at least) `need`?
+    /// `Ord` implies `Eq`.
+    pub(crate) fn param_has_bound(&self, i: u32, need: BoundKind) -> bool {
+        match self
+            .current_type_params
+            .get(i as usize)
+            .and_then(|(_, b)| *b)
+        {
+            Some(BoundKind::Ord) => matches!(need, BoundKind::Ord | BoundKind::Eq),
+            Some(b) => b == need,
+            None => false,
+        }
+    }
+
+    /// The declared name of the in-scope type parameter `i` (for
+    /// diagnostics), falling back to the display letter.
+    pub(crate) fn param_name(&self, i: u32) -> String {
+        self.current_type_params
+            .get(i as usize)
+            .map(|(n, _)| n.clone())
+            .unwrap_or_else(|| Type::Param(i).display(&self.out.defs))
+    }
+
+    /// Report E0253 unless `t` satisfies `bound` (a generic call's
+    /// resolved instantiation).
+    pub(crate) fn check_bound_satisfied(
+        &mut self,
+        span: Span,
+        fn_name: &str,
+        pname: &str,
+        bound: BoundKind,
+        t: &Type,
+    ) {
+        if matches!(t, Type::Error | Type::Never) {
+            return;
+        }
+        let ok = match bound {
+            BoundKind::Eq => self.eq_able(t),
+            BoundKind::Ord => self.ord_able(t),
+            BoundKind::Clone => self.clone_able(t),
+        };
+        if !ok {
+            let ts = self.ty_str(t);
+            let (bname, fix) = match bound {
+                BoundKind::Eq => ("Eq", "add `#[derive(Eq)]` or `impl Eq for` the type"),
+                BoundKind::Ord => ("Ord", "add `#[derive(Eq, Ord)]` or `impl Ord for` the type"),
+                BoundKind::Clone => ("Clone", "add `#[derive(Clone)]` to the type"),
+            };
+            self.error_help(
+                "E0253",
+                span,
+                format!(
+                    "`{ts}` does not satisfy the bound `{pname}: {bname}` required by \
+                     `{fn_name}`"
+                ),
+                fix,
+            );
         }
     }
 
@@ -1262,6 +1430,7 @@ impl<'a> Checker<'a> {
             Type::Int | Type::Float | Type::Char | Type::Str | Type::Bool | Type::Unit => true,
             Type::List(e) | Type::Option(e) => self.ord_able(e),
             Type::Result(a, b) => self.ord_able(a) && self.ord_able(b),
+            Type::Param(i) => self.param_has_bound(*i, BoundKind::Ord),
             Type::Named(id) => {
                 self.derives.get(id).is_some_and(|d| d.ord)
                     || self.out.impl_maps.cmp.contains_key(&id.0)
@@ -1273,6 +1442,7 @@ impl<'a> Checker<'a> {
 
     pub(crate) fn clone_able(&self, t: &Type) -> bool {
         match t {
+            Type::Param(i) => self.param_has_bound(*i, BoundKind::Clone),
             Type::Named(id) => match self.out.defs.get(*id) {
                 DefKind::Struct(s) => !s.opaque,
                 DefKind::Enum(_) => true,
@@ -1317,28 +1487,41 @@ impl<'a> Checker<'a> {
                     );
                     Type::Error
                 }
-                other => match self.type_names.get(other) {
-                    Some(&id) => match self.out.defs.get(id) {
-                        DefKind::Trait(_) => {
+                other => {
+                    // In-scope generic type parameters resolve first
+                    // (shadowing an existing type name is an error at the
+                    // declaration, so no ambiguity survives here).
+                    if let Some(i) = self
+                        .current_type_params
+                        .iter()
+                        .position(|(n, _)| n == other)
+                    {
+                        return Type::Param(i as u32);
+                    }
+                    match self.type_names.get(other) {
+                        Some(&id) => match self.out.defs.get(id) {
+                            DefKind::Trait(_) => {
+                                let span = ident.span;
+                                let msg =
+                                    format!("trait `{other}` cannot be used as a type directly");
+                                self.error_help(
+                                    "E0211",
+                                    span,
+                                    msg,
+                                    format!("use `dyn {other}` for a dynamically dispatched value"),
+                                );
+                                Type::Error
+                            }
+                            _ => Type::Named(id),
+                        },
+                        None => {
                             let span = ident.span;
-                            let msg = format!("trait `{other}` cannot be used as a type directly");
-                            self.error_help(
-                                "E0211",
-                                span,
-                                msg,
-                                format!("use `dyn {other}` for a dynamically dispatched value"),
-                            );
+                            let msg = format!("unknown type `{other}`");
+                            self.error("E0212", span, msg);
                             Type::Error
                         }
-                        _ => Type::Named(id),
-                    },
-                    None => {
-                        let span = ident.span;
-                        let msg = format!("unknown type `{other}`");
-                        self.error("E0212", span, msg);
-                        Type::Error
                     }
-                },
+                }
             },
             TypeExprKind::App(ident, args) => {
                 let mut arg_tys: Vec<Type> = args.iter().map(|a| self.resolve_type(a)).collect();
@@ -1412,13 +1595,15 @@ impl<'a> Checker<'a> {
                     other => {
                         let span = t.span;
                         let msg = format!("`{other}` does not take type arguments");
-                        self.error_help(
-                            "E0215",
-                            span,
-                            msg,
-                            "user-defined generics are not supported in v1 (PRD §3.6); \
-                             only List, Map, Option, Result and weak take arguments",
-                        );
+                        let help = if self.current_type_params.iter().any(|(n, _)| n == other) {
+                            "type parameters do not take type arguments".to_string()
+                        } else {
+                            "user-defined generic *types* are not supported yet; generic \
+                             functions are — declare type parameters on the function: \
+                             `fn f[T](x: T)`"
+                                .to_string()
+                        };
+                        self.error_help("E0215", span, msg, help);
                         Type::Error
                     }
                 }
@@ -1502,6 +1687,9 @@ impl<'a> Checker<'a> {
         self.infer.reset();
         self.nodes_this_fn.clear();
         let info = self.out.fn_infos[proto as usize].clone();
+        // Generic fns: their rigid type parameters are in scope for the
+        // whole body (cleared after finalize below).
+        self.current_type_params = info.type_params.clone();
         let source = info.source;
         let (decl, _item_idx) = match source {
             FnSource::Top { item } => match &self.file.items[item] {
@@ -1546,12 +1734,36 @@ impl<'a> Checker<'a> {
         fi.pending = false;
 
         self.finalize_types();
+        self.current_type_params.clear();
     }
 
     /// After a top-level function (and its closures) is checked, substitute
     /// all inference variables in recorded node types and report bindings
     /// whose type never became known (inference is local, PRD §3.3).
     fn finalize_types(&mut self) {
+        // Deferred generic instantiations: by end-of-function every
+        // inference var must have resolved; report uninferable type
+        // parameters (E0252) and late bound violations (E0253).
+        let pending = std::mem::take(&mut self.pending_instantiations);
+        for p in pending {
+            for (i, subst) in p.subst.iter().enumerate() {
+                let resolved = self.infer.resolve(subst);
+                let (pname, bound) = &p.type_params[i];
+                if self.infer.contains_unbound(&resolved) {
+                    self.error_help(
+                        "E0252",
+                        p.span,
+                        format!("cannot infer type parameter `{pname}` of `{}`", p.fn_name),
+                        "annotate the binding or a surrounding expression so the \
+                         parameter is determined",
+                    );
+                    continue;
+                }
+                if let Some(bound) = bound {
+                    self.check_bound_satisfied(p.span, &p.fn_name, pname, *bound, &resolved);
+                }
+            }
+        }
         let required = std::mem::take(&mut self.must_resolve);
         for (node, span) in required {
             if let Some(t) = self.out.types.get(&node).cloned()
@@ -1576,7 +1788,15 @@ impl<'a> Checker<'a> {
 
     fn collect_exports(&mut self) {
         for (name, &proto) in &self.fn_names {
-            let sig = self.out.fn_infos[proto as usize].sig.clone();
+            let info = &self.out.fn_infos[proto as usize];
+            // Generic fns are not exported: their erased signature
+            // (`fn(T) -> T`) can never match host-side types. Call them
+            // through a monomorphic wrapper fn instead.
+            if !info.type_params.is_empty() {
+                self.out.generic_fns.push(name.clone());
+                continue;
+            }
+            let sig = info.sig.clone();
             self.out.exports.insert(name.clone(), (proto, sig));
         }
     }
@@ -1779,6 +1999,7 @@ impl<'a> Checker<'a> {
         self.out.fn_infos.push(FnInfo {
             name: format!("<closure@{}>", span.lo),
             sig,
+            type_params: Vec::new(),
             source: FnSource::Closure { node },
             n_locals: 0,
             captured: HashSet::new(),
@@ -1815,6 +2036,20 @@ impl<'a> Checker<'a> {
 
 /// Span of the last statement in a block (for return-type mismatch
 /// diagnostics).
+/// Does the signature mention `Type::Param(i)` anywhere?
+fn sig_mentions_param(sig: &FnSig, i: u32) -> bool {
+    fn mentions(t: &Type, i: u32) -> bool {
+        match t {
+            Type::Param(p) => *p == i,
+            Type::List(e) | Type::Option(e) | Type::Weak(e) => mentions(e, i),
+            Type::Map(a, b) | Type::Result(a, b) => mentions(a, i) || mentions(b, i),
+            Type::Fn(sig) => sig.params.iter().any(|p| mentions(p, i)) || mentions(&sig.ret, i),
+            _ => false,
+        }
+    }
+    sig.params.iter().any(|p| mentions(p, i)) || mentions(&sig.ret, i)
+}
+
 fn last_meaningful_span(block: &Block) -> Option<Span> {
     block.stmts.last().map(|s| match s {
         Stmt::Let { span, .. } | Stmt::LetElse { span, .. } => *span,

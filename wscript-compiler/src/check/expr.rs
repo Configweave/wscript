@@ -191,7 +191,7 @@ impl<'a> Checker<'a> {
             ExprKind::Unary { op, expr } => self.check_unary(e, *op, expr),
             ExprKind::Binary { op, lhs, rhs } => self.check_binary(e, *op, lhs, rhs),
             ExprKind::Assign { target, value, op } => self.check_assign(e, target, value, *op),
-            ExprKind::Call { callee, args } => self.check_call(e, callee, args),
+            ExprKind::Call { callee, args } => self.check_call(e, callee, args, expect),
             ExprKind::MethodCall { recv, name, args } => {
                 self.check_method_call(e, recv, name, args)
             }
@@ -454,6 +454,30 @@ impl<'a> Checker<'a> {
                     let info = &self.out.fn_infos[proto as usize];
                     self.out.def_spans.insert(e.id, info.span);
                     let sig = info.sig.clone();
+                    if !info.type_params.is_empty() {
+                        // Generic fn as a value: one erased proto serves
+                        // every instantiation — instantiate the signature
+                        // with fresh vars and let the context bind them.
+                        let type_params = info.type_params.clone();
+                        let subst: Vec<Type> =
+                            type_params.iter().map(|_| self.infer.fresh()).collect();
+                        let inst = FnSig {
+                            params: sig
+                                .params
+                                .iter()
+                                .map(|p| super::subst_params(p, &subst))
+                                .collect(),
+                            ret: super::subst_params(&sig.ret, &subst),
+                        };
+                        self.pending_instantiations
+                            .push(super::PendingInstantiation {
+                                span: e.span,
+                                fn_name: single.name.clone(),
+                                type_params,
+                                subst,
+                            });
+                        return Type::Fn(Box::new(inst));
+                    }
                     return Type::Fn(Box::new(sig));
                 }
                 if single.name == "None" {
@@ -830,6 +854,20 @@ impl<'a> Checker<'a> {
                     Type::Error
                 }
             }
+            Type::Param(i) => {
+                let pn = self.param_name(*i);
+                self.error_help(
+                    "E0253",
+                    span,
+                    format!(
+                        "no `{}` operator for the type parameter `{pn}`",
+                        op_symbol(op)
+                    ),
+                    "arithmetic bounds on type parameters arrive in a later release; \
+                     take concrete numeric types for now",
+                );
+                Type::Error
+            }
             Type::Error | Type::Never => Type::Error,
             other => {
                 let ts = self.ty_str(other);
@@ -910,6 +948,21 @@ impl<'a> Checker<'a> {
                         e.span,
                         format!("`==` on `{ts}` requires the element type to support `==`"),
                         "element types must be primitives, strings, or Eq types",
+                    );
+                    Type::Error
+                }
+            }
+            Type::Param(i) => {
+                if self.param_has_bound(*i, super::BoundKind::Eq) {
+                    self.out.bin_ops.insert(e.id, BinOpKind::EqValue { negate });
+                    Type::Bool
+                } else {
+                    let pn = self.param_name(*i);
+                    self.error_help(
+                        "E0253",
+                        e.span,
+                        format!("`==` on `{pn}` requires an `Eq` bound"),
+                        format!("declare the parameter with a bound: `[{pn}: Eq]`"),
                     );
                     Type::Error
                 }
@@ -1001,6 +1054,21 @@ impl<'a> Checker<'a> {
                     Type::Error
                 }
             }
+            Type::Param(i) => {
+                if self.param_has_bound(*i, super::BoundKind::Ord) {
+                    self.out.bin_ops.insert(e.id, BinOpKind::CmpValue { op });
+                    Type::Bool
+                } else {
+                    let pn = self.param_name(*i);
+                    self.error_help(
+                        "E0253",
+                        e.span,
+                        format!("ordering comparison on `{pn}` requires an `Ord` bound"),
+                        format!("declare the parameter with a bound: `[{pn}: Ord]`"),
+                    );
+                    Type::Error
+                }
+            }
             Type::Error | Type::Never => Type::Error,
             other => {
                 let ts = self.ty_str(other);
@@ -1086,11 +1154,17 @@ impl<'a> Checker<'a> {
 
     // ------------------------------------------------------------- calls
 
-    fn check_call(&mut self, e: &Expr, callee: &Expr, args: &[Expr]) -> Type {
+    fn check_call(
+        &mut self,
+        e: &Expr,
+        callee: &Expr,
+        args: &[Expr],
+        expect: Option<&Type>,
+    ) -> Type {
         // Path callees resolve to functions/constructors; anything else is
         // a function value.
         if let ExprKind::Path(segments) = &callee.kind {
-            if let Some((kind, ret)) = self.resolve_call_path(e, callee, segments, args) {
+            if let Some((kind, ret)) = self.resolve_call_path(e, callee, segments, args, expect) {
                 self.out.calls.insert(e.id, kind);
                 return ret;
             }
@@ -1165,7 +1239,9 @@ impl<'a> Checker<'a> {
         callee: &Expr,
         segments: &[Ident],
         args: &[Expr],
+        expect: Option<&Type>,
     ) -> Option<(CallKind, Type)> {
+        let _ = &expect;
         match segments {
             [single] => {
                 // Locals (closure values) shadow functions.
@@ -1189,6 +1265,18 @@ impl<'a> Checker<'a> {
                     let info = &self.out.fn_infos[proto as usize];
                     self.out.def_spans.insert(callee.id, info.span);
                     let sig = info.sig.clone();
+                    if !info.type_params.is_empty() {
+                        let type_params = info.type_params.clone();
+                        let ret = self.check_generic_call(
+                            e,
+                            &single.name,
+                            &type_params,
+                            &sig,
+                            args,
+                            expect,
+                        );
+                        return Some((CallKind::Proto(proto), ret));
+                    }
                     self.check_args(e.span, &format!("`{}`", single.name), &sig.params, args);
                     return Some((CallKind::Proto(proto), sig.ret));
                 }
@@ -1339,6 +1427,91 @@ impl<'a> Checker<'a> {
                 None
             }
         }
+    }
+
+    /// A call to a generic fn: instantiate its type parameters with
+    /// fresh inference vars, pre-unify the return type with the expected
+    /// type (so return-only parameters resolve under local inference),
+    /// check arguments non-closures-first (so closure params are pinned
+    /// by the other arguments), then check bounds — deferring to
+    /// end-of-function when a parameter is still unresolved (E0252/E0253
+    /// there).
+    fn check_generic_call(
+        &mut self,
+        e: &Expr,
+        name: &str,
+        type_params: &[(String, Option<super::BoundKind>)],
+        sig: &FnSig,
+        args: &[Expr],
+        expect: Option<&Type>,
+    ) -> Type {
+        let subst: Vec<Type> = type_params.iter().map(|_| self.infer.fresh()).collect();
+        let params: Vec<Type> = sig
+            .params
+            .iter()
+            .map(|p| super::subst_params(p, &subst))
+            .collect();
+        let ret = super::subst_params(&sig.ret, &subst);
+        if params.len() != args.len() {
+            self.error_help(
+                "E0238",
+                e.span,
+                format!(
+                    "`{name}` takes {} argument{}, found {}",
+                    params.len(),
+                    if params.len() == 1 { "" } else { "s" },
+                    args.len()
+                ),
+                "check the function's signature",
+            );
+        }
+        let is_closure = |a: &Expr| matches!(a.kind, ExprKind::Closure { .. });
+        for pass in 0..2 {
+            for (i, a) in args.iter().enumerate() {
+                if (pass == 0) == is_closure(a) {
+                    continue;
+                }
+                match params.get(i) {
+                    Some(p) => {
+                        self.check_coerce(a, &p.clone());
+                    }
+                    None => {
+                        self.check_expr(a, None);
+                    }
+                }
+            }
+            if pass == 0 {
+                // The expected type fills parameters the (non-closure)
+                // arguments left open — e.g. return-only parameters
+                // (`fn none_of[T]() -> Option[T]`). Argument types win;
+                // a conflicting expectation is reported by the caller's
+                // own coercion, so failures here are ignored.
+                if let Some(exp) = expect {
+                    let _ = self.infer.unify(exp, &ret);
+                }
+            }
+        }
+        let mut deferred = false;
+        for (i, (pname, bound)) in type_params.iter().enumerate() {
+            let resolved = self.infer.resolve(&subst[i]);
+            if self.infer.contains_unbound(&resolved) {
+                deferred = true;
+                continue;
+            }
+            if let Some(b) = bound {
+                self.check_bound_satisfied(e.span, name, pname, *b, &resolved);
+            }
+        }
+        if deferred {
+            self.pending_instantiations
+                .push(super::PendingInstantiation {
+                    span: e.span,
+                    fn_name: name.to_string(),
+                    type_params: type_params.to_vec(),
+                    subst,
+                });
+        }
+        ret
     }
 
     /// `Type::func(args)` — an associated function call, if one is
@@ -1611,6 +1784,38 @@ impl<'a> Checker<'a> {
             }
             Type::Named(def) => self.check_named_method(e, *def, name, args),
             Type::Dyn(trait_id) => self.check_dyn_method(e, *trait_id, name, args),
+            Type::Param(i) => {
+                let i = *i;
+                if name.name == "clone"
+                    && args.is_empty()
+                    && self.param_has_bound(i, super::BoundKind::Clone)
+                {
+                    self.out.methods.insert(
+                        e.id,
+                        MethodRes::Builtin(wscript_core::bytecode::Builtin::DeepClone),
+                    );
+                    return rt.clone();
+                }
+                let pn = self.param_name(i);
+                let mname = name.name.clone();
+                let help = if mname == "clone" {
+                    format!("declare the parameter with a bound: `[{pn}: Clone]`")
+                } else {
+                    "a generic value supports only what its bounds provide \
+                     (Eq: `==`; Ord: comparisons; Clone: `.clone()`)"
+                        .to_string()
+                };
+                self.error_help(
+                    "E0253",
+                    name.span,
+                    format!("no method `{mname}` on the type parameter `{pn}`"),
+                    help,
+                );
+                for a in args {
+                    self.check_expr(a, None);
+                }
+                Type::Error
+            }
             other => {
                 // Builtin container/string/Option/Result/weak methods.
                 match methods::builtin_method(other, &name.name) {
