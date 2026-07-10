@@ -1109,6 +1109,33 @@ impl Parser {
         }
     }
 
+    /// Parse one interpolation hole's pre-lexed tokens (absolute spans,
+    /// Eof-terminated) as an expression. Runs on the SAME parser so
+    /// NodeIds stay unique and diagnostics accumulate; the outer token
+    /// stream is swapped back afterwards.
+    fn parse_hole(&mut self, tokens: Vec<Token>) -> Expr {
+        let saved_tokens = std::mem::replace(&mut self.tokens, tokens);
+        let saved_pos = std::mem::replace(&mut self.pos, 0);
+        let saved_no_struct = std::mem::replace(&mut self.no_struct_lit, false);
+        let expr = self.expr();
+        if !self.at_eof() {
+            let got = self.kind().describe();
+            let span = self.span();
+            self.diags.push(
+                Diagnostic::error(
+                    "E0004",
+                    span,
+                    format!("unexpected {got} after the interpolated expression"),
+                )
+                .with_help("an interpolation hole holds exactly one expression"),
+            );
+        }
+        self.tokens = saved_tokens;
+        self.pos = saved_pos;
+        self.no_struct_lit = saved_no_struct;
+        expr
+    }
+
     fn assign_expr(&mut self) -> Expr {
         if self.nesting_too_deep() {
             let span = self.span();
@@ -1499,6 +1526,19 @@ impl Parser {
             TokenKind::Str(s) => {
                 self.bump();
                 self.mk(ExprKind::StrLit(s), start)
+            }
+            TokenKind::StrInterp(parts) => {
+                self.bump();
+                let parts: Vec<InterpPart> = parts
+                    .into_iter()
+                    .map(|p| match p {
+                        crate::token::StrPart::Lit(s) => InterpPart::Lit(s),
+                        crate::token::StrPart::Hole(tokens) => {
+                            InterpPart::Hole(Box::new(self.parse_hole(tokens)))
+                        }
+                    })
+                    .collect();
+                self.mk(ExprKind::StrInterp(parts), start)
             }
             TokenKind::Char(c) => {
                 self.bump();

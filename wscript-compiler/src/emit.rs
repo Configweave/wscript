@@ -223,6 +223,10 @@ fn find_closure(file: &SourceFile, node: NodeId) -> Option<(usize, &Expr)> {
             }
             match &e.kind {
                 ExprKind::Unary { expr, .. } | ExprKind::Try(expr) => self.in_expr(expr),
+                ExprKind::StrInterp(parts) => parts.iter().find_map(|p| match p {
+                    crate::ast::InterpPart::Hole(h) => self.in_expr(h),
+                    crate::ast::InterpPart::Lit(_) => None,
+                }),
                 ExprKind::Binary { lhs, rhs, .. } => {
                     self.in_expr(lhs).or_else(|| self.in_expr(rhs))
                 }
@@ -517,6 +521,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
                 let k = self.em.intern_const(Const::Str(s.as_str().into()));
                 self.push(Instr::LoadConst { dst, k });
             }
+            ExprKind::StrInterp(parts) => self.emit_str_interp(parts, dst),
             ExprKind::UnitLit => {
                 self.push(Instr::LoadUnit { dst });
             }
@@ -1149,6 +1154,46 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
                 let tmp = self.alloc_temp();
                 self.emit_into(value, tmp);
             }
+        }
+    }
+
+    /// Interpolated string: literal parts load constants, holes render
+    /// through `Builtin::Str` (so custom Display impls — and their
+    /// faults — behave exactly like `str(x)`), folded left-to-right with
+    /// `ConcatStr`.
+    fn emit_str_interp(&mut self, parts: &[crate::ast::InterpPart], dst: u16) {
+        use crate::ast::InterpPart;
+        let mut started = false;
+        for part in parts {
+            let piece = if started { self.alloc_temp() } else { dst };
+            match part {
+                InterpPart::Lit(s) => {
+                    let k = self.em.intern_const(Const::Str(s.as_str().into()));
+                    self.push(Instr::LoadConst { dst: piece, k });
+                }
+                InterpPart::Hole(h) => {
+                    let base = self.alloc_window(1);
+                    self.emit_into(h, base);
+                    self.push(Instr::Call {
+                        dst: piece,
+                        base,
+                        nargs: 1,
+                        target: CallTarget::Builtin(Builtin::Str),
+                    });
+                }
+            }
+            if started {
+                self.push(Instr::ConcatStr {
+                    dst,
+                    a: dst,
+                    b: piece,
+                });
+            }
+            started = true;
+        }
+        if !started {
+            let k = self.em.intern_const(Const::Str("".into()));
+            self.push(Instr::LoadConst { dst, k });
         }
     }
 

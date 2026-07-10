@@ -30,9 +30,9 @@ fn main() -> int {
 
     println(regex::replace("[0-9]+", "1-2-3", "X"))
     // capture-group expansion in the replacement
-    println([regex::replace("([0-9]{4})-([0-9]{2})-([0-9]{2})", "2026-01-05", "$3/$2/$1")])
+    println([regex::replace("([0-9]{{4}})-([0-9]{{2}})-([0-9]{{2}})", "2026-01-05", "$3/$2/$1")])
 
-    match regex::captures("([0-9]{4})-([0-9]{2})-([0-9]{2})", "on 2026-01-05 we ship") {
+    match regex::captures("([0-9]{{4}})-([0-9]{{2}})-([0-9]{{2}})", "on 2026-01-05 we ship") {
         Some(groups) => {
             println(groups[0])
             println(groups[1])

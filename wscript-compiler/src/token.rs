@@ -1,11 +1,22 @@
 use wscript_core::span::Span;
 
+/// One piece of an interpolated string literal.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StrPart {
+    Lit(String),
+    /// A `{expr}` hole, pre-lexed by the string lexer with absolute
+    /// source spans; terminated by an `Eof` token.
+    Hole(Vec<Token>),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     // literals
     Int(i64),
     Float(f64),
     Str(String),
+    /// A string literal containing `{expr}` interpolation holes.
+    StrInterp(Vec<StrPart>),
     Char(char),
     Ident(String),
     /// `/// ...` documentation comment (attached to declarations).
@@ -91,6 +102,7 @@ impl TokenKind {
             TokenKind::Int(_) => "integer literal".into(),
             TokenKind::Float(_) => "float literal".into(),
             TokenKind::Str(_) => "string literal".into(),
+            TokenKind::StrInterp(_) => "interpolated string literal".into(),
             TokenKind::Char(_) => "char literal".into(),
             TokenKind::Ident(name) => format!("`{name}`"),
             TokenKind::DocComment(_) => "doc comment".into(),

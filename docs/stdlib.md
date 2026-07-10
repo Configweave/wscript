@@ -16,7 +16,7 @@ method lists of `string`, `List`, `Map`, `Option` and `Result`.
 |---|---|---|
 | `print` / `println` | `(any)` / `(any?)` | `println()` prints a bare newline |
 | `str` | `(any) -> string` | uses `Display` impls when present |
-| `fmt` | `(string, any…) -> string` | `{}` placeholders; `{{`/`}}` escape; count and specs checked at compile time for literal templates. Format specs: `{:[[fill]align][0][width][.prec][type]}` — align `< ^ >`, zero-pad `{:08}` (sign-aware), width/precision in chars, `.prec` = float digits / string truncation, type `x X b o` (int bases). E.g. `{:>8}`, `{:.2}`, `{:*^10}`, `{:x}` |
+| `fmt` | `(string, any…) -> string` | For **dynamic** templates and format specs — static text should use string interpolation (`"hp: {p.hp}"`, see the tour). `{}` placeholders; `{{`/`}}` escape; count and specs checked at compile time for literal templates. Format specs: `{:[[fill]align][0][width][.prec][type]}` — align `< ^ >`, zero-pad `{:08}` (sign-aware), width/precision in chars, `.prec` = float digits / string truncation, type `x X b o` (int bases). E.g. `{:>8}`, `{:.2}`, `{:*^10}`, `{:x}` |
 | `same` | `(T, T) -> bool` | reference identity (PRD §3.7) |
 | `weak` | `(T) -> weak[T]` | reference types only |
 | `int` | `(int\|float\|char) -> int` | float truncates; char gives the code point |

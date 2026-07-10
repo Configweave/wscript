@@ -176,6 +176,15 @@ impl<'a> Checker<'a> {
             ExprKind::BoolLit(_) => Type::Bool,
             ExprKind::CharLit(_) => Type::Char,
             ExprKind::StrLit(_) => Type::Str,
+            ExprKind::StrInterp(parts) => {
+                // Holes accept any value (same rule as `print`/`str`).
+                for p in parts {
+                    if let crate::ast::InterpPart::Hole(h) = p {
+                        self.check_expr(h, None);
+                    }
+                }
+                Type::Str
+            }
             ExprKind::UnitLit => Type::Unit,
             ExprKind::Error => Type::Error,
             ExprKind::Path(segments) => self.check_path_expr(e, segments),

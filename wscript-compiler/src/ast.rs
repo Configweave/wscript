@@ -240,6 +240,13 @@ pub enum UnOp {
     Not,
 }
 
+/// One piece of an interpolated string (`ExprKind::StrInterp`).
+#[derive(Debug)]
+pub enum InterpPart {
+    Lit(String),
+    Hole(Box<Expr>),
+}
+
 #[derive(Debug)]
 pub enum ExprKind {
     IntLit(i64),
@@ -247,6 +254,8 @@ pub enum ExprKind {
     BoolLit(bool),
     CharLit(char),
     StrLit(String),
+    /// `"hp: {p.hp}"` — an interpolated string; evaluates to `string`.
+    StrInterp(Vec<InterpPart>),
     UnitLit,
     /// `a`, `self`, `module::item`, `Enum::Variant`,
     /// `module::Enum::Variant` — resolved by the checker.

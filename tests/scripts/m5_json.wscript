@@ -8,7 +8,7 @@
 use json
 
 fn main() -> int {
-    let v = json::parse("{\"name\": \"wil\", \"list\": [1, 2, 3], \"hp\": 10}").unwrap()
+    let v = json::parse("{{\"name\": \"wil\", \"list\": [1, 2, 3], \"hp\": 10}}").unwrap()
     println(v.get("name").unwrap().as_string().unwrap())
     println(v.get("list").unwrap().at(1).unwrap().as_int().unwrap())
     println(v.get("hp").unwrap().as_int().unwrap())

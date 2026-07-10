@@ -29,11 +29,22 @@ let x = 5                  // inferred: int
 let name: string = "wil"   // annotations allowed anywhere on lets,
 let pi = 3.14              // required nowhere
 
-let log = "hp: " + str(99) // + concatenates strings; str() converts
-let msg = fmt("{} of {}", 3, 10)   // {} placeholder formatting
-let hex = fmt("{:>8} {:.2} {:x}", "hi", 3.14159, 255)  // specs: width/align,
-                                   // precision, int bases (see stdlib docs)
+let log = "hp: {99}"       // string interpolation: {expr} embeds any
+let who = "player {p.name} at {x + 1}"   // expression, rendered like str()
+let cat = "hp: " + str(99) // + concatenation and str() also work
+let msg = fmt("{} of {}", 3, 10)   // fmt: for DYNAMIC templates
+let hex = fmt("{:>8} {:.2} {:x}", "hi", 3.14159, 255)  // and format specs:
+                                   // width/align, precision, int bases
 ```
+
+**Interpolation rules:** `{expr}` holds one full expression (fields,
+calls, arithmetic, even struct literals and nested interpolated
+strings). Holes are real code — write inner strings with plain quotes
+(`{s.split(",")}`), not `\"` escapes. Escape literal braces as `{{` and
+`}}`. For fmt-template compatibility, `{}` and `{:spec}` stay *literal*
+text — so `fmt` templates are unchanged, but **regex quantifiers and
+inline JSON need escaping**: `"[0-9]{{4}}"`, `"{{\"k\": 1}}"`. Format
+specs inside holes (`{x:.2}`) are reserved; use `fmt` for now.
 
 There is **no implicit numeric conversion**: `1 + 2.0` is a type error.
 Convert explicitly with `int(x)` (truncates) and `float(x)`.
@@ -365,5 +376,4 @@ weak int float`.
 By design: borrow checker, `&`/`&mut`, lifetimes, user-defined generics
 (the built-in containers are special-cased), exceptions, async, threads
 (one VM per thread), implicit conversions, truthiness, a cycle collector,
-string interpolation (use `fmt`), bitwise operators, range values
-outside `for` headers.
+bitwise operators, range values outside `for` headers.

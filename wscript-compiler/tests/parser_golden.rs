@@ -181,6 +181,22 @@ fn render_expr(e: &Expr, out: &mut String, depth: usize) {
         ExprKind::BoolLit(b) => out.push_str(&format!("bool {b}\n")),
         ExprKind::CharLit(c) => out.push_str(&format!("char {c:?}\n")),
         ExprKind::StrLit(s) => out.push_str(&format!("str {s:?}\n")),
+        ExprKind::StrInterp(parts) => {
+            out.push_str("str-interp\n");
+            for p in parts {
+                match p {
+                    wscript_compiler::ast::InterpPart::Lit(s) => {
+                        pad(out, depth + 1);
+                        out.push_str(&format!("lit {s:?}\n"));
+                    }
+                    wscript_compiler::ast::InterpPart::Hole(h) => {
+                        pad(out, depth + 1);
+                        out.push_str("hole\n");
+                        render_expr(h, out, depth + 2);
+                    }
+                }
+            }
+        }
         ExprKind::UnitLit => out.push_str("unit\n"),
         ExprKind::Path(segs) => out.push_str(&format!(
             "path {}\n",

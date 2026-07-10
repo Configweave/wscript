@@ -11,7 +11,7 @@
 use wscript_core::diag::Diagnostic;
 use wscript_core::span::Span;
 
-use crate::token::{Token, TokenKind};
+use crate::token::{StrPart, Token, TokenKind};
 
 pub struct LexOutput {
     pub tokens: Vec<Token>,
@@ -167,6 +167,7 @@ impl<'s> Lexer<'s> {
     fn string_lit(&mut self, start: usize) {
         self.pos += 1;
         let mut value = String::new();
+        let mut parts: Vec<StrPart> = Vec::new();
         loop {
             match self.bytes.get(self.pos) {
                 None | Some(b'\n') => {
@@ -189,6 +190,28 @@ impl<'s> Lexer<'s> {
                         value.push(c);
                     }
                 }
+                // Interpolation. Escapes and fmt-template compatibility:
+                // `{{`/`}}` are literal braces, `{}` and `{:spec}` stay
+                // literal text (fmt placeholders), `{expr}` is a hole.
+                Some(b'{') if self.peek(1) == Some(b'{') => {
+                    value.push('{');
+                    self.pos += 2;
+                }
+                Some(b'}') if self.peek(1) == Some(b'}') => {
+                    value.push('}');
+                    self.pos += 2;
+                }
+                Some(b'{') if matches!(self.peek(1), Some(b'}') | Some(b':')) => {
+                    value.push('{');
+                    self.pos += 1;
+                }
+                Some(b'{') => {
+                    self.pos += 1;
+                    if !value.is_empty() {
+                        parts.push(StrPart::Lit(std::mem::take(&mut value)));
+                    }
+                    parts.push(StrPart::Hole(self.lex_hole(start)));
+                }
                 Some(_) => {
                     let c = self.src[self.pos..].chars().next().unwrap();
                     value.push(c);
@@ -196,7 +219,114 @@ impl<'s> Lexer<'s> {
                 }
             }
         }
-        self.push(TokenKind::Str(value), start);
+        if parts.is_empty() {
+            // Fast path: a plain string — identical tokens to before.
+            self.push(TokenKind::Str(value), start);
+        } else {
+            if !value.is_empty() {
+                parts.push(StrPart::Lit(value));
+            }
+            self.push(TokenKind::StrInterp(parts), start);
+        }
+    }
+
+    /// Lex one `{expr}` interpolation hole (cursor just past the `{`).
+    /// The hole's tokens are lexed with the main dispatcher — nested
+    /// strings (and their own holes) recurse naturally — and returned
+    /// with absolute spans, `Eof`-terminated. Ends at the matching `}`
+    /// at brace depth 0. A single `:` at depth 0 is reserved for future
+    /// format specs and rejected.
+    fn lex_hole(&mut self, lit_start: usize) -> Vec<Token> {
+        let mark = self.tokens.len();
+        let mut depth = 0i32;
+        loop {
+            let Some(c) = self.bytes.get(self.pos).copied() else {
+                self.diags.push(
+                    Diagnostic::error(
+                        "E0004",
+                        self.span_from(lit_start),
+                        "unterminated `{` interpolation hole",
+                    )
+                    .with_help("close the hole with `}` (escape a literal brace as `{{`)"),
+                );
+                break;
+            };
+            match c {
+                b'}' if depth == 0 => {
+                    self.pos += 1;
+                    break;
+                }
+                b'\n' => {
+                    self.diags.push(
+                        Diagnostic::error(
+                            "E0004",
+                            self.span_from(lit_start),
+                            "unterminated `{` interpolation hole",
+                        )
+                        .with_help("interpolation holes cannot span lines"),
+                    );
+                    break;
+                }
+                b':' if depth == 0 && self.peek(1) != Some(b':') => {
+                    // Reserved: `{value:spec}` format specs.
+                    let spec_start = self.pos;
+                    while let Some(c) = self.bytes.get(self.pos).copied() {
+                        if c == b'}' || c == b'\n' {
+                            break;
+                        }
+                        self.pos += 1;
+                    }
+                    if self.bytes.get(self.pos) == Some(&b'}') {
+                        self.pos += 1;
+                    }
+                    self.diags.push(
+                        Diagnostic::error(
+                            "E0004",
+                            Span::new(spec_start as u32, self.pos as u32),
+                            "format specs are not supported in interpolation yet",
+                        )
+                        .with_help("use `fmt(\"{:spec}\", value)` for width/precision formatting"),
+                    );
+                    break;
+                }
+                b' ' | b'\t' | b'\r' => {
+                    self.pos += 1;
+                }
+                _ => {
+                    // One token via the main dispatcher (handles nested
+                    // strings, chars, numbers, idents, punctuation).
+                    let start = self.pos;
+                    match c {
+                        b'"' => self.string_lit(start),
+                        b'\'' => self.char_lit(start),
+                        b'0'..=b'9' => self.number(start),
+                        b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.ident(start),
+                        _ => self.punct(start),
+                    }
+                    if self.pos == start {
+                        // Defensive: dispatcher made no progress.
+                        self.pos += 1;
+                    }
+                    // Track brace depth from the hole's tokens (holes are
+                    // short; the rescan is cheap and simple).
+                    depth = self.tokens[mark..]
+                        .iter()
+                        .map(|t| match t.kind {
+                            TokenKind::LBrace | TokenKind::HashBrace => 1,
+                            TokenKind::RBrace => -1,
+                            _ => 0,
+                        })
+                        .sum();
+                }
+            }
+        }
+        let mut toks = self.tokens.split_off(mark);
+        let end = self.pos as u32;
+        toks.push(Token {
+            kind: TokenKind::Eof,
+            span: Span::new(end.saturating_sub(1), end.saturating_sub(1)),
+        });
+        toks
     }
 
     /// Consume a `\x` escape (cursor on the backslash).

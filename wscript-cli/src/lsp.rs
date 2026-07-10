@@ -147,6 +147,13 @@ fn expr_index(file: &ast::SourceFile) -> Vec<(wscript::Span, ast::NodeId)> {
         use ast::ExprKind::*;
         match &e.kind {
             Unary { expr, .. } | Try(expr) => stack.push(Work::E(expr)),
+            StrInterp(parts) => {
+                for p in parts {
+                    if let wscript_compiler::ast::InterpPart::Hole(h) = p {
+                        stack.push(Work::E(h));
+                    }
+                }
+            }
             Binary { lhs, rhs, .. } => {
                 stack.push(Work::E(lhs));
                 stack.push(Work::E(rhs));

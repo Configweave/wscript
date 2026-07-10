@@ -67,7 +67,7 @@ Key invariant: **the type checker knows every host signature before checking a s
 - Rust-style tokens: `//` and `/* */` comments, snake_case convention, `::` for module paths.
 - **Expression-oriented**: blocks evaluate to their last expression; `if`/`match` are expressions.
 - **Newline-terminated statements; semicolons optional** (permitted, never required). A statement continues across newlines when the line obviously cannot end (trailing binary operator, open delimiter). Keep the rule simple and document it precisely in the grammar.
-- String literals: `"..."` with standard escapes; string interpolation is **deferred to v2** (use `string::format` / a `fmt` builtin in v1).
+- String literals: `"..."` with standard escapes; string interpolation is **deferred to v2** (use `string::format` / a `fmt` builtin in v1). *(Shipped post-v1: `{expr}` interpolation in all string literals; `{}`/`{:spec}` stay literal for `fmt`-template compatibility, `{{`/`}}` escape.)*
 
 ### 3.2 Types
 
