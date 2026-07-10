@@ -824,3 +824,152 @@ fn host_script_ping_pong_faults_trappably() {
     let n: i64 = vm.call_unit(&unit2, "ok", ()).unwrap();
     assert_eq!(n, 3);
 }
+
+// ------------------------------------------------ multi-file imports
+
+/// In-memory [`wscript::SourceResolver`] for tests.
+struct MemResolver(std::collections::HashMap<&'static str, &'static str>);
+
+impl wscript::SourceResolver for MemResolver {
+    fn resolve(
+        &self,
+        _from: &str,
+        spec: wscript::ImportSpec,
+    ) -> Result<wscript::ResolvedSource, String> {
+        let key = match spec {
+            wscript::ImportSpec::Name(n) => format!("{n}.wscript"),
+            wscript::ImportSpec::Path(p) => p.trim_start_matches("./").to_string(),
+        };
+        match self.0.get(key.as_str()) {
+            Some(src) => Ok(wscript::ResolvedSource {
+                key: key.clone(),
+                path: key,
+                src: src.to_string(),
+            }),
+            None => Err("no such file".into()),
+        }
+    }
+}
+
+#[test]
+fn multi_file_imports_compile_to_one_unit() {
+    let resolver = MemResolver(
+        [
+            (
+                "helpers.wscript",
+                "fn double(x: int) -> int { x * 2 }\n\
+                 fn best[T: Ord](a: T, b: T) -> T { if a > b { a } else { b } }",
+            ),
+            (
+                "sub/geo.wscript",
+                "struct Pt { x: int, y: int }\n\
+                 fn origin() -> Pt { Pt { x: 3, y: 4 } }\n\
+                 fn manhattan(p: Pt) -> int { p.x + p.y }",
+            ),
+        ]
+        .into(),
+    );
+    let ctx = Context::new();
+    let compiled = ctx
+        .compile_entry(
+            "main.wscript",
+            "use helpers\n\
+             use helpers::double\n\
+             use \"./sub/geo.wscript\" as geo\n\
+             fn main() -> int {\n\
+                 helpers::double(2) + double(3) + helpers::best(1, 9) + geo::manhattan(geo::origin())\n\
+             }",
+            &resolver,
+        )
+        .unwrap_or_else(|f| panic!("compile failed: {:?}", f.diags));
+    assert_eq!(compiled.unit.source_map.files.len(), 3);
+    let mut vm = Vm::new(&ctx);
+    let n: i64 = vm.call_unit(&compiled.unit, "main", ()).unwrap();
+    assert_eq!(n, 4 + 6 + 9 + 7);
+    // Imported files' fns are NOT exported.
+    assert!(!compiled.unit.exports.contains_key("double"));
+}
+
+#[test]
+fn multi_file_cycles_and_diamond_work() {
+    let resolver = MemResolver(
+        [
+            (
+                "a.wscript",
+                "use b\nuse shared\n\
+                 fn is_even(n: int) -> bool { if n == 0 { true } else { b::is_odd(n - 1) } }\n\
+                 fn tag() -> string { shared::name() }",
+            ),
+            (
+                "b.wscript",
+                "use a\nuse shared\n\
+                 fn is_odd(n: int) -> bool { if n == 0 { false } else { a::is_even(n - 1) } }",
+            ),
+            ("shared.wscript", "fn name() -> string { \"shared\" }"),
+        ]
+        .into(),
+    );
+    let ctx = Context::new();
+    let compiled = ctx
+        .compile_entry(
+            "main.wscript",
+            "use a\n\
+             fn main() -> bool { a::is_even(10) }",
+            &resolver,
+        )
+        .unwrap_or_else(|f| panic!("compile failed: {:?}", f.diags));
+    // Diamond: `shared` loaded once despite two importers.
+    assert_eq!(compiled.unit.source_map.files.len(), 4);
+    let mut vm = Vm::new(&ctx);
+    let even: bool = vm.call_unit(&compiled.unit, "main", ()).unwrap();
+    assert!(even);
+}
+
+#[test]
+fn multi_file_errors_point_at_the_right_file() {
+    let resolver =
+        MemResolver([("helpers.wscript", "fn broken() -> int { \"not an int\" }")].into());
+    let ctx = Context::new();
+    let failure = ctx
+        .compile_entry(
+            "main.wscript",
+            "use helpers\nfn main() -> int { helpers::broken() }",
+            &resolver,
+        )
+        .err()
+        .expect("must fail");
+    let type_err = failure
+        .diags
+        .iter()
+        .find(|d| d.code == "E0220")
+        .expect("type error expected");
+    // The error's span lands in helpers.wscript per the source map.
+    let idx = failure
+        .source_map
+        .files
+        .partition_point(|f| f.base <= type_err.span.lo)
+        - 1;
+    assert_eq!(failure.source_map.files[idx].path, "helpers.wscript");
+}
+
+#[test]
+fn missing_path_import_is_reported() {
+    let resolver = MemResolver(Default::default());
+    let ctx = Context::new();
+    let failure = ctx
+        .compile_entry(
+            "main.wscript",
+            "use \"./nope.wscript\"\nfn main() {}",
+            &resolver,
+        )
+        .err()
+        .expect("must fail");
+    assert!(
+        failure
+            .diags
+            .iter()
+            .any(|d| d.message.contains("cannot load")),
+        "{:?}",
+        failure.diags
+    );
+}

@@ -5,6 +5,7 @@
 //! ```toml
 //! # wscript.toml
 //! interfaces = ["api.wscripti"]
+//! src_roots = ["scripts"]        # `use name` script-import search dirs
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -13,6 +14,9 @@ use wscript_compiler::wscripti::WscriptiIndex;
 
 pub struct Manifest {
     pub interfaces: Vec<PathBuf>,
+    /// Directories searched (after the importing file's own directory)
+    /// when resolving `use name` script imports.
+    pub src_roots: Vec<PathBuf>,
 }
 
 /// Walk up from `start` looking for `wscript.toml`.
@@ -58,7 +62,21 @@ fn parse(path: &Path) -> Option<Manifest> {
                 .collect()
         })
         .unwrap_or_default();
-    Some(Manifest { interfaces })
+    let src_roots = value
+        .get("src_roots")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| dir.join(s))
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(Manifest {
+        interfaces,
+        src_roots,
+    })
 }
 
 /// Load every interface listed by the manifest into the registry (live

@@ -15,6 +15,14 @@ impl Span {
         Span { lo, hi }
     }
 
+    /// Offset into a multi-file compilation's global address space.
+    pub fn shifted(self, base: u32) -> Span {
+        Span {
+            lo: self.lo + base,
+            hi: self.hi + base,
+        }
+    }
+
     /// Smallest span covering both `self` and `other`.
     pub fn to(self, other: Span) -> Span {
         Span {

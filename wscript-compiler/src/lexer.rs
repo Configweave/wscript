@@ -19,7 +19,14 @@ pub struct LexOutput {
 }
 
 pub fn lex(src: &str) -> LexOutput {
-    Lexer {
+    lex_at(src, 0)
+}
+
+/// Lex with every span offset by `base` — one file of a multi-file
+/// compilation occupies `[base, base + len]` of the global span address
+/// space (see `wscript_core::source_map`).
+pub fn lex_at(src: &str, base: u32) -> LexOutput {
+    let mut out = Lexer {
         src,
         bytes: src.as_bytes(),
         pos: 0,
@@ -27,7 +34,34 @@ pub fn lex(src: &str) -> LexOutput {
         diags: Vec::new(),
         delims: Vec::new(),
     }
-    .run()
+    .run();
+    if base != 0 {
+        for t in &mut out.tokens {
+            shift_token(t, base);
+        }
+        for d in &mut out.diags {
+            d.span = d.span.shifted(base);
+            for (span, _) in &mut d.labels {
+                *span = span.shifted(base);
+            }
+        }
+    }
+    out
+}
+
+/// Shift a token's span (recursing into interpolation holes' pre-lexed
+/// token vectors).
+fn shift_token(t: &mut Token, base: u32) {
+    t.span = t.span.shifted(base);
+    if let TokenKind::StrInterp(parts) = &mut t.kind {
+        for p in parts {
+            if let StrPart::Hole(tokens) = p {
+                for ht in tokens {
+                    shift_token(ht, base);
+                }
+            }
+        }
+    }
 }
 
 #[derive(PartialEq)]

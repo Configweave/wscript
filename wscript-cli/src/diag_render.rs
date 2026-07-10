@@ -48,6 +48,89 @@ pub fn render(path: &str, source: &str, diags: &[Diagnostic]) {
     }
 }
 
+/// Multi-file variant of [`render`]: each diagnostic renders against
+/// the file its span lands in (global span address space →
+/// `unit.source_map`).
+pub fn render_multi(sources: &[(String, String)], map: &wscript::SourceMap, diags: &[Diagnostic]) {
+    for d in diags {
+        let Some(fi) = file_idx(map, d.span.lo) else {
+            render("<script>", "", std::slice::from_ref(d));
+            continue;
+        };
+        let base = map.files[fi].base;
+        let (path, source) = &sources[fi];
+        let mut local = d.clone();
+        local.span = wscript_core_span_shift_back(d.span, base);
+        for (lspan, _) in &mut local.labels {
+            *lspan = wscript_core_span_shift_back(*lspan, base);
+        }
+        render(path, source, std::slice::from_ref(&local));
+    }
+}
+
+/// Multi-file variant of [`render_runtime`]: the fault site and every
+/// trace frame are mapped to their own file.
+pub fn render_runtime_multi(
+    sources: &[(String, String)],
+    map: &wscript::SourceMap,
+    e: &RuntimeError,
+) {
+    let colored = is_tty();
+    match e.span.and_then(|s| file_idx(map, s.lo).map(|fi| (s, fi))) {
+        Some((span, fi)) => {
+            let base = map.files[fi].base;
+            let (path, source) = &sources[fi];
+            let local = wscript_core_span_shift_back(span, base);
+            let cspan = clamp_span(source, local.lo as usize, local.hi as usize);
+            let report = Report::<(&str, std::ops::Range<usize>)>::build(
+                ReportKind::Error,
+                path.as_str(),
+                cspan.start,
+            )
+            .with_message(&e.message)
+            .with_config(Config::default().with_color(colored))
+            .with_label(
+                Label::new((path.as_str(), cspan))
+                    .with_message("fault raised here")
+                    .with_color(Color::Red),
+            );
+            let _ = report
+                .finish()
+                .eprint((path.as_str(), Source::from(source.as_str())));
+        }
+        None => eprintln!("error: {e}"),
+    }
+    if e.trace.is_empty() {
+        return;
+    }
+    eprintln!("stack trace (most recent call first):");
+    let name_width = e.trace.iter().map(|f| f.function.len()).max().unwrap_or(0);
+    for f in &e.trace {
+        let loc = match f.span.and_then(|s| file_idx(map, s.lo).map(|fi| (s, fi))) {
+            Some((span, fi)) => {
+                let base = map.files[fi].base;
+                let (path, source) = &sources[fi];
+                let (line, col) = line_col(source, (span.lo - base) as usize);
+                format!("{path}:{line}:{col}")
+            }
+            None => "<unknown location>".to_string(),
+        };
+        eprintln!("  at {:<name_width$}  {}", f.function, loc);
+    }
+}
+
+fn file_idx(map: &wscript::SourceMap, offset: u32) -> Option<usize> {
+    let idx = map
+        .files
+        .partition_point(|f| f.base <= offset)
+        .checked_sub(1)?;
+    (offset <= map.files[idx].base + map.files[idx].len).then_some(idx)
+}
+
+fn wscript_core_span_shift_back(span: wscript::Span, base: u32) -> wscript::Span {
+    wscript::Span::new(span.lo.saturating_sub(base), span.hi.saturating_sub(base))
+}
+
 pub fn render_runtime(path: &str, source: &str, e: &RuntimeError) {
     let colored = is_tty();
     match e.span {

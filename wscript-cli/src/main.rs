@@ -67,20 +67,32 @@ fn read_source(path: &str) -> Result<String, ExitCode> {
     })
 }
 
+/// Script imports resolve next to the entry file, then under the
+/// manifest's `src_roots`.
+fn file_resolver(script_path: &str) -> wscript::FsResolver {
+    let mut resolver = wscript::FsResolver::new();
+    if let Some(m) = manifest::find(std::path::Path::new(script_path)) {
+        resolver.roots = m.src_roots;
+    }
+    resolver
+}
+
 fn cmd_run(path: &str, script_args: Vec<String>) -> ExitCode {
     let source = match read_source(path) {
         Ok(s) => s,
         Err(c) => return c,
     };
     let ctx = default_context(script_args);
-    let (unit, warnings) = match ctx.compile_verbose(&source) {
-        Ok(ok) => ok,
-        Err(diags) => {
-            diag_render::render(path, &source, &diags);
+    let resolver = file_resolver(path);
+    let compiled = match ctx.compile_entry(path, &source, &resolver) {
+        Ok(c) => c,
+        Err(failure) => {
+            diag_render::render_multi(&failure.sources, &failure.source_map, &failure.diags);
             return ExitCode::FAILURE;
         }
     };
-    diag_render::render(path, &source, &warnings);
+    let (unit, warnings, sources) = (compiled.unit, compiled.warnings, compiled.sources);
+    diag_render::render_multi(&sources, &unit.source_map, &warnings);
     if !unit.exports.contains_key("main") {
         eprintln!("error: `{path}` has no `fn main()`");
         return ExitCode::FAILURE;
@@ -95,7 +107,7 @@ fn cmd_run(path: &str, script_args: Vec<String>) -> ExitCode {
             ExitCode::from((e.exit_code.unwrap() & 0xff) as u8)
         }
         Err(Error::Runtime(e)) => {
-            diag_render::render_runtime(path, &source, &e);
+            diag_render::render_runtime_multi(&sources, &unit.source_map, &e);
             ExitCode::FAILURE
         }
         Err(e) => {
@@ -125,13 +137,14 @@ fn cmd_check(path: &str) -> ExitCode {
         }
         None => default_context(Vec::new()),
     };
-    match ctx.compile_verbose(&source) {
-        Ok((_unit, warnings)) => {
-            diag_render::render(path, &source, &warnings);
+    let resolver = file_resolver(path);
+    match ctx.compile_entry(path, &source, &resolver) {
+        Ok(c) => {
+            diag_render::render_multi(&c.sources, &c.unit.source_map, &c.warnings);
             ExitCode::SUCCESS
         }
-        Err(diags) => {
-            diag_render::render(path, &source, &diags);
+        Err(failure) => {
+            diag_render::render_multi(&failure.sources, &failure.source_map, &failure.diags);
             ExitCode::FAILURE
         }
     }

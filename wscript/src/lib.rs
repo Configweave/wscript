@@ -23,6 +23,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+pub use wscript_compiler::{CompileFailure, ImportSpec, ResolvedSource, SourceResolver};
 pub use wscript_core::bytecode::CompiledUnit;
 pub use wscript_core::defs::DefTable;
 pub use wscript_core::diag::{Diagnostic, Severity, default_help as diag_default_help};
@@ -32,6 +33,7 @@ pub use wscript_core::host::{
 };
 pub use wscript_core::module::Module;
 pub use wscript_core::registry::Registry;
+pub use wscript_core::source_map::{SourceFileInfo, SourceMap};
 pub use wscript_core::span::Span;
 pub use wscript_core::types::{FnSig, Type};
 pub use wscript_core::value::Value;
@@ -168,6 +170,85 @@ impl Context {
         source: &str,
     ) -> Result<(CompiledUnit, Vec<Diagnostic>), Vec<Diagnostic>> {
         wscript_compiler::compile(source, &self.registry).map(|c| (c.unit, c.warnings))
+    }
+
+    /// Compile a script that may import other script files (`use helpers`
+    /// / `use "./x.wscript" as x`), resolved through `resolver` — use
+    /// [`FsResolver`] for filesystem imports relative to the entry file.
+    /// The whole import graph becomes ONE unit (see `unit.source_map`
+    /// and the returned per-file sources for diagnostics rendering).
+    pub fn compile_entry(
+        &self,
+        entry_path: &str,
+        entry_src: &str,
+        resolver: &dyn SourceResolver,
+    ) -> Result<wscript_compiler::Compiled, wscript_compiler::CompileFailure> {
+        wscript_compiler::compile_entry(entry_path, entry_src, resolver, &self.registry)
+    }
+}
+
+/// Filesystem [`SourceResolver`]: bare names resolve next to the
+/// importing file, then under each configured source root; path imports
+/// resolve relative to the importing file. Canonicalized paths dedup the
+/// import graph.
+pub struct FsResolver {
+    /// Extra directories searched (after the importing file's own
+    /// directory) for `use name` imports — `wscript.toml`'s `src_roots`.
+    pub roots: Vec<std::path::PathBuf>,
+}
+
+impl FsResolver {
+    pub fn new() -> FsResolver {
+        FsResolver { roots: Vec::new() }
+    }
+}
+
+impl Default for FsResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl wscript_compiler::SourceResolver for FsResolver {
+    fn resolve(
+        &self,
+        from: &str,
+        spec: wscript_compiler::ImportSpec,
+    ) -> Result<wscript_compiler::ResolvedSource, String> {
+        use std::path::{Path, PathBuf};
+        let from_dir = Path::new(from).parent().unwrap_or(Path::new("."));
+        let candidates: Vec<PathBuf> = match &spec {
+            wscript_compiler::ImportSpec::Path(p) => vec![from_dir.join(p)],
+            wscript_compiler::ImportSpec::Name(n) => {
+                let file = format!("{n}.wscript");
+                std::iter::once(from_dir.to_path_buf())
+                    .chain(self.roots.iter().cloned())
+                    .map(|d| d.join(&file))
+                    .collect()
+            }
+        };
+        for cand in &candidates {
+            if cand.is_file() {
+                let src = std::fs::read_to_string(cand).map_err(|e| e.to_string())?;
+                let key = cand
+                    .canonicalize()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| cand.to_string_lossy().into_owned());
+                return Ok(wscript_compiler::ResolvedSource {
+                    key,
+                    path: cand.to_string_lossy().into_owned(),
+                    src,
+                });
+            }
+        }
+        Err(format!(
+            "no such file (looked for {})",
+            candidates
+                .iter()
+                .map(|c| c.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
     }
 }
 

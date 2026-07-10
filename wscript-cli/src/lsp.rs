@@ -399,7 +399,7 @@ impl LanguageServer for Backend {
             };
             (text, state.registry())
         };
-        let analysis = wscript_compiler::analyze(&text, &registry);
+        let analysis = analyze_doc(&uri, &text, &registry);
         let index = expr_index(&analysis.parse.file);
         let offset = position_to_offset(&text, pos);
         let Some(node) = node_at(&index, offset) else {
@@ -461,7 +461,7 @@ impl LanguageServer for Backend {
             };
             (text, state.registry(), state.wscripti_indexes.clone())
         };
-        let analysis = wscript_compiler::analyze(&text, &registry);
+        let analysis = analyze_doc(&uri, &text, &registry);
         let index = expr_index(&analysis.parse.file);
         let offset = position_to_offset(&text, pos);
         let Some(node) = node_at(&index, offset) else {
@@ -536,7 +536,7 @@ impl LanguageServer for Backend {
         if let Some(rest) = before.strip_suffix("::") {
             // Module members or enum variants after `::` (PRD §9 feature 4).
             let seg = trailing_ident(rest);
-            let analysis = wscript_compiler::analyze(&text, &registry);
+            let analysis = analyze_doc(&uri, &text, &registry);
             if let Some(module) = registry.modules.iter().find(|m| m.name == seg) {
                 for (name, sig, _, doc) in &module.fns {
                     push(
@@ -573,7 +573,7 @@ impl LanguageServer for Backend {
             }
         } else if let Some(rest) = before.strip_suffix(".") {
             // Methods after `.` — type the receiver via analysis.
-            let analysis = wscript_compiler::analyze(&text, &registry);
+            let analysis = analyze_doc(&uri, &text, &registry);
             let index = expr_index(&analysis.parse.file);
             let recv = node_ending_at(&index, rest.trim_end().len());
             let ty = recv.and_then(|n| analysis.check.types.get(&n)).cloned();
@@ -663,7 +663,7 @@ impl LanguageServer for Backend {
             for p in PRELUDE {
                 push(&mut items, p, CompletionItemKind::FUNCTION, None);
             }
-            let analysis = wscript_compiler::analyze(&text, &registry);
+            let analysis = analyze_doc(&uri, &text, &registry);
             for (name, (_, sig)) in &analysis.check.exports {
                 push(
                     &mut items,
@@ -704,9 +704,20 @@ impl Backend {
             let state = self.state.lock().unwrap();
             state.registry()
         };
-        let analysis = wscript_compiler::analyze(&text, &registry);
+        // Resolve script imports from the file's own directory so
+        // multi-file scripts don't light up with false unknown-module
+        // errors; diagnostics landing in IMPORTED files are dropped here
+        // (they surface when that file is open/analyzed as the entry).
+        let entry_path = uri
+            .to_file_path()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| "script".to_string());
+        let resolver = wscript::FsResolver::new();
+        let analysis = wscript_compiler::analyze_entry(&entry_path, &text, &resolver, &registry);
+        let entry_len = text.len() as u32;
         let mut all = analysis.parse.diags;
         all.extend(analysis.check.diags);
+        all.retain(|d| d.span.lo <= entry_len);
         let diags: Vec<Diagnostic> = all
             .into_iter()
             .map(|d| Diagnostic {
@@ -730,6 +741,16 @@ impl Backend {
             .collect();
         self.client.publish_diagnostics(uri, diags, None).await;
     }
+}
+
+/// Analyze an open document with script imports resolved relative to
+/// its own path (multi-file support in every LSP feature).
+fn analyze_doc(uri: &Url, text: &str, registry: &wscript::Registry) -> wscript_compiler::Analysis {
+    let entry_path = uri
+        .to_file_path()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "script".to_string());
+    wscript_compiler::analyze_entry(&entry_path, text, &wscript::FsResolver::new(), registry)
 }
 
 fn trailing_ident(text: &str) -> &str {

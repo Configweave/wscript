@@ -13,6 +13,7 @@ pub mod fmt_spec;
 pub mod host;
 pub mod module;
 pub mod registry;
+pub mod source_map;
 pub mod span;
 pub mod types;
 pub mod value;
@@ -27,6 +28,7 @@ pub use host::{
 };
 pub use module::Module;
 pub use registry::{ModuleDef, Registry};
+pub use source_map::{SourceFileInfo, SourceMap};
 pub use span::Span;
 pub use types::{FnSig, Type};
 pub use value::Value;

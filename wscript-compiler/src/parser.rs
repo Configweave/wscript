@@ -36,17 +36,27 @@ const MAX_NESTING_BUDGET: u32 = 500;
 const RECURSION_COST: u32 = 5;
 
 pub fn parse(src: &str) -> ParseOutput {
-    let lexed = lexer::lex(src);
+    let mut next_id = 0;
+    parse_file(src, 0, &mut next_id)
+}
+
+/// Parse one file of a (possibly multi-file) compilation: spans are
+/// offset by `base` into the global address space, and `next_id` is the
+/// program-wide NodeId counter (checker side tables are keyed by NodeId,
+/// so ids must be unique across files).
+pub fn parse_file(src: &str, base: u32, next_id: &mut NodeId) -> ParseOutput {
+    let lexed = lexer::lex_at(src, base);
     let mut parser = Parser {
         tokens: lexed.tokens,
         pos: 0,
         diags: lexed.diags,
-        next_id: 0,
+        next_id: *next_id,
         no_struct_lit: false,
         depth: 0,
         depth_exceeded: false,
     };
     let file = parser.source_file();
+    *next_id = parser.next_id;
     ParseOutput {
         file,
         diags: parser.diags,
@@ -378,6 +388,45 @@ impl Parser {
 
     fn use_decl(&mut self) -> Option<UseDecl> {
         let kw = self.bump().span;
+        // Path form: `use "./helpers.wscript" [as name]`.
+        if let TokenKind::Str(p) = self.kind() {
+            let p = p.clone();
+            let path_span = self.bump().span;
+            let module = if self.eat_kw_as() {
+                self.expect_ident("module name after `as`")?
+            } else {
+                // Default module name: the file stem.
+                let stem = std::path::Path::new(&p)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let ok = !stem.is_empty()
+                    && stem.chars().enumerate().all(|(i, c)| {
+                        c == '_' || c.is_ascii_alphanumeric() && (i > 0 || !c.is_ascii_digit())
+                    });
+                if !ok {
+                    self.error(
+                        "E0200",
+                        path_span,
+                        format!("cannot derive a module name from `{p}`; add `as name`"),
+                    );
+                    self.terminate_stmt();
+                    return None;
+                }
+                Ident {
+                    name: stem,
+                    span: path_span,
+                }
+            };
+            let span = kw.to(self.prev_span());
+            self.terminate_stmt();
+            return Some(UseDecl {
+                module,
+                item: None,
+                path_lit: Some(p),
+                span,
+            });
+        }
         let module = self.expect_ident("module name after `use`")?;
         let mut item = None;
         if self.eat(&TokenKind::ColonColon) {
@@ -385,7 +434,23 @@ impl Parser {
         }
         let span = kw.to(self.prev_span());
         self.terminate_stmt();
-        Some(UseDecl { module, item, span })
+        Some(UseDecl {
+            module,
+            item,
+            path_lit: None,
+            span,
+        })
+    }
+
+    /// Contextual keyword `as` (an ordinary identifier elsewhere).
+    fn eat_kw_as(&mut self) -> bool {
+        if let TokenKind::Ident(name) = self.kind()
+            && name == "as"
+        {
+            self.bump();
+            return true;
+        }
+        false
     }
 
     /// `allow_self`: parsing inside an impl/trait block.

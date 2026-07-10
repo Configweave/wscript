@@ -560,6 +560,10 @@ pub struct CompiledUnit {
     /// signatures can never match host types); kept so the host boundary
     /// can explain why a lookup failed.
     pub generic_fns: Vec<String>,
+    /// Span address space → file mapping (multi-file compilations).
+    /// Single-file units have one entry; fault renderers use it to name
+    /// the right file per frame.
+    pub source_map: crate::source_map::SourceMap,
 }
 
 impl CompiledUnit {

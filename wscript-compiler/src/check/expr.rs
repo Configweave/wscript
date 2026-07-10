@@ -434,12 +434,12 @@ impl<'a> Checker<'a> {
                     );
                     return Type::Error;
                 }
-                if let Some((host_fn, konst)) = self.imported(&single.name) {
-                    if let Some((ty, c)) = konst {
+                match self.imported(&single.name) {
+                    Some(super::ImportedRef::Const(ty, c)) => {
                         self.out.paths.insert(e.id, PathRes::Const(c));
                         return ty;
                     }
-                    if host_fn.is_some() {
+                    Some(super::ImportedRef::HostFn(_)) => {
                         self.error_help(
                             "E0229",
                             e.span,
@@ -448,37 +448,13 @@ impl<'a> Checker<'a> {
                         );
                         return Type::Error;
                     }
+                    Some(super::ImportedRef::ScriptFn(proto)) => {
+                        return self.script_fn_value(e, proto, &single.name);
+                    }
+                    None => {}
                 }
                 if let Some(proto) = self.fn_by_name(&single.name) {
-                    self.out.paths.insert(e.id, PathRes::FnValue(proto));
-                    let info = &self.out.fn_infos[proto as usize];
-                    self.out.def_spans.insert(e.id, info.span);
-                    let sig = info.sig.clone();
-                    if !info.type_params.is_empty() {
-                        // Generic fn as a value: one erased proto serves
-                        // every instantiation — instantiate the signature
-                        // with fresh vars and let the context bind them.
-                        let type_params = info.type_params.clone();
-                        let subst: Vec<Type> =
-                            type_params.iter().map(|_| self.infer.fresh()).collect();
-                        let inst = FnSig {
-                            params: sig
-                                .params
-                                .iter()
-                                .map(|p| super::subst_params(p, &subst))
-                                .collect(),
-                            ret: super::subst_params(&sig.ret, &subst),
-                        };
-                        self.pending_instantiations
-                            .push(super::PendingInstantiation {
-                                span: e.span,
-                                fn_name: single.name.clone(),
-                                type_params,
-                                subst,
-                            });
-                        return Type::Fn(Box::new(inst));
-                    }
-                    return Type::Fn(Box::new(sig));
+                    return self.script_fn_value(e, proto, &single.name);
                 }
                 if single.name == "None" {
                     self.out.paths.insert(
@@ -505,8 +481,25 @@ impl<'a> Checker<'a> {
             }
             [first, second] => {
                 // module::item
-                if let Some(mod_idx) = self.module_idx(&first.name) {
-                    return self.check_module_item(e, mod_idx, second, /*as_value=*/ true);
+                match self.module_ref(&first.name) {
+                    Some(super::ModuleRef::Host(mod_idx)) => {
+                        return self.check_module_item(e, mod_idx, second, /*as_value=*/ true);
+                    }
+                    Some(super::ModuleRef::Script(fi)) => {
+                        if let Some(proto) = self.fn_in_file(fi, &second.name) {
+                            return self.script_fn_value(e, proto, &second.name);
+                        }
+                        let module = self.script_module_name(fi).to_string();
+                        let name = second.name.clone();
+                        self.error_help(
+                            "E0201",
+                            second.span,
+                            format!("script module `{module}` has no function `{name}`"),
+                            "only top-level fns can be referenced from script files",
+                        );
+                        return Type::Error;
+                    }
+                    None => {}
                 }
                 // Enum::Variant
                 if let Some(def) = self.enum_by_name(&first.name) {
@@ -529,7 +522,7 @@ impl<'a> Checker<'a> {
             [first, second, third] => {
                 // module::Enum::Variant — types are ambient, so the module
                 // qualifier is accepted but the enum resolves by name.
-                if self.module_idx(&first.name).is_some() || self.module_is_registered(&first.name)
+                if self.module_ref(&first.name).is_some() || self.module_is_registered(&first.name)
                 {
                     if let Some(def) = self.enum_by_name(&second.name) {
                         return self.unit_variant_value(e, def, third);
@@ -1254,31 +1247,26 @@ impl<'a> Checker<'a> {
                     let ret = self.check_value_call(e, &ty, callee.span, args);
                     return Some((CallKind::Value, ret));
                 }
-                if let Some((host_fn, _)) = self.imported(&single.name)
-                    && let Some(idx) = host_fn
-                {
-                    let sig = self.reg.host_fns[idx as usize].sig.clone();
-                    self.check_args(e.span, &format!("`{}`", single.name), &sig.params, args);
-                    return Some((CallKind::Host(idx), sig.ret));
-                }
-                if let Some(proto) = self.fn_by_name(&single.name) {
-                    let info = &self.out.fn_infos[proto as usize];
-                    self.out.def_spans.insert(callee.id, info.span);
-                    let sig = info.sig.clone();
-                    if !info.type_params.is_empty() {
-                        let type_params = info.type_params.clone();
-                        let ret = self.check_generic_call(
+                match self.imported(&single.name) {
+                    Some(super::ImportedRef::HostFn(idx)) => {
+                        let sig = self.reg.host_fns[idx as usize].sig.clone();
+                        self.check_args(e.span, &format!("`{}`", single.name), &sig.params, args);
+                        return Some((CallKind::Host(idx), sig.ret));
+                    }
+                    Some(super::ImportedRef::ScriptFn(proto)) => {
+                        return Some(self.script_fn_call(
                             e,
+                            callee,
+                            proto,
                             &single.name,
-                            &type_params,
-                            &sig,
                             args,
                             expect,
-                        );
-                        return Some((CallKind::Proto(proto), ret));
+                        ));
                     }
-                    self.check_args(e.span, &format!("`{}`", single.name), &sig.params, args);
-                    return Some((CallKind::Proto(proto), sig.ret));
+                    Some(super::ImportedRef::Const(..)) | None => {}
+                }
+                if let Some(proto) = self.fn_by_name(&single.name) {
+                    return Some(self.script_fn_call(e, callee, proto, &single.name, args, expect));
                 }
                 // Ambient Option/Result constructors.
                 match single.name.as_str() {
@@ -1332,7 +1320,22 @@ impl<'a> Checker<'a> {
                 None
             }
             [first, second] => {
-                if let Some(mod_idx) = self.module_idx(&first.name) {
+                if let Some(super::ModuleRef::Script(fi)) = self.module_ref(&first.name) {
+                    if let Some(proto) = self.fn_in_file(fi, &second.name) {
+                        let label = format!("{}::{}", first.name, second.name);
+                        return Some(self.script_fn_call(e, callee, proto, &label, args, expect));
+                    }
+                    let module = self.script_module_name(fi).to_string();
+                    let name = second.name.clone();
+                    self.error_help(
+                        "E0201",
+                        second.span,
+                        format!("script module `{module}` has no function `{name}`"),
+                        "only top-level fns can be called from script files",
+                    );
+                    return None;
+                }
+                if let Some(super::ModuleRef::Host(mod_idx)) = self.module_ref(&first.name) {
                     match self.module_item_lookup(mod_idx, &second.name) {
                         Some(Ok((sig, idx))) => {
                             self.check_args(
@@ -1412,7 +1415,7 @@ impl<'a> Checker<'a> {
                 None
             }
             [first, second, third] => {
-                if (self.module_idx(&first.name).is_some()
+                if (self.module_ref(&first.name).is_some()
                     || self.module_is_registered(&first.name))
                     && let Some(def) = self.enum_by_name(&second.name)
                 {
@@ -1427,6 +1430,60 @@ impl<'a> Checker<'a> {
                 None
             }
         }
+    }
+
+    /// A script fn referenced as a VALUE (`let f = helper` /
+    /// `let f = mod::helper`): one erased proto serves generic fns too —
+    /// instantiate with fresh vars and let the context bind them.
+    fn script_fn_value(&mut self, e: &Expr, proto: u32, name: &str) -> Type {
+        self.out.paths.insert(e.id, PathRes::FnValue(proto));
+        let info = &self.out.fn_infos[proto as usize];
+        self.out.def_spans.insert(e.id, info.span);
+        let sig = info.sig.clone();
+        if !info.type_params.is_empty() {
+            let type_params = info.type_params.clone();
+            let subst: Vec<Type> = type_params.iter().map(|_| self.infer.fresh()).collect();
+            let inst = FnSig {
+                params: sig
+                    .params
+                    .iter()
+                    .map(|p| super::subst_params(p, &subst))
+                    .collect(),
+                ret: super::subst_params(&sig.ret, &subst),
+            };
+            self.pending_instantiations
+                .push(super::PendingInstantiation {
+                    span: e.span,
+                    fn_name: name.to_string(),
+                    type_params,
+                    subst,
+                });
+            return Type::Fn(Box::new(inst));
+        }
+        Type::Fn(Box::new(sig))
+    }
+
+    /// A call to a script fn by proto (same-file, `use`-imported, or
+    /// `module::fn`) — handles generic instantiation uniformly.
+    fn script_fn_call(
+        &mut self,
+        e: &Expr,
+        callee: &Expr,
+        proto: u32,
+        label: &str,
+        args: &[Expr],
+        expect: Option<&Type>,
+    ) -> (CallKind, Type) {
+        let info = &self.out.fn_infos[proto as usize];
+        self.out.def_spans.insert(callee.id, info.span);
+        let sig = info.sig.clone();
+        if !info.type_params.is_empty() {
+            let type_params = info.type_params.clone();
+            let ret = self.check_generic_call(e, label, &type_params, &sig, args, expect);
+            return (CallKind::Proto(proto), ret);
+        }
+        self.check_args(e.span, &format!("`{label}`"), &sig.params, args);
+        (CallKind::Proto(proto), sig.ret)
     }
 
     /// A call to a generic fn: instantiate its type parameters with

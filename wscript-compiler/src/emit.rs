@@ -23,8 +23,14 @@ use crate::check::{
 };
 
 pub fn emit(file: &SourceFile, res: &CheckResult) -> CompiledUnit {
+    emit_files(&[file], res)
+}
+
+/// Emit a whole (possibly multi-file) program into one merged unit.
+/// `files` must be in the same order the checker saw them.
+pub fn emit_files(files: &[&SourceFile], res: &CheckResult) -> CompiledUnit {
     let mut em = Emitter {
-        file,
+        files,
         res,
         consts: Vec::new(),
         const_map: HashMap::new(),
@@ -53,6 +59,8 @@ pub fn emit(file: &SourceFile, res: &CheckResult) -> CompiledUnit {
         impls: res.impl_maps.clone(),
         exports: res.exports.clone(),
         generic_fns: res.generic_fns.clone(),
+        // Filled by the compile pipeline (which knows the file layout).
+        source_map: Default::default(),
     }
 }
 
@@ -65,7 +73,7 @@ enum ConstKey {
 }
 
 struct Emitter<'a> {
-    file: &'a SourceFile,
+    files: &'a [&'a SourceFile],
     res: &'a CheckResult,
     consts: Vec<Const>,
     const_map: HashMap<ConstKey, u32>,
@@ -89,21 +97,23 @@ impl<'a> Emitter<'a> {
         });
         let info = &self.res.fn_infos[proto as usize];
         let built = match info.source {
-            FnSource::Top { item } => {
-                let Item::Fn(f) = &self.file.items[item] else {
+            FnSource::Top { file, item } => {
+                let Item::Fn(f) = &self.files[file].items[item] else {
                     unreachable!()
                 };
                 self.emit_fn(proto, &f.params, FnBody::Block(&f.body), f.span)
             }
-            FnSource::Method { item, fn_idx } => {
-                let Item::Impl(im) = &self.file.items[item] else {
+            FnSource::Method { file, item, fn_idx } => {
+                let Item::Impl(im) = &self.files[file].items[item] else {
                     unreachable!()
                 };
                 let f = &im.fns[fn_idx];
                 self.emit_fn(proto, &f.params, FnBody::Block(&f.body), f.span)
             }
             FnSource::Closure { node } => {
-                let Some((params_len, body)) = find_closure(self.file, node) else {
+                let Some((params_len, body)) =
+                    self.files.iter().find_map(|f| find_closure(f, node))
+                else {
                     unreachable!("closure node not found")
                 };
                 let _ = params_len;

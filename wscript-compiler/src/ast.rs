@@ -55,8 +55,14 @@ pub struct ConstDecl {
 /// `use module` / `use module::item`
 #[derive(Debug)]
 pub struct UseDecl {
+    /// Module name as referenced in the script — for the path form
+    /// (`use "./x.wscript" as y`) this is the alias (or the file stem).
     pub module: Ident,
     pub item: Option<Ident>,
+    /// `use "./helpers.wscript" [as name]` — an explicit script-file
+    /// import; `None` for the bare `use name` form (host module first,
+    /// then sibling/`src_roots` file resolution).
+    pub path_lit: Option<String>,
     pub span: Span,
 }
 

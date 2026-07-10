@@ -393,10 +393,30 @@ innermost frame first, with `RuntimeError.span` mirroring the fault site.
 ## Modules
 
 `use module` imports a host-registered module; `use module::item` imports
-one item. Scripts are single files in v1 — script-to-script imports are
-planned for v2. Registered types are ambient (no `use` needed for type
-names). The prelude — always available — is: `print println str fmt same
-weak int float`.
+one item. Registered types are ambient (no `use` needed for type names).
+The prelude — always available — is: `print println str fmt same weak
+int float`.
+
+Scripts can also import **other script files**:
+
+```rust
+use helpers                       // helpers.wscript, next to this file
+                                  // (or under wscript.toml's src_roots)
+use helpers::double               // import one fn into scope
+use "./sub/geo.wscript" as geo    // explicit path, relative to this file
+
+geo::origin()
+helpers::double(21)
+```
+
+Rules: a registered host module wins over a file of the same name. Each
+file is a module named by its stem (or `as` alias) — names are unique
+program-wide. Cyclic imports are fine (there are no top-level
+statements, so no initialization order). Types declared in any file are
+ambient across the program, like host types; functions are file-scoped
+and reached via `module::fn`. Only the *entry* file's fns are callable
+by the host. The whole graph compiles into one unit — diagnostics and
+stack traces name the right file.
 
 ## What wscript does not have (v1)
 

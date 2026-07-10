@@ -168,7 +168,7 @@ remain future stages; the rest of this section records the v1 stance.)*
 ### 3.9 Modules & imports
 
 - One file = one script compilation unit in v1. `use module_name` / `use module_name::item` imports from *registered* modules (host or stdlib).
-- **Script-to-script imports are v2.** v1 scripts are single-file. (The CLI may later grow multi-file support; do not block on it.)
+- **Script-to-script imports are v2.** v1 scripts are single-file. (The CLI may later grow multi-file support; do not block on it.) *(Shipped post-v1: `use helpers` / `use "./x.wscript" as x` — merged-unit compilation with a source map, cycles allowed, entry-file-only exports; see the tour.)*
 
 ---
 

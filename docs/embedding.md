@@ -129,6 +129,15 @@ let quit = on_key.call(&mut vm, (key_event,))?;   // cheap thereafter
 signature doesn't match `(A...) -> R`. Generic script fns (`fn f[T]`)
 are not callable from the host — wrap them in a monomorphic script fn.
 
+Scripts that import other script files compile through
+`ctx.compile_entry(path, src, &resolver)` — `FsResolver` resolves
+imports on disk (plain `ctx.compile` refuses them with a pointed
+error). The whole import graph still produces ONE `CompiledUnit`;
+`unit.source_map` plus the returned per-file sources let you render
+diagnostics and fault traces against the right file. Implement
+`SourceResolver` yourself to load imports from memory, an archive, or
+anywhere else.
+
 ## Script callbacks (host functions taking closures)
 
 A host function can receive a script closure and invoke it: declare a

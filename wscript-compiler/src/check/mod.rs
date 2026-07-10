@@ -193,12 +193,17 @@ pub struct ClosureRes {
 /// Where a function's AST lives (the emitter walks it by this reference).
 #[derive(Debug, Clone, Copy)]
 pub enum FnSource {
-    /// `file.items[item]` is an `Item::Fn`.
-    Top { item: usize },
-    /// `file.items[item]` is an `Item::Impl`; method `fns[fn_idx]`.
-    Method { item: usize, fn_idx: usize },
+    /// `files[file].items[item]` is an `Item::Fn`.
+    Top { file: usize, item: usize },
+    /// `files[file].items[item]` is an `Item::Impl`; method `fns[fn_idx]`.
+    Method {
+        file: usize,
+        item: usize,
+        fn_idx: usize,
+    },
     /// A closure expression with this node id.
     Closure { node: NodeId },
+    // (Top/Method carry the file index of a multi-file compilation.)
     /// Synthesized — no AST (not used in v1; reserved).
     Synthesized,
 }
@@ -335,19 +340,49 @@ struct FnState {
 enum Imported {
     HostFn(u32),
     Const(Type, Const),
+    /// `use helpers::foo` where `helpers` is a script file: resolved to
+    /// a proto lazily (fn protos are collected after uses).
+    ScriptItem {
+        file: usize,
+    },
+}
+
+/// What a `use`d module name refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ModuleRef {
+    /// Registry module index (host/stdlib).
+    Host(usize),
+    /// Imported script file index.
+    Script(usize),
+}
+
+/// A resolved single-name import (see `Checker::imported`).
+pub(crate) enum ImportedRef {
+    HostFn(u32),
+    Const(Type, Const),
+    ScriptFn(u32),
 }
 
 pub struct Checker<'a> {
-    pub(crate) file: &'a SourceFile,
+    /// All files of the program: (module name, AST). Index 0 is the
+    /// entry file; the module name of the entry is unused.
+    pub(crate) files: &'a [(String, &'a SourceFile)],
+    /// File whose items/bodies are currently being processed.
+    pub(crate) cur_file: usize,
     pub(crate) reg: &'a Registry,
     pub(crate) out: CheckResult,
     pub(crate) infer: Infer,
 
     // module-level scope
     type_names: HashMap<String, DefId>,
-    fn_names: HashMap<String, u32>,
-    modules_in_scope: HashMap<String, usize>,
-    imports: HashMap<String, Imported>,
+    /// Per-file: top-level fn name → proto (file-scoped visibility).
+    fn_names: Vec<HashMap<String, u32>>,
+    /// Per-file: `use`d module names.
+    modules_in_scope: Vec<HashMap<String, ModuleRef>>,
+    /// Per-file: `use module::item` imports.
+    imports: Vec<HashMap<String, Imported>>,
+    /// Script module name → file index (imported files; program-wide).
+    script_modules: HashMap<String, usize>,
 
     // impls
     pub(crate) inherent: HashMap<DefId, HashMap<String, u32>>,
@@ -388,8 +423,23 @@ pub struct Checker<'a> {
 }
 
 pub fn check(file: &SourceFile, registry: &Registry) -> CheckResult {
+    let files = [(String::new(), file)];
+    check_files(&files, registry)
+}
+
+/// Whole-program check over a multi-file compilation. `files[0]` is the
+/// entry file (only its fns are exported); every other entry is an
+/// imported script module named by its `String`.
+pub fn check_files<'a>(files: &'a [(String, &'a SourceFile)], registry: &Registry) -> CheckResult {
+    let script_modules: HashMap<String, usize> = files
+        .iter()
+        .enumerate()
+        .skip(1)
+        .map(|(i, (name, _))| (name.clone(), i))
+        .collect();
     let mut checker = Checker {
-        file,
+        files,
+        cur_file: 0,
         reg: registry,
         out: CheckResult {
             defs: registry.defs.clone(),
@@ -397,9 +447,10 @@ pub fn check(file: &SourceFile, registry: &Registry) -> CheckResult {
         },
         infer: Infer::default(),
         type_names: HashMap::new(),
-        fn_names: HashMap::new(),
-        modules_in_scope: HashMap::new(),
-        imports: HashMap::new(),
+        fn_names: vec![HashMap::new(); files.len()],
+        modules_in_scope: vec![HashMap::new(); files.len()],
+        imports: vec![HashMap::new(); files.len()],
+        script_modules,
         inherent: HashMap::new(),
         assoc: HashMap::new(),
         current_type_params: Vec::new(),
@@ -444,13 +495,29 @@ impl<'a> Checker<'a> {
         self.infer.resolve(t).display(&self.out.defs)
     }
 
+    /// The file currently being processed.
+    pub(crate) fn file(&self) -> &'a SourceFile {
+        self.files[self.cur_file].1
+    }
+
     fn run(&mut self) {
-        self.reject_interface_items();
         self.register_host_names();
-        self.collect_uses();
-        self.collect_type_names();
-        self.fill_type_defs();
-        self.collect_fns();
+        // Item passes run per file, whole-pass-at-a-time, so every
+        // name exists program-wide before anything is resolved (types
+        // are ambient across files; fns and uses are file-scoped).
+        for pass in [
+            Checker::reject_interface_items,
+            Checker::collect_uses,
+            Checker::collect_type_names,
+            Checker::fill_type_defs,
+            Checker::collect_fns,
+        ] {
+            for fi in 0..self.files.len() {
+                self.cur_file = fi;
+                pass(self);
+            }
+        }
+        self.validate_script_imports();
         self.collect_methods_by_type();
         self.validate_derives();
         self.check_bodies();
@@ -460,7 +527,7 @@ impl<'a> Checker<'a> {
     /// `mod` blocks, `const` items, bodyless fns and `#[opaque]` are the
     /// `.wscripti` interface grammar (PRD §9.1) — reject them in scripts.
     fn reject_interface_items(&mut self) {
-        for item in &self.file.items {
+        for item in &self.file().items {
             match item {
                 Item::Mod(m) => {
                     let span = m.name.span;
@@ -558,67 +625,134 @@ impl<'a> Checker<'a> {
     }
 
     fn collect_uses(&mut self) {
-        for item in &self.file.items {
+        for item in &self.file().items {
             let Item::Use(u) = item else { continue };
-            let Some(mod_idx) = self
-                .reg
-                .modules
-                .iter()
-                .position(|m| m.name == u.module.name)
-            else {
-                let known: Vec<&str> = self.reg.modules.iter().map(|m| m.name.as_str()).collect();
-                let span = u.module.span;
-                let name = u.module.name.clone();
-                self.error_help(
-                    "E0200",
-                    span,
-                    format!("unknown module `{name}`"),
-                    if known.is_empty() {
-                        "no modules are registered in this context".to_string()
-                    } else {
-                        format!("registered modules: {}", known.join(", "))
-                    },
-                );
-                continue;
+            // Resolution order (documented): registered host module
+            // first, then imported script file. Path-form uses
+            // (`use "./x.wscript"`) are script files by construction.
+            let host_idx = if u.path_lit.is_some() {
+                None
+            } else {
+                self.reg
+                    .modules
+                    .iter()
+                    .position(|m| m.name == u.module.name)
+            };
+            let mref = match host_idx {
+                Some(idx) => ModuleRef::Host(idx),
+                None => match self.script_modules.get(&u.module.name) {
+                    Some(&fi) => ModuleRef::Script(fi),
+                    None => {
+                        if u.path_lit.is_some() {
+                            // The loader failed to resolve the file and
+                            // already reported it — stay quiet here.
+                            continue;
+                        }
+                        let known: Vec<&str> =
+                            self.reg.modules.iter().map(|m| m.name.as_str()).collect();
+                        let span = u.module.span;
+                        let name = u.module.name.clone();
+                        self.error_help(
+                            "E0200",
+                            span,
+                            format!("unknown module `{name}`"),
+                            if known.is_empty() {
+                                "no modules are registered in this context, and no matching \
+                                 script file was found"
+                                    .to_string()
+                            } else {
+                                format!(
+                                    "registered modules: {}; script files import by name \
+                                     (sibling file or src_roots) or path (`use \"./x.wscript\"`)",
+                                    known.join(", ")
+                                )
+                            },
+                        );
+                        continue;
+                    }
+                },
             };
             match &u.item {
                 None => {
-                    self.modules_in_scope.insert(u.module.name.clone(), mod_idx);
+                    self.modules_in_scope[self.cur_file].insert(u.module.name.clone(), mref);
                 }
-                Some(item_name) => {
-                    let module = &self.reg.modules[mod_idx];
-                    if let Some((_, _, idx, _)) =
-                        module.fns.iter().find(|(n, ..)| *n == item_name.name)
-                    {
-                        self.imports
-                            .insert(item_name.name.clone(), Imported::HostFn(*idx));
-                    } else if let Some((_, ty, c)) =
-                        module.consts.iter().find(|(n, ..)| *n == item_name.name)
-                    {
-                        self.imports.insert(
-                            item_name.name.clone(),
-                            Imported::Const(ty.clone(), c.clone()),
-                        );
-                    } else {
-                        let span = item_name.span;
-                        let msg = format!(
-                            "module `{}` has no item `{}`",
-                            u.module.name, item_name.name
-                        );
-                        self.error_help(
-                            "E0201",
-                            span,
-                            msg,
-                            "check the module's `.wscripti` interface for available items",
-                        );
+                Some(item_name) => match mref {
+                    ModuleRef::Host(mod_idx) => {
+                        let module = &self.reg.modules[mod_idx];
+                        if let Some((_, _, idx, _)) =
+                            module.fns.iter().find(|(n, ..)| *n == item_name.name)
+                        {
+                            self.imports[self.cur_file]
+                                .insert(item_name.name.clone(), Imported::HostFn(*idx));
+                        } else if let Some((_, ty, c)) =
+                            module.consts.iter().find(|(n, ..)| *n == item_name.name)
+                        {
+                            self.imports[self.cur_file].insert(
+                                item_name.name.clone(),
+                                Imported::Const(ty.clone(), c.clone()),
+                            );
+                        } else {
+                            let span = item_name.span;
+                            let msg = format!(
+                                "module `{}` has no item `{}`",
+                                u.module.name, item_name.name
+                            );
+                            self.error_help(
+                                "E0201",
+                                span,
+                                msg,
+                                "check the module's `.wscripti` interface for available items",
+                            );
+                        }
                     }
-                }
+                    ModuleRef::Script(fi) => {
+                        // Fn protos are collected after uses — validated
+                        // in validate_script_imports, resolved lazily.
+                        self.imports[self.cur_file]
+                            .insert(item_name.name.clone(), Imported::ScriptItem { file: fi });
+                    }
+                },
             }
         }
     }
 
+    /// `use module::item` imports of script fns are recorded before fn
+    /// collection — verify each names a real fn now.
+    fn validate_script_imports(&mut self) {
+        let mut errors = Vec::new();
+        for file_imports in &self.imports {
+            for (name, imp) in file_imports {
+                if let Imported::ScriptItem { file } = imp
+                    && !self.fn_names[*file].contains_key(name)
+                {
+                    errors.push((self.files[*file].0.clone(), name.clone()));
+                }
+            }
+        }
+        for (module, name) in errors {
+            // Best-effort span: search every file's use items.
+            let span = self
+                .files
+                .iter()
+                .flat_map(|(_, f)| &f.items)
+                .find_map(|i| match i {
+                    Item::Use(u) if u.item.as_ref().is_some_and(|it| it.name == name) => {
+                        Some(u.span)
+                    }
+                    _ => None,
+                })
+                .unwrap_or(Span::DUMMY);
+            self.error_help(
+                "E0201",
+                span,
+                format!("script module `{module}` has no function `{name}`"),
+                "only top-level fns can be imported from script files",
+            );
+        }
+    }
+
     fn collect_type_names(&mut self) {
-        for item in &self.file.items {
+        for item in &self.file().items {
             let (name, span, kind) = match item {
                 Item::Struct(s) => (
                     &s.name,
@@ -687,7 +821,7 @@ impl<'a> Checker<'a> {
 
     /// Resolve field/variant/trait-method types now that all names exist.
     fn fill_type_defs(&mut self) {
-        for item in &self.file.items {
+        for item in &self.file().items {
             match item {
                 Item::Struct(s) => {
                     if let Some(id) = self.script_def_id(&s.name.name) {
@@ -853,9 +987,9 @@ impl<'a> Checker<'a> {
     /// reference any function regardless of declaration order.
     fn collect_fns(&mut self) {
         // Top-level functions.
-        for (item_idx, item) in self.file.items.iter().enumerate() {
+        for (item_idx, item) in self.file().items.iter().enumerate() {
             let Item::Fn(f) = item else { continue };
-            if self.fn_names.contains_key(&f.name.name) {
+            if self.fn_names[self.cur_file].contains_key(&f.name.name) {
                 let span = f.name.span;
                 let msg = format!("duplicate function `{}`", f.name.name);
                 self.error("E0205", span, msg);
@@ -888,17 +1022,20 @@ impl<'a> Checker<'a> {
                 name: f.name.name.clone(),
                 sig,
                 type_params,
-                source: FnSource::Top { item: item_idx },
+                source: FnSource::Top {
+                    file: self.cur_file,
+                    item: item_idx,
+                },
                 n_locals: 0,
                 captured: HashSet::new(),
                 captures: Vec::new(),
                 span: f.sig_span,
                 pending: true,
             });
-            self.fn_names.insert(f.name.name.clone(), proto);
+            self.fn_names[self.cur_file].insert(f.name.name.clone(), proto);
         }
         // Impl blocks.
-        for (item_idx, item) in self.file.items.iter().enumerate() {
+        for (item_idx, item) in self.file().items.iter().enumerate() {
             let Item::Impl(im) = item else { continue };
             self.collect_impl(item_idx, im);
         }
@@ -1032,6 +1169,7 @@ impl<'a> Checker<'a> {
                 sig,
                 type_params: Vec::new(),
                 source: FnSource::Method {
+                    file: self.cur_file,
                     item: item_idx,
                     fn_idx,
                 },
@@ -1313,7 +1451,7 @@ impl<'a> Checker<'a> {
     }
 
     fn def_decl_span(&self, id: DefId) -> Span {
-        for item in &self.file.items {
+        for item in &self.file().items {
             match item {
                 Item::Struct(s) if self.type_names.get(&s.name.name) == Some(&id) => {
                     return s.name.span;
@@ -1692,14 +1830,20 @@ impl<'a> Checker<'a> {
         self.current_type_params = info.type_params.clone();
         let source = info.source;
         let (decl, _item_idx) = match source {
-            FnSource::Top { item } => match &self.file.items[item] {
-                Item::Fn(f) => (f, item),
-                _ => return,
-            },
-            FnSource::Method { item, fn_idx } => match &self.file.items[item] {
-                Item::Impl(im) => (&im.fns[fn_idx], item),
-                _ => return,
-            },
+            FnSource::Top { file, item } => {
+                self.cur_file = file;
+                match &self.file().items[item] {
+                    Item::Fn(f) => (f, item),
+                    _ => return,
+                }
+            }
+            FnSource::Method { file, item, fn_idx } => {
+                self.cur_file = file;
+                match &self.file().items[item] {
+                    Item::Impl(im) => (&im.fns[fn_idx], item),
+                    _ => return,
+                }
+            }
             FnSource::Closure { .. } | FnSource::Synthesized => return,
         };
 
@@ -1787,7 +1931,9 @@ impl<'a> Checker<'a> {
     }
 
     fn collect_exports(&mut self) {
-        for (name, &proto) in &self.fn_names {
+        // Only the ENTRY file's fns are host-callable; imported files'
+        // fns get protos but no exports (documented).
+        for (name, &proto) in &self.fn_names[0] {
             let info = &self.out.fn_infos[proto as usize];
             // Generic fns are not exported: their erased signature
             // (`fn(T) -> T`) can never match host-side types. Call them
@@ -1915,11 +2061,22 @@ impl<'a> Checker<'a> {
     }
 
     pub(crate) fn fn_by_name(&self, name: &str) -> Option<u32> {
-        self.fn_names.get(name).copied()
+        self.fn_names[self.cur_file].get(name).copied()
     }
 
-    pub(crate) fn module_idx(&self, name: &str) -> Option<usize> {
-        self.modules_in_scope.get(name).copied()
+    /// Look up a fn in another script file's top-level scope
+    /// (`module::fn` cross-file references).
+    pub(crate) fn fn_in_file(&self, file: usize, name: &str) -> Option<u32> {
+        self.fn_names[file].get(name).copied()
+    }
+
+    /// The module name of an imported script file (diagnostics).
+    pub(crate) fn script_module_name(&self, file: usize) -> &str {
+        &self.files[file].0
+    }
+
+    pub(crate) fn module_ref(&self, name: &str) -> Option<ModuleRef> {
+        self.modules_in_scope[self.cur_file].get(name).copied()
     }
 
     pub(crate) fn module_is_registered(&self, name: &str) -> bool {
@@ -1927,11 +2084,15 @@ impl<'a> Checker<'a> {
     }
 
     #[allow(clippy::type_complexity)]
-    pub(crate) fn imported(&self, name: &str) -> Option<(Option<u32>, Option<(Type, Const)>)> {
-        match self.imports.get(name)? {
-            Imported::HostFn(idx) => Some((Some(*idx), None)),
-            Imported::Const(t, c) => Some((None, Some((t.clone(), c.clone())))),
-        }
+    pub(crate) fn imported(&self, name: &str) -> Option<ImportedRef> {
+        Some(match self.imports[self.cur_file].get(name)? {
+            Imported::HostFn(idx) => ImportedRef::HostFn(*idx),
+            Imported::Const(t, c) => ImportedRef::Const(t.clone(), c.clone()),
+            Imported::ScriptItem { file } => {
+                // Resolved lazily (validated in validate_script_imports).
+                ImportedRef::ScriptFn(self.fn_names[*file].get(name).copied()?)
+            }
+        })
     }
 
     pub(crate) fn prelude_fn(name: &str) -> Option<PreludeFn> {
