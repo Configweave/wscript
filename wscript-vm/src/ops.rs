@@ -58,6 +58,7 @@ impl Vm {
         if depth >= MAX_VALUE_DEPTH {
             return Err(self.fault(DEPTH_FAULT));
         }
+        self.charge_structural()?;
         Ok(match (a, b) {
             (Value::Unit, Value::Unit) => true,
             (Value::Int(x), Value::Int(y)) => x == y,
@@ -188,6 +189,7 @@ impl Vm {
         if depth >= MAX_VALUE_DEPTH {
             return Err(self.fault(DEPTH_FAULT));
         }
+        self.charge_structural()?;
         let ord = match (a, b) {
             (Value::Int(x), Value::Int(y)) => x.cmp(y),
             (Value::Float(x), Value::Float(y)) => x.total_cmp(y),
@@ -316,6 +318,7 @@ impl Vm {
         if depth >= MAX_VALUE_DEPTH {
             return Err(self.fault(DEPTH_FAULT));
         }
+        self.charge_structural()?;
         Ok(match v {
             Value::List(items) => {
                 let items = items.borrow();
@@ -374,6 +377,7 @@ impl Vm {
         if depth >= MAX_VALUE_DEPTH {
             return Err(self.fault(DEPTH_FAULT));
         }
+        self.charge_structural()?;
         // Custom Display impls take priority for nominal types.
         let custom = match v {
             Value::Struct(s) => self.unit().impls.display.get(&s.def.0).copied(),
@@ -747,6 +751,19 @@ mod tests {
         };
         // Strings are immutable — the clone shares the Rc.
         assert!(s.same(&c.borrow()[0]));
+    }
+
+    #[test]
+    fn fuel_charged_by_structural_eq() {
+        let mut vm = test_vm();
+        let big = |n: i64| Value::new_list((0..10_000).map(|i| Value::Int(i + n)).collect());
+        vm.set_fuel(Some(50));
+        let err = vm.value_eq(&big(0), &big(0)).unwrap_err();
+        assert_eq!(err.message, "fuel exhausted");
+        assert_eq!(vm.fuel(), Some(0));
+        // Unmetered: the same comparison completes.
+        vm.set_fuel(None);
+        assert!(vm.value_eq(&big(0), &big(0)).unwrap());
     }
 
     // ------------------------- mutation during custom impls (no panics)

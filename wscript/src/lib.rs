@@ -209,6 +209,11 @@ impl Vm {
     /// the current straight-line run of instructions — never past a
     /// host call or a loop iteration. `None` (the default): execution
     /// is unmetered.
+    ///
+    /// Structural builtins (`==`/`<` on containers, `.clone()`,
+    /// `print`/`str` of containers) additionally charge ~1 fuel per
+    /// value visited, so a comparison or render of a huge structure
+    /// cannot run unmetered inside a single dispatched instruction.
     pub fn set_fuel(&mut self, fuel: Option<u64>) {
         self.inner.set_fuel(fuel);
     }

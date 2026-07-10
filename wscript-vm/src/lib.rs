@@ -182,6 +182,11 @@ impl Vm {
     /// including the `Some(0)` edge — surfaces at the end of the current
     /// straight-line run of instructions: never past a host call or a
     /// loop iteration.
+    ///
+    /// Structural builtins (`==`/`<` on containers, `.clone()`,
+    /// `print`/`str` of containers) additionally charge ~1 fuel per value
+    /// visited, so comparing or rendering a huge structure cannot run
+    /// unmetered inside a single dispatched instruction.
     pub fn set_fuel(&mut self, fuel: Option<u64>) {
         self.fuel = fuel;
     }
@@ -315,6 +320,23 @@ impl Vm {
         let base = self.stack_top();
         self.push_frame(proto, base, usize::MAX, None, &args)?;
         self.execute(entry_depth)
+    }
+
+    /// Charge one fuel for a structural-op node visit (eq/cmp/clone/
+    /// display). These builtins walk arbitrarily large value graphs in a
+    /// single dispatched instruction, so without this a huge (or DAG-
+    /// shaped) comparison would run unmetered and unkillable. Draws from
+    /// `self.fuel` directly — sound because the dispatch loop syncs its
+    /// local tank into `self.fuel` around every builtin call.
+    pub(crate) fn charge_structural(&mut self) -> Result<(), RuntimeError> {
+        match self.fuel {
+            Some(0) => Err(self.fault("fuel exhausted")),
+            Some(n) => {
+                self.fuel = Some(n - 1);
+                Ok(())
+            }
+            None => Ok(()),
+        }
     }
 
     pub(crate) fn fault(&self, message: impl Into<String>) -> RuntimeError {
