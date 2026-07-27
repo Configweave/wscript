@@ -55,6 +55,18 @@ fn render_item(item: &Item, out: &mut String, depth: usize) {
             ));
             render_block(&f.body, out, depth + 1);
         }
+        Item::Units(u) => {
+            let entries: Vec<String> = u.units.iter().map(|e| e.name.name.clone()).collect();
+            out.push_str(&format!(
+                "units {}: {} [{}]\n",
+                u.name.name,
+                render_ty(Some(&u.base)),
+                entries.join(", ")
+            ));
+            for e in &u.units {
+                render_expr(&e.factor, out, depth + 1);
+            }
+        }
         Item::Struct(s) => {
             out.push_str(&format!(
                 "struct {} [{}]{}\n",
@@ -196,6 +208,13 @@ fn render_expr(e: &Expr, out: &mut String, depth: usize) {
                     }
                 }
             }
+        }
+        ExprKind::QuantityLit { value, unit } => {
+            out.push_str(&format!(
+                "quantity {} {}\n",
+                render_lit_num(*value),
+                unit.name
+            ));
         }
         ExprKind::UnitLit => out.push_str("unit\n"),
         ExprKind::Path(segs) => out.push_str(&format!(
@@ -388,11 +407,21 @@ fn render_ty(t: Option<&TypeExpr>) -> String {
     }
 }
 
+fn render_lit_num(n: wscript_compiler::ast::LitNum) -> String {
+    match n {
+        wscript_compiler::ast::LitNum::Int(v) => v.to_string(),
+        wscript_compiler::ast::LitNum::Float(v) => v.to_string(),
+    }
+}
+
 fn render_pat(p: &Pattern) -> String {
     match &p.kind {
         PatternKind::Wildcard => "_".into(),
         PatternKind::Binding(n) => n.name.clone(),
         PatternKind::IntLit(n) => n.to_string(),
+        PatternKind::QuantityLit { value, unit } => {
+            format!("{}{}", render_lit_num(*value), unit.name)
+        }
         PatternKind::BoolLit(b) => b.to_string(),
         PatternKind::CharLit(c) => format!("{c:?}"),
         PatternKind::StrLit(s) => format!("{s:?}"),
@@ -519,6 +548,32 @@ fn f(e:E) -> int
         int 1
       arm _
         int 2",
+    );
+}
+
+#[test]
+fn golden_units() {
+    // Newline- and comma-separated entries, factors over earlier units,
+    // and suffixed literals in both expression and pattern position.
+    golden(
+        "units Duration: int {\n    ns = 1\n    ms = 1_000_000\n    s = 1_000 * ms\n}\n\n\
+         fn f(d: Duration) -> int {\n    match d {\n        500ms => 1,\n        _ => 1.5s.ms,\n    }\n}",
+        "\
+units Duration: int [ns, ms, s]
+  int 1
+  int 1000000
+  binary Mul
+    int 1000
+    path ms
+fn f(d:Duration) -> int
+  expr
+    match
+      path d
+      arm 500ms
+        int 1
+      arm _
+        field .ms
+          quantity 1.5 s",
     );
 }
 

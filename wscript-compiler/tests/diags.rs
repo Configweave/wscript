@@ -354,3 +354,159 @@ fn pathological_nesting_errors_instead_of_overflowing() {
     ));
     ok(&format!("fn main() {{ let x = 1{}; }}", " + 1".repeat(150)));
 }
+
+// ------------------------------------------------------------ unit families
+
+/// Every unit test snippet needs a family in scope; this is the standard one.
+const DURATION: &str = "units Duration: int { ns = 1, us = 1_000, ms = 1_000 * us, \
+                        s = 1_000 * ms }\n";
+
+fn with_duration(body: &str) -> String {
+    format!("{DURATION}{body}")
+}
+
+#[test]
+fn unit_declarations() {
+    ok(&with_duration(
+        "fn main() { let d: Duration = 500ms\n println(d) }",
+    ));
+    // Exactly one unit must have the factor 1.
+    fails_with("units X: int { a = 2, b = 4 }\nfn main() {}", "E0267");
+    fails_with("units X: int { a = 1, b = 1 }\nfn main() {}", "E0267");
+    // Backing type must be numeric.
+    fails_with("units X: string { a = 1 }\nfn main() {}", "E0264");
+    fails_with("units X: int { a = 1, a = 2 }\nfn main() {}", "E0265");
+    // Factors are const-evaluated over the units declared above them.
+    ok("units X: int { a = 1, b = 2 * a, c = b * 3 + 1 }\nfn main() {}");
+    fails_with("units X: int { a = 1, b = 2 * c }\nfn main() {}", "E0268");
+    fails_with("units X: int { a = 1, b = f() }\nfn main() {}", "E0268");
+    // int-backed families take whole factors only; float-backed take both.
+    fails_with("units X: int { a = 1, b = 1.5 }\nfn main() {}", "E0268");
+    ok("units X: float { a = 1.0, b = 0.5, c = 2 }\nfn main() {}");
+    fails_with("units X: int { a = 1, b = 0 }\nfn main() {}", "E0266");
+    fails_with("units X: int { a = 1, b = -2 }\nfn main() {}", "E0266");
+    // `units` is contextual — still usable as an ordinary name.
+    ok("fn main() { let units = 3\n println(units) }");
+}
+
+#[test]
+fn unit_literals() {
+    ok(&with_duration("fn main() { println(500ms) }"));
+    ok(&with_duration("fn main() { println(1.5s) }"));
+    fails_with(&with_duration("fn main() { println(500xyz) }"), "E0262");
+    // A fractional literal must land on a whole base unit.
+    fails_with(&with_duration("fn main() { println(0.5ns) }"), "E0269");
+    ok(&with_duration("fn main() { println(0.5us) }"));
+    // Ambiguous suffixes need an expected type.
+    let two = "units A: int { x = 1, u = 10 }\nunits B: int { y = 1, u = 20 }\n";
+    fails_with(
+        &format!("{two}fn main() {{ let v = 5u\n println(v) }}"),
+        "E0260",
+    );
+    ok(&format!("{two}fn main() {{ let v: A = 5u\n println(v) }}"));
+    ok(&format!("{two}fn main() {{ println(A::u(5)) }}"));
+}
+
+#[test]
+fn unit_arithmetic() {
+    ok(&with_duration("fn main() { println((1s + 500ms).ms) }"));
+    ok(&with_duration("fn main() { println((1s * 3).ms) }"));
+    ok(&with_duration("fn main() { println((3 * 1s).ms) }"));
+    ok(&with_duration("fn main() { println((1s / 3).ms) }"));
+    ok(&with_duration("fn main() -> int { 1s / 1ms }"));
+    ok(&with_duration("fn main() -> bool { 1s > 1ms }"));
+    ok(&with_duration(
+        "fn main() { let mut_a = 1s\n mut_a += 1ms\n mut_a *= 2\n println(mut_a) }",
+    ));
+    // No cross-family mixing, and no derived dimensions.
+    let both = format!("{DURATION}units Size: int {{ b = 1, kb = 1_000 }}\n");
+    fails_with(&format!("{both}fn main() {{ println(1s + 1kb) }}"), "E0220");
+    fails_with(&format!("{both}fn main() {{ println(1s / 1kb) }}"), "E0234");
+    fails_with(&with_duration("fn main() { println(1s * 1ms) }"), "E0234");
+    fails_with(&with_duration("fn main() { println(2 + 1s) }"), "E0234");
+    fails_with(&with_duration("fn main() { println(1s + 2) }"), "E0220");
+}
+
+#[test]
+fn unit_conversions() {
+    ok(&with_duration("fn main() -> int { 1s.ms }"));
+    ok(&with_duration(
+        "fn main() -> Duration { Duration::ms(250) }",
+    ));
+    fails_with(&with_duration("fn main() -> int { 1s.nope }"), "E0244");
+    // The converter takes the backing type, not another unit value.
+    fails_with(
+        &with_duration("fn main() { println(Duration::ms(1s)) }"),
+        "E0220",
+    );
+    // A unit family has no fields to construct.
+    fails_with(
+        &with_duration("fn main() { println(Duration { ns: 1 }) }"),
+        "E0246",
+    );
+}
+
+#[test]
+fn unit_impls() {
+    ok(&with_duration(
+        "impl Display for Duration { fn fmt(self) -> string { \"d\" } }\nfn main() {}",
+    ));
+    ok(&with_duration(
+        "impl Duration { fn long(self) -> bool { self > 1s } }\nfn main() {}",
+    ));
+    // Operators come from the backing number, so an impl would never run.
+    fails_with(
+        &with_duration(
+            "impl Add for Duration { fn add(self, o: Duration) -> Duration { self } }\n\
+             fn main() {}",
+        ),
+        "E0206",
+    );
+    // A method may not shadow one of the family's own units.
+    fails_with(
+        &with_duration("impl Duration { fn ms(self) -> int { 1 } }\nfn main() {}"),
+        "E0206",
+    );
+    fails_with(
+        "#[derive(Eq)]\nunits X: int { a = 1 }\nfn main() {}",
+        "E0101",
+    );
+}
+
+/// Units are erased at compile time: a function written with a unit family
+/// must emit exactly the bytecode of the same function written with bare
+/// `int`s. This is the zero-cost claim, asserted rather than assumed.
+#[test]
+fn units_are_zero_cost() {
+    fn code_of(src: &str, fn_name: &str) -> Vec<String> {
+        let compiled = wscript_compiler::compile(src, &Registry::new())
+            .unwrap_or_else(|d| panic!("compile failed: {d:?}\n--- src ---\n{src}"));
+        let proto = compiled
+            .unit
+            .protos
+            .iter()
+            .find(|p| p.name == fn_name)
+            .unwrap_or_else(|| panic!("no proto named {fn_name}"));
+        proto.code.iter().map(|i| format!("{i:?}")).collect()
+    }
+
+    let with_units = "\
+units Duration: int { ns = 1, us = 1_000, ms = 1_000 * us, s = 1_000 * ms }
+fn work(d: Duration) -> int {
+    let total = d + 500ms
+    let scaled = total * 3
+    (scaled / 2).us
+}
+fn main() { println(work(1s)) }
+";
+    // The same arithmetic spelled out in base units by hand.
+    let by_hand = "\
+fn work(d: int) -> int {
+    let total = d + 500000000
+    let scaled = total * 3
+    (scaled / 2) / 1000
+}
+fn main() { println(work(1000000000)) }
+";
+    assert_eq!(code_of(with_units, "work"), code_of(by_hand, "work"));
+}

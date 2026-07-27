@@ -24,7 +24,7 @@
 use std::cmp::Ordering;
 use std::rc::Rc;
 
-use wscript_core::defs::{DefKind, VariantKind};
+use wscript_core::defs::{DefId, DefKind, VariantKind};
 use wscript_core::value::{Key, MAX_VALUE_DEPTH, Value};
 
 use crate::{RuntimeError, Vm};
@@ -358,6 +358,23 @@ impl Vm {
             }
             other => other.clone(),
         })
+    }
+
+    /// Render a unit-family value: the raw base-unit count paired with the
+    /// largest unit that names it cleanly (`1500000000` in a nanosecond-based
+    /// `Duration` → `1.5s`).
+    ///
+    /// Int-backed families only use a unit that divides the value exactly,
+    /// so the rendering always round-trips; float-backed ones take the
+    /// largest unit the value reaches.
+    pub(crate) fn fmt_quantity(&mut self, v: &Value, def: DefId) -> Result<String, RuntimeError> {
+        match self.unit().defs.as_unit(def).and_then(|u| u.render(v)) {
+            Some(s) => Ok(s),
+            // Not a unit family, or not its backing primitive: the emitter
+            // only asks for this where the static type said otherwise, so
+            // fall back rather than fault.
+            None => self.display_value(v),
+        }
     }
 
     /// Display with custom `Display` impls (used by print/str/fmt).

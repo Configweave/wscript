@@ -31,6 +31,16 @@ pub const MAX_VALUE_DEPTH: usize = 200;
 /// depth limit. Rendering stops with a `…` marker at this many bytes.
 pub const MAX_DISPLAY_BYTES: usize = 64 * 1024;
 
+/// Render a float the way scripts see it: whole values keep one decimal
+/// place (`2.0`, not `2`) so they stay visibly distinct from ints.
+pub fn format_float(f: f64) -> String {
+    if f.fract() == 0.0 && f.is_finite() {
+        format!("{f:.1}")
+    } else {
+        format!("{f}")
+    }
+}
+
 /// A runtime value.
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -253,13 +263,7 @@ impl Value {
             Value::Int(n) => {
                 let _ = write!(out, "{n}");
             }
-            Value::Float(f) => {
-                if f.fract() == 0.0 && f.is_finite() {
-                    let _ = write!(out, "{f:.1}");
-                } else {
-                    let _ = write!(out, "{f}");
-                }
-            }
+            Value::Float(f) => out.push_str(&format_float(*f)),
             Value::Bool(b) => {
                 let _ = write!(out, "{b}");
             }

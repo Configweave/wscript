@@ -89,6 +89,8 @@ fn main() -> int {
 _Values, strings, functions and control flow._
 - [Values & Types](references/concept_values.md)
 - [Primitive types](references/fact_primitive_types.md)
+- [Unit Families](references/concept_units.md)
+- [Unit family syntax and diagnostics](references/fact_unit_families.md)
 - [Strings](references/concept_strings.md)
 - [string methods](references/fact_string_methods.md)
 - [Functions & Closures](references/concept_functions.md)

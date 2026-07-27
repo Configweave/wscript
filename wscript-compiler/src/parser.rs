@@ -319,6 +319,14 @@ impl Parser {
                 }
                 self.fn_decl(false, doc).map(Item::Fn)
             }
+            // `units` is contextual: only a keyword when it heads an item
+            // and is followed by a type name, so scripts may still use it
+            // as an ordinary identifier elsewhere.
+            TokenKind::Ident(name)
+                if name == "units" && matches!(self.nth_kind(1), TokenKind::Ident(_)) =>
+            {
+                self.units_decl(derives, doc).map(Item::Units)
+            }
             TokenKind::KwStruct => self.struct_decl(derives, opaque, doc).map(Item::Struct),
             TokenKind::KwEnum => self.enum_decl(derives, doc).map(Item::Enum),
             TokenKind::KwTrait => self.trait_decl().map(Item::Trait),
@@ -674,6 +682,64 @@ impl Parser {
             fields,
             derives,
             opaque,
+            doc,
+            span,
+        })
+    }
+
+    /// `units Duration: int { ns = 1, ms = 1_000 * us }` — entries may be
+    /// separated by commas or newlines, since the table form reads better.
+    fn units_decl(&mut self, derives: Vec<Ident>, doc: Option<String>) -> Option<UnitsDecl> {
+        let kw = self.bump().span;
+        let name = self.expect_ident("unit family name")?;
+        self.expect(
+            &TokenKind::Colon,
+            "`:` and a backing type (`int` or `float`)",
+        );
+        let base = self.type_expr();
+        self.expect(&TokenKind::LBrace, "`{` to start the unit list")?;
+        let mut units = Vec::new();
+        loop {
+            self.skip_newlines();
+            if self.eat(&TokenKind::RBrace) {
+                break;
+            }
+            if self.at_eof() {
+                let span = self.span();
+                self.error("E0100", span, "unclosed `units` declaration");
+                break;
+            }
+            let uname = match self.expect_ident("unit name") {
+                Some(n) => n,
+                None => {
+                    self.recover_to(&[TokenKind::Comma, TokenKind::Newline, TokenKind::RBrace]);
+                    continue;
+                }
+            };
+            self.expect(&TokenKind::Eq, "`=` and a conversion factor");
+            let factor = self.expr();
+            let span = uname.span.to(factor.span);
+            units.push(UnitEntry {
+                name: uname,
+                factor,
+                span,
+            });
+            // A newline ends an entry just as well as a comma.
+            if !self.eat(&TokenKind::Comma)
+                && !self.at(&TokenKind::Newline)
+                && !self.at(&TokenKind::RBrace)
+            {
+                self.expect(&TokenKind::RBrace, "`,`, a newline or `}` after a unit");
+                self.recover_to(&[TokenKind::Comma, TokenKind::Newline, TokenKind::RBrace]);
+                self.eat(&TokenKind::Comma);
+            }
+        }
+        let span = kw.to(self.prev_span());
+        Some(UnitsDecl {
+            name,
+            base,
+            units,
+            derives,
             doc,
             span,
         })
@@ -1653,13 +1719,43 @@ impl Parser {
     fn primary_expr(&mut self) -> Expr {
         let start = self.span();
         match self.kind().clone() {
-            TokenKind::Int(n) => {
+            TokenKind::Int(n, suffix) => {
                 self.bump();
-                self.mk(ExprKind::IntLit(n), start)
+                match suffix {
+                    None => self.mk(ExprKind::IntLit(n), start),
+                    Some(u) => {
+                        let unit = Ident {
+                            name: u,
+                            span: start,
+                        };
+                        self.mk(
+                            ExprKind::QuantityLit {
+                                value: LitNum::Int(n),
+                                unit,
+                            },
+                            start,
+                        )
+                    }
+                }
             }
-            TokenKind::Float(f) => {
+            TokenKind::Float(f, suffix) => {
                 self.bump();
-                self.mk(ExprKind::FloatLit(f), start)
+                match suffix {
+                    None => self.mk(ExprKind::FloatLit(f), start),
+                    Some(u) => {
+                        let unit = Ident {
+                            name: u,
+                            span: start,
+                        };
+                        self.mk(
+                            ExprKind::QuantityLit {
+                                value: LitNum::Float(f),
+                                unit,
+                            },
+                            start,
+                        )
+                    }
+                }
             }
             TokenKind::Str(s) => {
                 self.bump();
@@ -2177,16 +2273,55 @@ impl Parser {
                 self.bump();
                 PatternKind::Wildcard
             }
-            TokenKind::Int(n) => {
+            TokenKind::Int(n, suffix) => {
                 self.bump();
-                PatternKind::IntLit(n)
+                match suffix {
+                    None => PatternKind::IntLit(n),
+                    Some(u) => PatternKind::QuantityLit {
+                        value: LitNum::Int(n),
+                        unit: Ident {
+                            name: u,
+                            span: start,
+                        },
+                    },
+                }
+            }
+            TokenKind::Float(f, Some(u)) => {
+                self.bump();
+                PatternKind::QuantityLit {
+                    value: LitNum::Float(f),
+                    unit: Ident {
+                        name: u,
+                        span: start,
+                    },
+                }
             }
             TokenKind::Minus => {
                 self.bump();
                 match self.kind().clone() {
-                    TokenKind::Int(n) => {
+                    TokenKind::Int(n, None) => {
                         self.bump();
                         PatternKind::IntLit(-n)
+                    }
+                    TokenKind::Int(n, Some(u)) => {
+                        self.bump();
+                        PatternKind::QuantityLit {
+                            value: LitNum::Int(-n),
+                            unit: Ident {
+                                name: u,
+                                span: start,
+                            },
+                        }
+                    }
+                    TokenKind::Float(f, Some(u)) => {
+                        self.bump();
+                        PatternKind::QuantityLit {
+                            value: LitNum::Float(-f),
+                            unit: Ident {
+                                name: u,
+                                span: start,
+                            },
+                        }
                     }
                     other => {
                         let span = self.span();

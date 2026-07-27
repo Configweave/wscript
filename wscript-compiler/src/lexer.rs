@@ -487,14 +487,15 @@ impl<'s> Lexer<'s> {
                 .chars()
                 .filter(|c| *c != '_')
                 .collect();
+            let suffix = self.unit_suffix();
             match i64::from_str_radix(&digits, 16) {
-                Ok(n) => self.push(TokenKind::Int(n), start),
+                Ok(n) => self.push(TokenKind::Int(n, suffix), start),
                 Err(_) => {
                     self.diags.push(
                         Diagnostic::error("E0006", self.span_from(start), "invalid hex literal")
                             .with_help("hex literals look like `0xFF` and must fit in 64 bits"),
                     );
-                    self.push(TokenKind::Int(0), start);
+                    self.push(TokenKind::Int(0, None), start);
                 }
             }
             return;
@@ -536,21 +537,22 @@ impl<'s> Lexer<'s> {
             .chars()
             .filter(|c| *c != '_')
             .collect();
+        let suffix = self.unit_suffix();
         if is_float {
             match text.parse::<f64>() {
-                Ok(f) => self.push(TokenKind::Float(f), start),
+                Ok(f) => self.push(TokenKind::Float(f, suffix), start),
                 Err(_) => {
                     self.diags.push(Diagnostic::error(
                         "E0006",
                         self.span_from(start),
                         "invalid float literal",
                     ));
-                    self.push(TokenKind::Float(0.0), start);
+                    self.push(TokenKind::Float(0.0, None), start);
                 }
             }
         } else {
             match text.parse::<i64>() {
-                Ok(n) => self.push(TokenKind::Int(n), start),
+                Ok(n) => self.push(TokenKind::Int(n, suffix), start),
                 Err(_) => {
                     self.diags.push(
                         Diagnostic::error(
@@ -560,10 +562,35 @@ impl<'s> Lexer<'s> {
                         )
                         .with_help("`int` is a signed 64-bit integer"),
                     );
-                    self.push(TokenKind::Int(0), start);
+                    self.push(TokenKind::Int(0, None), start);
                 }
             }
         }
+    }
+
+    /// A unit suffix glued to a numeric literal (`500ms`, `4MiB`).
+    ///
+    /// Must start with an ASCII letter, so digit separators (`1_000`) are
+    /// never mistaken for one. Nothing is lost by claiming these bytes: a
+    /// number followed directly by an identifier was two tokens no
+    /// production accepted.
+    fn unit_suffix(&mut self) -> Option<String> {
+        if !self
+            .bytes
+            .get(self.pos)
+            .is_some_and(|c| c.is_ascii_alphabetic())
+        {
+            return None;
+        }
+        let start = self.pos;
+        while self
+            .bytes
+            .get(self.pos)
+            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_')
+        {
+            self.pos += 1;
+        }
+        Some(self.src[start..self.pos].to_string())
     }
 
     fn ident(&mut self, start: usize) {
@@ -706,9 +733,34 @@ mod tests {
     fn range_vs_float() {
         assert_eq!(
             kinds("1..5")[..3],
-            [TokenKind::Int(1), TokenKind::DotDot, TokenKind::Int(5)]
+            [
+                TokenKind::Int(1, None),
+                TokenKind::DotDot,
+                TokenKind::Int(5, None)
+            ]
         );
-        assert_eq!(kinds("1.5")[0], TokenKind::Float(1.5));
+        assert_eq!(kinds("1.5")[0], TokenKind::Float(1.5, None));
+    }
+
+    #[test]
+    fn unit_suffixes() {
+        assert_eq!(kinds("500ms")[0], TokenKind::Int(500, Some("ms".into())));
+        assert_eq!(kinds("1.5s")[0], TokenKind::Float(1.5, Some("s".into())));
+        assert_eq!(kinds("4MiB")[0], TokenKind::Int(4, Some("MiB".into())));
+        // Digit separators are not suffixes, and a bare number stays bare.
+        assert_eq!(kinds("1_000")[0], TokenKind::Int(1000, None));
+        assert_eq!(kinds("1_000ms")[0], TokenKind::Int(1000, Some("ms".into())));
+        // Exponents bind before the suffix.
+        assert_eq!(kinds("1e3s")[0], TokenKind::Float(1000.0, Some("s".into())));
+        // `.` still separates: `1.foo()` is a method call, not a suffix.
+        assert_eq!(
+            kinds("1.foo")[..3],
+            [
+                TokenKind::Int(1, None),
+                TokenKind::Dot,
+                TokenKind::Ident("foo".into())
+            ]
+        );
     }
 
     #[test]

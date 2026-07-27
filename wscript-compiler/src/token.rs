@@ -12,8 +12,10 @@ pub enum StrPart {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     // literals
-    Int(i64),
-    Float(f64),
+    // Numeric literals carry an optional unit suffix (`500ms`, `1.5s`),
+    // resolved against the unit families in scope by the checker.
+    Int(i64, Option<String>),
+    Float(f64, Option<String>),
     Str(String),
     /// A string literal containing `{expr}` interpolation holes.
     StrInterp(Vec<StrPart>),
@@ -99,8 +101,11 @@ impl TokenKind {
     /// Human-readable name for diagnostics.
     pub fn describe(&self) -> String {
         match self {
-            TokenKind::Int(_) => "integer literal".into(),
-            TokenKind::Float(_) => "float literal".into(),
+            TokenKind::Int(_, Some(u)) | TokenKind::Float(_, Some(u)) => {
+                format!("`{u}` literal")
+            }
+            TokenKind::Int(..) => "integer literal".into(),
+            TokenKind::Float(..) => "float literal".into(),
             TokenKind::Str(_) => "string literal".into(),
             TokenKind::StrInterp(_) => "interpolated string literal".into(),
             TokenKind::Char(_) => "char literal".into(),

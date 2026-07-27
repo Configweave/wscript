@@ -16,6 +16,8 @@ impl Add for Vec2 {
 > **No implicit identity equality**
 > `==` on structs/enums REQUIRES an `Eq` impl — there is no implicit identity equality. Use `same(a, b)` for reference identity instead. `Index` is read-only in v1.
 
+[Unit families](../references/concept_units.md) are the exception: they take their operators from the number they are stored in, so an operator impl for one is rejected.
+
 ## Related
 
 - [Traits](../references/concept_traits.md)
@@ -23,5 +25,7 @@ impl Add for Vec2 {
 - [Derives](../references/concept_derives.md)
 
 - [Operator overloading traits](../references/fact_operator_traits.md)
+
+- [Unit Families](../references/concept_units.md)
 
 [← Back to SKILL.md](../SKILL.md)

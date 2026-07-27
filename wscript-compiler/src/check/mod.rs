@@ -13,7 +13,8 @@ use std::collections::{HashMap, HashSet};
 
 use wscript_core::bytecode::Const;
 use wscript_core::defs::{
-    self, DefId, DefKind, DefTable, EnumDef, StructDef, TraitDef, VariantDef, VariantKind,
+    self, DefId, DefKind, DefTable, EnumDef, Factor, StructDef, TraitDef, UnitDef, VariantDef,
+    VariantKind,
 };
 use wscript_core::diag::Diagnostic;
 use wscript_core::registry::Registry;
@@ -74,6 +75,9 @@ pub enum CallKind {
     },
     /// Calling a function value: callee is evaluated.
     Value,
+    /// `Duration::ms(n)` — not a call at all: the argument is scaled into
+    /// base units inline. The factor is in `CheckResult::unit_convs`.
+    UnitConv,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +95,17 @@ pub enum MethodRes {
 pub enum StructLitRes {
     Struct(DefId),
     Variant { def: DefId, tag: u32 },
+}
+
+/// A conversion between a unit family and its backing primitive. Both
+/// directions lower to one constant multiply or divide — unit values are
+/// erased to the backing number at runtime.
+#[derive(Debug, Clone, Copy)]
+pub enum ConvKind {
+    /// `d.ms` — divide the base count by the unit's factor.
+    Out { factor: Factor },
+    /// `Duration::ms(n)` — multiply into base units.
+    In { factor: Factor },
 }
 
 #[derive(Debug, Clone)]
@@ -273,6 +288,11 @@ pub struct CheckResult {
     pub methods: HashMap<NodeId, MethodRes>,
     /// Field expr → runtime field index.
     pub fields: HashMap<NodeId, u16>,
+    /// Unit-family conversions: `d.ms` (field exprs) and `Duration::ms(n)`
+    /// (call exprs) → the constant scale to apply.
+    pub unit_convs: HashMap<NodeId, ConvKind>,
+    /// Suffixed literals (`500ms`), already folded to a base-unit constant.
+    pub quantity_lits: HashMap<NodeId, Factor>,
     pub struct_lits: HashMap<NodeId, StructLitRes>,
     /// Struct literal / struct pattern: for each field as written, the
     /// runtime field index.
@@ -400,6 +420,10 @@ pub struct Checker<'a> {
     pub(crate) trait_impls: HashMap<(DefId, DefId), Vec<u32>>,
     pub(crate) derives: HashMap<DefId, Derives>,
     vtable_cache: HashMap<(DefId, DefId), u32>,
+    /// Unit name → the families declaring it. Program-wide, like types.
+    /// More than one entry means a suffix needs an expected type to
+    /// disambiguate.
+    unit_suffixes: HashMap<String, Vec<DefId>>,
 
     // body-checking state
     scopes: Vec<Scope>,
@@ -458,6 +482,7 @@ pub fn check_files<'a>(files: &'a [(String, &'a SourceFile)], registry: &Registr
         trait_impls: HashMap::new(),
         derives: HashMap::new(),
         vtable_cache: HashMap::new(),
+        unit_suffixes: HashMap::new(),
         scopes: Vec::new(),
         fn_states: Vec::new(),
         nodes_this_fn: Vec::new(),
@@ -578,6 +603,20 @@ impl<'a> Checker<'a> {
                         .with_help(
                             "opaque types are registered by the host with \
                              #[derive(Script)] #[script(opaque)] (PRD §6.2)",
+                        ),
+                    );
+                }
+                Item::Units(u) if !u.derives.is_empty() => {
+                    let span = u.name.span;
+                    self.out.diags.push(
+                        Diagnostic::error(
+                            "E0101",
+                            span,
+                            "`#[derive(...)]` is not allowed on a unit family",
+                        )
+                        .with_help(
+                            "unit values compare, order, clone and display as their \
+                             backing number already",
                         ),
                     );
                 }
@@ -784,6 +823,16 @@ impl<'a> Checker<'a> {
                         operator: false,
                     }),
                 ),
+                Item::Units(u) => (
+                    &u.name,
+                    u.span,
+                    DefKind::Unit(UnitDef {
+                        name: u.name.name.clone(),
+                        base: Type::Int,
+                        base_unit: 0,
+                        units: vec![],
+                    }),
+                ),
                 _ => continue,
             };
             if self.type_names.contains_key(&name.name)
@@ -838,8 +887,220 @@ impl<'a> Checker<'a> {
                         self.fill_trait_def(id, t);
                     }
                 }
+                Item::Units(u) => {
+                    if let Some(id) = self.script_def_id(&u.name.name) {
+                        self.fill_unit_def(id, u);
+                    }
+                }
                 _ => {}
             }
+        }
+    }
+
+    /// Const-evaluate a unit family's factors and index its suffixes.
+    ///
+    /// Factors are resolved in declaration order, so later units can be
+    /// written in terms of earlier ones (`s = 1_000 * ms`).
+    fn fill_unit_def(&mut self, id: DefId, decl: &UnitsDecl) {
+        let base = self.resolve_type(&decl.base);
+        let base = match base {
+            Type::Int | Type::Float => base,
+            Type::Error => Type::Int,
+            other => {
+                let ts = self.ty_str(&other);
+                self.error_help(
+                    "E0264",
+                    decl.base.span,
+                    format!("a unit family must be backed by `int` or `float`, found `{ts}`"),
+                    "unit values are stored as their backing number, so only the two \
+                     numeric types work",
+                );
+                Type::Int
+            }
+        };
+        let is_float = base == Type::Float;
+
+        let mut units: Vec<(String, Factor)> = Vec::new();
+        let mut seen: HashMap<String, Span> = HashMap::new();
+        for entry in &decl.units {
+            if seen.contains_key(&entry.name.name) {
+                let n = entry.name.name.clone();
+                self.error_help(
+                    "E0265",
+                    entry.name.span,
+                    format!("duplicate unit `{n}`"),
+                    "each unit may be declared once per family",
+                );
+                continue;
+            }
+            let Some(factor) = self.eval_factor(&entry.factor, is_float, &units) else {
+                continue;
+            };
+            let non_positive = match factor {
+                Factor::Int(n) => n <= 0,
+                // `!is_finite` first, so NaN counts as non-positive too.
+                Factor::Float(f) => !f.is_finite() || f <= 0.0,
+            };
+            if non_positive {
+                let n = entry.name.name.clone();
+                self.error_help(
+                    "E0266",
+                    entry.factor.span,
+                    format!("the factor for `{n}` must be a positive, finite number"),
+                    "a factor says how many base units one of this unit is worth",
+                );
+                continue;
+            }
+            seen.insert(entry.name.name.clone(), entry.name.span);
+            units.push((entry.name.name.clone(), factor));
+        }
+
+        // Exactly one unit is the base — the one worth a single base unit.
+        let ones: Vec<usize> = units
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, f))| f.is_one())
+            .map(|(i, _)| i)
+            .collect();
+        let base_unit = match ones.as_slice() {
+            [i] => *i,
+            [] => {
+                let n = decl.name.name.clone();
+                self.error_help(
+                    "E0267",
+                    decl.name.span,
+                    format!("unit family `{n}` has no base unit"),
+                    "exactly one unit must have the factor 1 — values are stored in it",
+                );
+                if units.is_empty() {
+                    return;
+                }
+                0
+            }
+            more => {
+                let names: Vec<String> =
+                    more.iter().map(|i| format!("`{}`", units[*i].0)).collect();
+                let n = decl.name.name.clone();
+                self.error_help(
+                    "E0267",
+                    decl.name.span,
+                    format!("unit family `{n}` has more than one base unit"),
+                    format!(
+                        "{} all have the factor 1; exactly one may",
+                        names.join(", ")
+                    ),
+                );
+                more[0]
+            }
+        };
+
+        for (name, _) in &units {
+            self.unit_suffixes.entry(name.clone()).or_default().push(id);
+        }
+        if let DefKind::Unit(u) = &mut self.out.defs.defs[id.index()] {
+            u.base = base;
+            u.base_unit = base_unit;
+            u.units = units;
+        }
+    }
+
+    /// Const-evaluate one conversion factor: numeric literals, the units
+    /// already declared in this family, and `+ - * /` over them.
+    fn eval_factor(
+        &mut self,
+        e: &Expr,
+        is_float: bool,
+        so_far: &[(String, Factor)],
+    ) -> Option<Factor> {
+        let unsupported = |c: &mut Self| {
+            c.error_help(
+                "E0268",
+                e.span,
+                "a conversion factor must be a constant expression",
+                "use numeric literals, units declared earlier in this family, and \
+                 `+ - * /`",
+            );
+            None
+        };
+        match &e.kind {
+            ExprKind::IntLit(n) => Some(if is_float {
+                Factor::Float(*n as f64)
+            } else {
+                Factor::Int(*n)
+            }),
+            ExprKind::FloatLit(f) => {
+                if is_float {
+                    Some(Factor::Float(*f))
+                } else {
+                    self.error_help(
+                        "E0268",
+                        e.span,
+                        "a float factor in an `int`-backed unit family",
+                        "int-backed families take whole factors; back the family with \
+                         `float` if you need fractions",
+                    );
+                    None
+                }
+            }
+            ExprKind::Unary {
+                op: UnOp::Neg,
+                expr,
+            } => match self.eval_factor(expr, is_float, so_far)? {
+                Factor::Int(n) => Some(Factor::Int(-n)),
+                Factor::Float(f) => Some(Factor::Float(-f)),
+            },
+            ExprKind::Path(segs) if segs.len() == 1 => {
+                match so_far.iter().find(|(n, _)| *n == segs[0].name) {
+                    Some((_, f)) => Some(*f),
+                    None => {
+                        let n = segs[0].name.clone();
+                        self.error_help(
+                            "E0268",
+                            e.span,
+                            format!("unknown unit `{n}` in a conversion factor"),
+                            "only units declared earlier in the same family can be \
+                             referenced",
+                        );
+                        None
+                    }
+                }
+            }
+            ExprKind::Binary { op, lhs, rhs } => {
+                let a = self.eval_factor(lhs, is_float, so_far)?;
+                let b = self.eval_factor(rhs, is_float, so_far)?;
+                match (a, b) {
+                    (Factor::Int(x), Factor::Int(y)) => {
+                        let r = match op {
+                            BinOp::Add => x.checked_add(y),
+                            BinOp::Sub => x.checked_sub(y),
+                            BinOp::Mul => x.checked_mul(y),
+                            BinOp::Div => x.checked_div(y),
+                            _ => return unsupported(self),
+                        };
+                        match r {
+                            Some(v) => Some(Factor::Int(v)),
+                            None => {
+                                self.error_help(
+                                    "E0266",
+                                    e.span,
+                                    "this conversion factor overflows `int`",
+                                    "factors are stored in the family's backing type",
+                                );
+                                None
+                            }
+                        }
+                    }
+                    (Factor::Float(x), Factor::Float(y)) => Some(Factor::Float(match op {
+                        BinOp::Add => x + y,
+                        BinOp::Sub => x - y,
+                        BinOp::Mul => x * y,
+                        BinOp::Div => x / y,
+                        _ => return unsupported(self),
+                    })),
+                    _ => unsupported(self),
+                }
+            }
+            _ => unsupported(self),
         }
     }
 
@@ -1111,6 +1372,41 @@ impl<'a> Checker<'a> {
                     "impl blocks target struct or enum types",
                 );
                 return;
+            }
+            // Unit families get their operators from the built-in
+            // arithmetic rules, so a user operator impl would silently
+            // never be called. `Display` is the one worth overriding, and
+            // inherent methods are free.
+            DefKind::Unit(u) => {
+                let units: Vec<String> = u.units.iter().map(|(n, _)| n.clone()).collect();
+                if let Some(tr) = &im.trait_name
+                    && tr.name != "Display"
+                {
+                    let (span, ty, tn) = (tr.span, im.ty_name.name.clone(), tr.name.clone());
+                    self.error_help(
+                        "E0206",
+                        span,
+                        format!("cannot implement `{tn}` for the unit family `{ty}`"),
+                        format!(
+                            "`{ty}` already has arithmetic, comparison and equality from \
+                             its backing number; only `Display` can be overridden"
+                        ),
+                    );
+                    return;
+                }
+                for f in &im.fns {
+                    if units.contains(&f.name.name) {
+                        let (span, n, ty) =
+                            (f.name.span, f.name.name.clone(), im.ty_name.name.clone());
+                        self.error_help(
+                            "E0206",
+                            span,
+                            format!("`{n}` is a unit of `{ty}` and cannot also be a method"),
+                            format!("`{ty}::{n}(n)` already converts a number into `{ty}`"),
+                        );
+                        return;
+                    }
+                }
             }
             _ => {
                 let span = im.ty_name.span;
@@ -1472,7 +1768,7 @@ impl<'a> Checker<'a> {
                 .variants
                 .iter()
                 .all(|v| v.fields.iter().all(|(_, t)| pred(self, t))),
-            DefKind::Trait(_) => false,
+            DefKind::Trait(_) | DefKind::Unit(_) => false,
         }
     }
 
@@ -1559,6 +1855,8 @@ impl<'a> Checker<'a> {
         match self.out.defs.get(id) {
             DefKind::Struct(s) => s.host && !s.opaque,
             DefKind::Enum(e) => e.host,
+            // Unit families compare as their backing primitive.
+            DefKind::Unit(_) => true,
             DefKind::Trait(_) => false,
         }
     }
@@ -1570,7 +1868,8 @@ impl<'a> Checker<'a> {
             Type::Result(a, b) => self.ord_able(a) && self.ord_able(b),
             Type::Param(i) => self.param_has_bound(*i, BoundKind::Ord),
             Type::Named(id) => {
-                self.derives.get(id).is_some_and(|d| d.ord)
+                self.out.defs.is_quantity(*id)
+                    || self.derives.get(id).is_some_and(|d| d.ord)
                     || self.out.impl_maps.cmp.contains_key(&id.0)
             }
             Type::Error => true,
@@ -1583,7 +1882,7 @@ impl<'a> Checker<'a> {
             Type::Param(i) => self.param_has_bound(*i, BoundKind::Clone),
             Type::Named(id) => match self.out.defs.get(*id) {
                 DefKind::Struct(s) => !s.opaque,
-                DefKind::Enum(_) => true,
+                DefKind::Enum(_) | DefKind::Unit(_) => true,
                 DefKind::Trait(_) => false,
             },
             Type::List(e) | Type::Option(e) | Type::Weak(e) => self.clone_able(e),
@@ -1942,7 +2241,17 @@ impl<'a> Checker<'a> {
                 self.out.generic_fns.push(name.clone());
                 continue;
             }
+            // Unit families are erased at runtime, so the host sees the
+            // backing number: `fn tick(dt: Duration)` exports as
+            // `fn(i64) -> ...` in base units.
             let sig = info.sig.clone();
+            let sig = FnSig::new(
+                sig.params
+                    .iter()
+                    .map(|p| self.out.defs.erase_units(p))
+                    .collect(),
+                self.out.defs.erase_units(&sig.ret),
+            );
             self.out.exports.insert(name.clone(), (proto, sig));
         }
     }

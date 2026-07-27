@@ -16,5 +16,6 @@ fact milestones {
         ["M7 — Polish", "diagnostics pass (every error has help text), docs (tour + embedding + stdlib), benchmarks vs Lua/Rhai/Rune."],
       ]
     }
+    p "Shipped since: generic functions (type-erased), host↔script callbacks, multi-file scripts, and [unit families](concept_units)."
   }
 }

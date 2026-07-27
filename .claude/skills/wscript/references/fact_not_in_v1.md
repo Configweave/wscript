@@ -11,6 +11,7 @@ Deliberately absent:
 | implicit conversions, truthiness | `int(x)`/`float(x)`; `bool` conditions |
 | a cycle collector | cycles leak; use `weak[T]` |
 | bitwise operators | `math` helpers or write the arithmetic out |
+| dimensional analysis (`m / s` deriving a speed) | [unit families](../references/concept_units.md) check within one family; write a family per dimension |
 | format specs in interpolation holes | `"{expr}"` only; use `fmt("{:.2}", x)` for formatting |
 | range values outside `for` headers | `0..n` only in a `for` header |
 

@@ -526,6 +526,7 @@ fn assert_name_free(defs: &DefTable, name: &str) {
         crate::defs::DefKind::Struct(s) => s.name == name,
         crate::defs::DefKind::Enum(e) => e.name == name,
         crate::defs::DefKind::Trait(t) => t.name == name,
+        crate::defs::DefKind::Unit(u) => u.name == name,
     });
     assert!(
         !taken,

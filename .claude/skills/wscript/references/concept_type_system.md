@@ -15,6 +15,8 @@ term::print_at("oops", 1, 2)   // COMPILE error with a span and help message
 
 There is no implicit numeric conversion and no truthiness (see [Values & Types](../references/concept_values.md)).
 
+[Unit families](../references/concept_units.md) extend that discipline to numbers that mean something: `units Duration: int { ns = 1, ms = 1_000_000 }` gives a distinct type whose values are written `500ms` and stored in base units, so a timespan and a byte count cannot be added. Like generics, they are erased — a unit value is its backing number at runtime.
+
 ## Generic functions
 
 Top-level functions can declare type parameters, with the built-in bounds `Eq`, `Ord` and `Clone` (`Ord` implies `Eq`):
@@ -37,5 +39,7 @@ Generics are \*erased\*: one compiled function serves all instantiations, so the
 - [Values & Types](../references/concept_values.md)
 
 - [Embedding in Rust](../references/concept_embedding.md)
+
+- [Unit Families](../references/concept_units.md)
 
 [← Back to SKILL.md](../SKILL.md)

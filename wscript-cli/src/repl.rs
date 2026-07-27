@@ -60,7 +60,7 @@ pub fn run(ctx: Context) -> ExitCode {
                      :env           list current bindings\n\
                      :quit          leave the repl\n\
                      \n\
-                     Anything else is wscript: declarations (fn/struct/enum/trait/impl/use)\n\
+                     Anything else is wscript: declarations (fn/struct/enum/trait/impl/use/units)\n\
                      persist, `let` bindings persist, expressions print their value."
                 );
                 continue;
@@ -174,6 +174,20 @@ struct Repl {
 impl Repl {
     fn render(&self, value: &Value) -> String {
         value.display(&self.defs)
+    }
+
+    /// Render a result whose static type the REPL already knows. Unit
+    /// values are erased to plain numbers, so the type name is the only
+    /// way to show `1500ms` rather than `1500000000`.
+    fn render_typed(&self, value: &Value, ty: &str) -> String {
+        self.defs
+            .defs
+            .iter()
+            .find_map(|d| match d {
+                wscript::core::defs::DefKind::Unit(u) if u.name == ty => u.render(value),
+                _ => None,
+            })
+            .unwrap_or_else(|| self.render(value))
     }
 }
 
@@ -289,7 +303,7 @@ impl Repl {
                     self.params()
                 );
                 if let Some(value) = self.execute(&src2, None) {
-                    println!("{}", self.render(&value));
+                    println!("{}", self.render_typed(&value, &ty));
                 }
             }
             Kind::Binding(name, ty) => {
@@ -299,7 +313,7 @@ impl Repl {
                     self.params()
                 );
                 if let Some(value) = self.execute(&src2, None) {
-                    println!("{name}: {ty} = {}", self.render(&value));
+                    println!("{name}: {ty} = {}", self.render_typed(&value, &ty));
                     self.bindings.retain(|(n, ..)| *n != name);
                     self.bindings.push((name, ty, value));
                 }
@@ -341,8 +355,10 @@ impl Repl {
 
 fn starts_item(input: &str) -> bool {
     let first = input.split_whitespace().next().unwrap_or("");
-    matches!(first, "fn" | "struct" | "enum" | "trait" | "impl" | "use")
-        || input.trim_start().starts_with("#[")
+    matches!(
+        first,
+        "fn" | "struct" | "enum" | "trait" | "impl" | "use" | "units"
+    ) || input.trim_start().starts_with("#[")
 }
 
 /// Types whose surface syntax can round-trip through a generated

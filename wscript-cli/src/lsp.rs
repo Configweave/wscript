@@ -411,6 +411,22 @@ impl LanguageServer for Backend {
                 "```wscript\n{}\n```",
                 ty.display(&analysis.check.defs)
             ));
+            // For a unit value, the family's table is the thing you want
+            // to see: which suffixes exist and what they convert to.
+            if let wscript::core::types::Type::Named(id) = ty
+                && let Some(u) = analysis.check.defs.as_unit(*id)
+            {
+                let units: Vec<String> = u
+                    .units
+                    .iter()
+                    .map(|(n, f)| format!("`{n}` = {}", f.display()))
+                    .collect();
+                lines.push(format!(
+                    "unit family, stored in `{}` — {}",
+                    u.base_name(),
+                    units.join(", ")
+                ));
+            }
         }
         // Host call info: signature + docs (PRD §9 feature 2).
         if let Some(wscript_compiler::check::CallKind::Host(idx)) = analysis.check.calls.get(&node)
@@ -640,6 +656,18 @@ impl LanguageServer for Backend {
                             );
                         }
                     }
+                    // Units of a family: `d.` offers `ms`, `s`, `min`, …
+                    if let Some(u) = analysis.check.defs.as_unit(def) {
+                        let base = u.base.display(&analysis.check.defs);
+                        for (uname, factor) in &u.units {
+                            push(
+                                &mut items,
+                                uname,
+                                CompletionItemKind::UNIT,
+                                Some(format!("-> {base} (1 {uname} = {})", factor.display())),
+                            );
+                        }
+                    }
                 }
                 Some(wscript::Type::Dyn(tr)) => {
                     if let Some(td) = analysis.check.defs.as_trait(tr) {
@@ -690,6 +718,18 @@ impl LanguageServer for Backend {
                     }
                     wscript::core::defs::DefKind::Trait(t) => {
                         push(&mut items, &t.name, CompletionItemKind::INTERFACE, None);
+                    }
+                    wscript::core::defs::DefKind::Unit(u) => {
+                        push(
+                            &mut items,
+                            &u.name,
+                            CompletionItemKind::UNIT,
+                            Some(format!(
+                                "unit family, base `{}` ({})",
+                                u.base_name(),
+                                u.base.display(&analysis.check.defs)
+                            )),
+                        );
                     }
                 }
             }

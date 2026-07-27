@@ -206,3 +206,62 @@ SRC
   expected   = "n == 16. Calling `term::print_at(\"oops\", 1, 2)` would instead be a compile error."
   audience   = :both
 }
+
+example ex_budget {
+  title      = "Rate limiter — unit families for timespans and byte sizes"
+  unit       = units
+  narrative  = "Two unit families keep timespans and byte counts apart at compile time. Values are written with suffixes, stored in base units (`ns`, `B`), and print in the largest unit that names them cleanly."
+  code_lang  = "rust"
+  code       = <<'SRC'
+units Duration: int {
+    ns  = 1
+    us  = 1_000
+    ms  = 1_000 * us
+    s   = 1_000 * ms
+    min = 60 * s
+}
+
+units ByteSize: int { B = 1, KiB = 1_024, MiB = 1_024 * KiB, GiB = 1_024 * MiB }
+
+struct Limit {
+    window: Duration,
+    quota: ByteSize,
+}
+
+impl Limit {
+    fn per_second(self) -> int {
+        // `window / 1s` is a plain ratio, so this stays honest arithmetic.
+        let secs = self.window / 1s
+        if secs == 0 { self.quota.B } else { self.quota.B / secs }
+    }
+}
+
+fn backoff(attempt: int, base: Duration) -> Duration {
+    let wait = base
+    let i = 0
+    while i < attempt {
+        wait *= 2
+        i += 1
+    }
+    if wait > 30s { 30s } else { wait }
+}
+
+fn main() -> int {
+    let limit = Limit { window: 1min, quota: 512MiB }
+    println("window {limit.window}, quota {limit.quota}")
+    println("{limit.per_second()} B/s")
+
+    let attempt = 0
+    while attempt < 4 {
+        println("attempt {attempt}: wait {backoff(attempt, 250ms)}")
+        attempt += 1
+    }
+
+    // Mixing families does not compile:
+    //   limit.window + limit.quota   // error: expected Duration, found ByteSize
+    0
+}
+SRC
+  expected   = "Prints `window 1min, quota 512MiB`, then `8947848 B/s`, then a doubling backoff: 250ms, 500ms, 1s, 2s."
+  audience   = :both
+}

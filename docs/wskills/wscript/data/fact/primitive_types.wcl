@@ -1,6 +1,6 @@
 fact primitive_types {
   title    = "Primitive types"
-  related  = [values, reference_types]
+  related  = [values, reference_types, units]
   audience = :both
   body {
     p "The five value types, copied on assignment."
@@ -15,5 +15,6 @@ fact primitive_types {
       ]
     }
     p "There is no implicit numeric conversion: `1 + 2.0` is a type error. Convert with `int(x)` (float truncates; char gives the code point) and `float(x)`."
+    p "`int` and `float` can also back a [unit family](concept_units) — a distinct type with named units (`500ms`, `4MiB`) that stores its values in a base unit."
   }
 }

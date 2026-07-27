@@ -13,13 +13,13 @@ use std::collections::HashMap;
 use wscript_core::bytecode::{
     Builtin, CallTarget, CaptureSrc, CompiledUnit, Const, FaultCode, FnProto, Instr, VTable,
 };
-use wscript_core::defs::{self};
+use wscript_core::defs::{self, Factor};
 use wscript_core::span::Span;
 
 use crate::ast::*;
 use crate::check::{
-    BinOpKind, CallKind, CapSrc, CheckResult, FnSource, ForKind, IndexKind, LocalId, MethodRes,
-    PathRes, PreludeFn, PrimKind, StructLitRes, TryKind, UnOpKind, VarRes,
+    BinOpKind, CallKind, CapSrc, CheckResult, ConvKind, FnSource, ForKind, IndexKind, LocalId,
+    MethodRes, PathRes, PreludeFn, PrimKind, StructLitRes, TryKind, UnOpKind, VarRes,
 };
 
 pub fn emit(file: &SourceFile, res: &CheckResult) -> CompiledUnit {
@@ -517,6 +517,17 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
     fn emit_into_inner(&mut self, e: &Expr, dst: u16) {
         match &e.kind {
             ExprKind::IntLit(n) => self.emit_int(*n, dst),
+            // Already folded into base units by the checker.
+            ExprKind::QuantityLit { .. } => match self.em.res.quantity_lits.get(&e.id) {
+                Some(Factor::Int(n)) => self.emit_int(*n, dst),
+                Some(Factor::Float(f)) => {
+                    let k = self.em.intern_const(Const::Float(*f));
+                    self.push(Instr::LoadConst { dst, k });
+                }
+                None => {
+                    self.push(Instr::LoadUnit { dst });
+                }
+            },
             ExprKind::FloatLit(x) => {
                 let k = self.em.intern_const(Const::Float(*x));
                 self.push(Instr::LoadConst { dst, k });
@@ -549,6 +560,12 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
             ExprKind::Call { callee, args } => self.emit_call(e, callee, args, dst),
             ExprKind::MethodCall { recv, args, .. } => self.emit_method_call(e, recv, args, dst),
             ExprKind::Field { obj, .. } => {
+                // `d.ms` on a unit value is a constant divide, not a field
+                // read — unit values are plain numbers at runtime.
+                if let Some(&conv) = self.em.res.unit_convs.get(&e.id) {
+                    self.emit_unit_conv(obj, conv, dst);
+                    return;
+                }
                 let o = self.emit_value(obj);
                 let idx = *self.em.res.fields.get(&e.id).unwrap_or(&0);
                 self.push(Instr::GetField { dst, obj: o, idx });
@@ -1184,7 +1201,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
                 }
                 InterpPart::Hole(h) => {
                     let base = self.alloc_window(1);
-                    self.emit_into(h, base);
+                    self.emit_display_into(h, base);
                     self.push(Instr::Call {
                         dst: piece,
                         base,
@@ -1205,6 +1222,41 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
         if !started {
             let k = self.em.intern_const(Const::Str("".into()));
             self.push(Instr::LoadConst { dst, k });
+        }
+    }
+
+    /// Convert between a unit family and its backing number: one constant
+    /// multiply (into base units) or divide (out of them). A factor of 1 —
+    /// the base unit itself — is a plain move.
+    fn emit_unit_conv(&mut self, operand: &Expr, conv: ConvKind, dst: u16) {
+        let (factor, into_base) = match conv {
+            ConvKind::In { factor } => (factor, true),
+            ConvKind::Out { factor } => (factor, false),
+        };
+        let src = self.emit_value(operand);
+        if factor.is_one() {
+            self.push(Instr::Move { dst, src });
+            return;
+        }
+        let k = self.alloc_temp();
+        match factor {
+            Factor::Int(n) => {
+                self.emit_int(n, k);
+                if into_base {
+                    self.push(Instr::MulI { dst, a: src, b: k });
+                } else {
+                    self.push(Instr::DivI { dst, a: src, b: k });
+                }
+            }
+            Factor::Float(f) => {
+                let c = self.em.intern_const(Const::Float(f));
+                self.push(Instr::LoadConst { dst: k, k: c });
+                if into_base {
+                    self.push(Instr::MulF { dst, a: src, b: k });
+                } else {
+                    self.push(Instr::DivF { dst, a: src, b: k });
+                }
+            }
         }
     }
 
@@ -1278,8 +1330,23 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
                     PreludeFn::Int => Builtin::IntCast,
                     PreludeFn::Float => Builtin::FloatCast,
                 };
-                self.emit_args_call(args, dst, CallTarget::Builtin(builtin));
+                // The displaying prelude fns render unit args by family.
+                if matches!(
+                    p,
+                    PreludeFn::Print | PreludeFn::Println | PreludeFn::Str | PreludeFn::Fmt
+                ) {
+                    self.emit_display_args_call(args, dst, CallTarget::Builtin(builtin));
+                } else {
+                    self.emit_args_call(args, dst, CallTarget::Builtin(builtin));
+                }
             }
+            // `Duration::ms(n)` — scale the one argument inline.
+            Some(CallKind::UnitConv) => match (self.em.res.unit_convs.get(&e.id), args) {
+                (Some(&conv), [arg]) => self.emit_unit_conv(arg, conv, dst),
+                _ => {
+                    self.push(Instr::LoadUnit { dst });
+                }
+            },
             Some(CallKind::Variant { def, tag }) => {
                 let base = self.alloc_window(args.len() as u16);
                 for (i, a) in args.iter().enumerate() {
@@ -1323,6 +1390,71 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
             nargs: args.len() as u16,
             target,
         });
+    }
+
+    /// Like `emit_args_call`, but renders unit-family arguments to text
+    /// first. Unit values are plain numbers at runtime, so the static type
+    /// is the only place their family survives — this is where `println(d)`
+    /// becomes `1.5s` instead of `1500000000`.
+    fn emit_display_args_call(&mut self, args: &[Expr], dst: u16, target: CallTarget) {
+        let base = self.alloc_window(args.len() as u16);
+        for (i, a) in args.iter().enumerate() {
+            self.emit_display_into(a, base + i as u16);
+        }
+        self.push(Instr::Call {
+            dst,
+            base,
+            nargs: args.len() as u16,
+            target,
+        });
+    }
+
+    /// Emit `e` into `dst`, replacing it with its rendered text when its
+    /// static type is a unit family.
+    fn emit_display_into(&mut self, e: &Expr, dst: u16) {
+        self.emit_into(e, dst);
+        let Some(def) = self.unit_family_of(e) else {
+            return;
+        };
+        // A user `impl Display` for the family wins, mirroring how the VM
+        // treats structs and enums.
+        if let Some(&proto) = self.em.res.impl_maps.display.get(&def.0) {
+            self.em.ensure_proto(proto);
+            let base = self.alloc_window(1);
+            self.push(Instr::Move {
+                dst: base,
+                src: dst,
+            });
+            self.push(Instr::Call {
+                dst,
+                base,
+                nargs: 1,
+                target: CallTarget::Proto(proto),
+            });
+            return;
+        }
+        let base = self.alloc_window(2);
+        self.push(Instr::Move {
+            dst: base,
+            src: dst,
+        });
+        self.emit_int(def.0 as i64, base + 1);
+        self.push(Instr::Call {
+            dst,
+            base,
+            nargs: 2,
+            target: CallTarget::Builtin(Builtin::FmtQuantity),
+        });
+    }
+
+    /// The unit family of an expression's checked type, if it has one.
+    fn unit_family_of(&self, e: &Expr) -> Option<defs::DefId> {
+        match self.em.res.types.get(&e.id) {
+            Some(wscript_core::types::Type::Named(id)) if self.em.res.defs.is_quantity(*id) => {
+                Some(*id)
+            }
+            _ => None,
+        }
     }
 
     fn emit_method_call(&mut self, e: &Expr, recv: &Expr, args: &[Expr], dst: u16) {
@@ -1466,6 +1598,18 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
         }
     }
 
+    fn emit_int_pattern_test(&mut self, n: i64, reg: u16, fails: &mut Vec<usize>) {
+        let lit = self.alloc_temp();
+        self.emit_int(n, lit);
+        let c = self.alloc_temp();
+        self.push(Instr::EqI {
+            dst: c,
+            a: reg,
+            b: lit,
+        });
+        fails.push(self.jump_if_false_placeholder(c));
+    }
+
     /// Emit tests for `pat` against the value in `reg`. Failure jumps are
     /// appended to `fails` (to be patched at the next alternative). Emits
     /// binding stores along the way.
@@ -1486,15 +1630,14 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
                 }
             }
             PatternKind::IntLit(n) => {
-                let lit = self.alloc_temp();
-                self.emit_int(*n, lit);
-                let c = self.alloc_temp();
-                self.push(Instr::EqI {
-                    dst: c,
-                    a: reg,
-                    b: lit,
-                });
-                fails.push(self.jump_if_false_placeholder(c));
+                self.emit_int_pattern_test(*n, reg, fails);
+            }
+            // Folded to a base-unit constant by the checker; float-backed
+            // families never reach here (they cannot be matched on).
+            PatternKind::QuantityLit { .. } => {
+                if let Some(&Factor::Int(n)) = self.em.res.quantity_lits.get(&pat.id) {
+                    self.emit_int_pattern_test(n, reg, fails);
+                }
             }
             PatternKind::BoolLit(b) => {
                 if *b {

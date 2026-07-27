@@ -12,6 +12,8 @@ The language was built incrementally; all seven milestones are implemented and t
 | M6 — Tooling | REPL; LSP (diagnostics, hover, goto-definition, completions); `wscript.toml` + `.wscripti` consumption. |
 | M7 — Polish | diagnostics pass (every error has help text), docs (tour + embedding + stdlib), benchmarks vs Lua/Rhai/Rune. |
 
+Shipped since: generic functions (type-erased), host↔script callbacks, multi-file scripts, and [unit families](../references/concept_units.md).
+
 ## Related
 
 - [The Type System](../references/concept_type_system.md)

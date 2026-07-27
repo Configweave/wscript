@@ -1,7 +1,7 @@
 concept operators {
   name     = "Operator Overloading"
   summary  = "Operators go through built-in traits; == on structs/enums requires an Eq impl."
-  related  = [traits, derives, operator_traits]
+  related  = [traits, derives, operator_traits, units]
   audience = :both
   body {
     p "Operator overloading goes through built-in traits: `Add Sub Mul Div Rem Neg Eq Ord Display Index`. See [operator traits](fact_operator_traits) for the full mapping. Compound assignment `+= -= *= /= %=` works on any assignable place — variables, fields, list/map elements — evaluates the place once, and dispatches through the same traits, so user types get it via their `Add`/`Sub`/`Mul`/`Div`/`Rem` impls."
@@ -14,5 +14,6 @@ impl Add for Vec2 {
 SRC
     }
     callout "No implicit identity equality" { class = ["note"]  body = "`==` on structs/enums REQUIRES an `Eq` impl — there is no implicit identity equality. Use `same(a, b)` for reference identity instead. `Index` is read-only in v1." }
+    p "[Unit families](concept_units) are the exception: they take their operators from the number they are stored in, so an operator impl for one is rejected."
   }
 }

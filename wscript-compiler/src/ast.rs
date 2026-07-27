@@ -28,6 +28,8 @@ pub enum Item {
     Enum(EnumDecl),
     Trait(TraitDecl),
     Impl(ImplDecl),
+    /// `units Duration: int { ns = 1, ms = 1_000_000 }`
+    Units(UnitsDecl),
     /// `mod name { ... }` — interface files (`.wscripti`) only.
     Mod(ModDecl),
     /// `const NAME: type` — interface files (`.wscripti`) only.
@@ -137,6 +139,27 @@ pub enum VariantBody {
 pub struct VariantDecl {
     pub name: Ident,
     pub body: VariantBody,
+    pub span: Span,
+}
+
+/// `units Name: base { unit = factor, ... }` — a unit family (PRD §3.10).
+/// Factors are ordinary expressions here; the checker const-evaluates them
+/// in declaration order against the units already declared above.
+#[derive(Debug)]
+pub struct UnitsDecl {
+    pub name: Ident,
+    /// The backing numeric type — `int` or `float`, validated by the checker.
+    pub base: TypeExpr,
+    pub units: Vec<UnitEntry>,
+    pub derives: Vec<Ident>,
+    pub doc: Option<String>,
+    pub span: Span,
+}
+
+#[derive(Debug)]
+pub struct UnitEntry {
+    pub name: Ident,
+    pub factor: Expr,
     pub span: Span,
 }
 
@@ -256,6 +279,13 @@ pub enum UnOp {
     Not,
 }
 
+/// The numeric part of a suffixed literal, as written.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LitNum {
+    Int(i64),
+    Float(f64),
+}
+
 /// One piece of an interpolated string (`ExprKind::StrInterp`).
 #[derive(Debug)]
 pub enum InterpPart {
@@ -267,6 +297,13 @@ pub enum InterpPart {
 pub enum ExprKind {
     IntLit(i64),
     FloatLit(f64),
+    /// A numeric literal with a unit suffix: `500ms`, `1.5s`, `4MiB`. The
+    /// checker resolves the suffix to a unit family and folds the whole
+    /// thing to a base-unit constant.
+    QuantityLit {
+        value: LitNum,
+        unit: Ident,
+    },
     BoolLit(bool),
     CharLit(char),
     StrLit(String),
@@ -393,6 +430,11 @@ pub enum PatternKind {
     /// is a unit variant pattern — disambiguated by the checker.)
     Binding(Ident),
     IntLit(i64),
+    /// `500ms` in pattern position — folded like the expression form.
+    QuantityLit {
+        value: LitNum,
+        unit: Ident,
+    },
     BoolLit(bool),
     CharLit(char),
     StrLit(String),

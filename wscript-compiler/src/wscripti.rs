@@ -67,6 +67,15 @@ pub fn load(source: &str, reg: &mut Registry) -> (Vec<Diagnostic>, WscriptiIndex
         match item {
             Item::Mod(m) => loader.load_module(m),
             Item::Impl(im) => loader.load_impl(im),
+            // Unit families are a script-level construct: at the host
+            // boundary their values are just the backing number.
+            Item::Units(u) => {
+                let span = u.name.span;
+                loader.error(
+                    span,
+                    "`units` declarations are not allowed in an interface file",
+                );
+            }
             _ => {}
         }
     }
@@ -93,6 +102,7 @@ impl<'a> Loader<'a> {
             DefKind::Struct(s) => s.name == name,
             DefKind::Enum(e) => e.name == name,
             DefKind::Trait(t) => t.name == name,
+            DefKind::Unit(u) => u.name == name,
         })
     }
 
@@ -309,7 +319,7 @@ impl<'a> Loader<'a> {
             .position(|d| match d {
                 DefKind::Struct(s) => s.name == name,
                 DefKind::Enum(e) => e.name == name,
-                DefKind::Trait(_) => false,
+                DefKind::Trait(_) | DefKind::Unit(_) => false,
             })
             .map(|i| DefId(i as u32))
     }
@@ -398,5 +408,6 @@ fn item_span(item: &Item) -> Span {
         Item::Impl(i) => i.span,
         Item::Mod(m) => m.span,
         Item::Const(c) => c.span,
+        Item::Units(u) => u.span,
     }
 }

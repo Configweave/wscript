@@ -38,6 +38,112 @@ pub enum DefKind {
     Struct(StructDef),
     Enum(EnumDef),
     Trait(TraitDef),
+    /// A unit family: a nominal type backed by `int` or `float` whose values
+    /// are stored normalised to the base unit (PRD §3.10).
+    Unit(UnitDef),
+}
+
+/// One unit's conversion factor, in the family's backing type.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Factor {
+    Int(i64),
+    Float(f64),
+}
+
+impl Factor {
+    pub fn is_one(self) -> bool {
+        match self {
+            Factor::Int(n) => n == 1,
+            Factor::Float(f) => f == 1.0,
+        }
+    }
+
+    /// Render a factor for diagnostics.
+    pub fn display(self) -> String {
+        match self {
+            Factor::Int(n) => n.to_string(),
+            Factor::Float(f) => crate::value::format_float(f),
+        }
+    }
+}
+
+/// A unit family declared with `units Name: int { ... }`.
+///
+/// Values of the family are erased to the backing primitive at runtime; the
+/// table survives into the `CompiledUnit` so the VM can render them.
+#[derive(Debug, Clone)]
+pub struct UnitDef {
+    pub name: String,
+    /// `Type::Int` or `Type::Float`.
+    pub base: Type,
+    /// Index into `units` of the unit whose factor is 1.
+    pub base_unit: usize,
+    /// Declaration order: `(unit name, factor in base units)`.
+    pub units: Vec<(String, Factor)>,
+}
+
+impl UnitDef {
+    pub fn is_float(&self) -> bool {
+        self.base == Type::Float
+    }
+
+    pub fn factor_of(&self, unit: &str) -> Option<Factor> {
+        self.units.iter().find(|(n, _)| n == unit).map(|(_, f)| *f)
+    }
+
+    pub fn base_name(&self) -> &str {
+        &self.units[self.base_unit].0
+    }
+
+    /// Units ordered largest factor first — the search order used when
+    /// rendering a raw value.
+    pub fn descending(&self) -> Vec<&(String, Factor)> {
+        let mut v: Vec<&(String, Factor)> = self.units.iter().collect();
+        v.sort_by(|a, b| match (a.1, b.1) {
+            (Factor::Int(x), Factor::Int(y)) => y.cmp(&x),
+            (Factor::Float(x), Factor::Float(y)) => {
+                y.partial_cmp(&x).unwrap_or(std::cmp::Ordering::Equal)
+            }
+            _ => std::cmp::Ordering::Equal,
+        });
+        v
+    }
+
+    /// Render a stored base-unit count with the largest unit that names it
+    /// cleanly: for `int` the largest unit dividing it exactly (so the text
+    /// always round-trips), for `float` the largest unit it reaches. Zero,
+    /// and anything no unit fits, falls back to the base unit.
+    ///
+    /// `None` if the value is not the family's backing primitive.
+    pub fn render(&self, v: &crate::value::Value) -> Option<String> {
+        use crate::value::{Value, format_float};
+        let base = self.base_name();
+        match v {
+            Value::Int(n) => Some(
+                self.descending()
+                    .into_iter()
+                    .find_map(|(name, f)| match f {
+                        Factor::Int(d) if *d != 0 && *n != 0 && n % d == 0 => {
+                            Some(format!("{}{name}", n / d))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| format!("{n}{base}")),
+            ),
+            Value::Float(x) => Some(
+                self.descending()
+                    .into_iter()
+                    .find_map(|(name, f)| match f {
+                        Factor::Float(d) if *d > 0.0 && x.abs() >= *d => {
+                            Some(format!("{}{name}", format_float(x / d)))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| format!("{}{base}", format_float(*x))),
+            ),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -201,6 +307,7 @@ impl DefTable {
             Some(DefKind::Struct(s)) => &s.name,
             Some(DefKind::Enum(e)) => &e.name,
             Some(DefKind::Trait(t)) => &t.name,
+            Some(DefKind::Unit(u)) => &u.name,
             // Defensive: values can outlive the table that defined them
             // (e.g. REPL lines); never panic while rendering.
             None => "<unknown type>",
@@ -232,6 +339,46 @@ impl DefTable {
         }
     }
 
+    pub fn as_unit(&self, id: DefId) -> Option<&UnitDef> {
+        match self.defs.get(id.index()) {
+            Some(DefKind::Unit(u)) => Some(u),
+            _ => None,
+        }
+    }
+
+    /// Is this def a unit family? Values of one are erased to their backing
+    /// primitive at runtime, so most places that special-case `Type::Named`
+    /// need to ask.
+    pub fn is_quantity(&self, id: DefId) -> bool {
+        matches!(self.defs.get(id.index()), Some(DefKind::Unit(_)))
+    }
+
+    /// The backing primitive of a unit family, or the type unchanged for
+    /// anything else. Recurses through containers — used to lower script
+    /// signatures for the host boundary, where units are invisible.
+    pub fn erase_units(&self, t: &Type) -> Type {
+        match t {
+            Type::Named(id) => match self.as_unit(*id) {
+                Some(u) => u.base.clone(),
+                None => t.clone(),
+            },
+            Type::List(e) => Type::List(Box::new(self.erase_units(e))),
+            Type::Map(k, v) => {
+                Type::Map(Box::new(self.erase_units(k)), Box::new(self.erase_units(v)))
+            }
+            Type::Option(e) => Type::Option(Box::new(self.erase_units(e))),
+            Type::Result(o, e) => {
+                Type::Result(Box::new(self.erase_units(o)), Box::new(self.erase_units(e)))
+            }
+            Type::Weak(e) => Type::Weak(Box::new(self.erase_units(e))),
+            Type::Fn(sig) => Type::Fn(Box::new(FnSig::new(
+                sig.params.iter().map(|p| self.erase_units(p)).collect(),
+                self.erase_units(&sig.ret),
+            ))),
+            _ => t.clone(),
+        }
+    }
+
     /// Find a host-registered def by its Rust `TypeId`.
     pub fn by_rust_type(&self, ty: std::any::TypeId) -> Option<DefId> {
         self.defs
@@ -239,7 +386,7 @@ impl DefTable {
             .position(|d| match d {
                 DefKind::Struct(s) => s.rust_type == Some(ty),
                 DefKind::Enum(e) => e.rust_type == Some(ty),
-                DefKind::Trait(_) => false,
+                DefKind::Trait(_) | DefKind::Unit(_) => false,
             })
             .map(|i| DefId(i as u32))
     }

@@ -29,7 +29,7 @@ SRC
 index language_basics {
   name    = "Language Basics"
   summary = "Values, strings, functions and control flow."
-  related = [values, primitive_types, strings, string_methods, functions, control_flow]
+  related = [values, primitive_types, units, unit_families, strings, string_methods, functions, control_flow]
   audience = :both
 }
 

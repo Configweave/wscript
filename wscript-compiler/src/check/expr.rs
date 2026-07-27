@@ -1,6 +1,6 @@
 //! Statement and expression checking.
 
-use wscript_core::defs::{self, DefId, DefKind, VariantKind};
+use wscript_core::defs::{self, DefId, DefKind, Factor, VariantKind};
 use wscript_core::span::Span;
 use wscript_core::types::{FnSig, Type};
 
@@ -8,8 +8,8 @@ use crate::ast::*;
 
 use super::methods::{self, SchemeConstraint};
 use super::{
-    BinOpKind, CallKind, Checker, ForKind, IndexKind, MethodRes, PathRes, PreludeFn, PrimKind,
-    StructLitRes, TryKind, UnOpKind,
+    BinOpKind, CallKind, Checker, ConvKind, ForKind, IndexKind, MethodRes, PathRes, PreludeFn,
+    PrimKind, StructLitRes, TryKind, UnOpKind,
 };
 
 /// AST-depth budget for `check_expr` — the backstop behind the parser's
@@ -185,6 +185,9 @@ impl<'a> Checker<'a> {
                 }
                 Type::Str
             }
+            ExprKind::QuantityLit { value, unit } => {
+                self.check_quantity_lit(e, *value, unit, expect)
+            }
             ExprKind::UnitLit => Type::Unit,
             ExprKind::Error => Type::Error,
             ExprKind::Path(segments) => self.check_path_expr(e, segments),
@@ -252,6 +255,149 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Try(inner) => self.check_try(e, inner),
         }
+    }
+
+    /// `500ms` — resolve the suffix to a unit family and fold the literal
+    /// into a base-unit constant.
+    fn check_quantity_lit(
+        &mut self,
+        e: &Expr,
+        value: LitNum,
+        unit: &Ident,
+        expect: Option<&Type>,
+    ) -> Type {
+        match self.fold_quantity(e.span, value, unit, expect) {
+            Some((def, folded)) => {
+                self.out.quantity_lits.insert(e.id, folded);
+                Type::Named(def)
+            }
+            None => Type::Error,
+        }
+    }
+
+    /// Resolve a suffix and multiply the literal into base units. Shared by
+    /// the expression and pattern forms.
+    pub(crate) fn fold_quantity(
+        &mut self,
+        span: Span,
+        value: LitNum,
+        unit: &Ident,
+        expect: Option<&Type>,
+    ) -> Option<(DefId, Factor)> {
+        let def = self.resolve_unit_suffix(unit, expect)?;
+        // The suffix resolved through this family's own table, so both
+        // lookups are present by construction.
+        let u = self.out.defs.as_unit(def)?;
+        let factor = u.factor_of(&unit.name)?;
+        let (family, base) = (u.name.clone(), u.base_name().to_string());
+        let uname = unit.name.clone();
+        let folded = match (value, factor) {
+            (LitNum::Int(n), Factor::Int(f)) => match n.checked_mul(f) {
+                Some(v) => Some(Factor::Int(v)),
+                None => {
+                    self.error_help(
+                        "E0269",
+                        span,
+                        format!("`{n}{uname}` overflows `{family}`"),
+                        format!("values are stored in `{base}`, and `int` is 64-bit"),
+                    );
+                    None
+                }
+            },
+            (LitNum::Float(x), Factor::Float(f)) => Some(Factor::Float(x * f)),
+            (LitNum::Int(n), Factor::Float(f)) => Some(Factor::Float(n as f64 * f)),
+            // A fractional literal in an int-backed family is fine as long
+            // as it lands exactly on a whole number of base units.
+            (LitNum::Float(x), Factor::Int(f)) => {
+                let scaled = x * f as f64;
+                // 2^53 — past this an f64 can't name every integer, so the
+                // "lands exactly" test stops meaning anything.
+                if scaled.fract() == 0.0 && scaled.abs() <= 9_007_199_254_740_992.0 {
+                    Some(Factor::Int(scaled as i64))
+                } else if scaled.is_finite() && scaled.fract() != 0.0 {
+                    self.error_help(
+                        "E0269",
+                        span,
+                        format!("`{x}{uname}` is not a whole number of `{base}`"),
+                        format!(
+                            "`{family}` is backed by `int`, so every value must land on a \
+                             whole `{base}`"
+                        ),
+                    );
+                    None
+                } else {
+                    self.error_help(
+                        "E0269",
+                        span,
+                        format!("`{x}{uname}` is out of range for `{family}`"),
+                        format!("values are stored in `{base}`, and `int` is 64-bit"),
+                    );
+                    None
+                }
+            }
+        };
+        folded.map(|f| (def, f))
+    }
+
+    /// Which family does a unit suffix belong to? The expected type decides
+    /// when there is one; otherwise the suffix must be unique program-wide.
+    pub(crate) fn resolve_unit_suffix(
+        &mut self,
+        unit: &Ident,
+        expect: Option<&Type>,
+    ) -> Option<DefId> {
+        let candidates = self
+            .unit_suffixes
+            .get(&unit.name)
+            .cloned()
+            .unwrap_or_default();
+        // An expected unit family wins outright — that is what makes
+        // `let t: Duration = 5s` work when another family also has `s`.
+        if let Some(Type::Named(want)) = expect.map(|t| self.resolve(t))
+            && candidates.contains(&want)
+        {
+            return Some(want);
+        }
+        match candidates.as_slice() {
+            [only] => Some(*only),
+            [] => {
+                let n = unit.name.clone();
+                let help = match self.nearest_unit(&n) {
+                    Some((fam, u)) => format!("did you mean `{u}` (from `{fam}`)?"),
+                    None => "declare one with `units Name: int { ... }`".to_string(),
+                };
+                self.error_help("E0262", unit.span, format!("unknown unit `{n}`"), help);
+                None
+            }
+            many => {
+                let n = unit.name.clone();
+                let names: Vec<String> = many
+                    .iter()
+                    .map(|d| format!("`{}`", self.out.defs.name_of(*d)))
+                    .collect();
+                let first = self.out.defs.name_of(many[0]).to_string();
+                self.error_help(
+                    "E0260",
+                    unit.span,
+                    format!("`{n}` is a unit of {}", names.join(" and ")),
+                    format!(
+                        "annotate the binding (`let x: {first} = ...`) or convert \
+                         explicitly with `{first}::{n}(...)`"
+                    ),
+                );
+                None
+            }
+        }
+    }
+
+    /// A unit whose name differs only by case — the usual typo (`MB` for
+    /// `MiB`, `S` for `s`).
+    fn nearest_unit(&self, name: &str) -> Option<(String, String)> {
+        let lower = name.to_lowercase();
+        self.unit_suffixes
+            .iter()
+            .find(|(u, _)| u.to_lowercase() == lower)
+            .map(|(u, defs)| (self.out.defs.name_of(defs[0]).to_string(), u.clone()))
     }
 
     fn check_list_lit(&mut self, items: &[Expr], expect: Option<&Type>) -> Type {
@@ -729,6 +875,16 @@ impl<'a> Checker<'a> {
                         Type::Error
                     }
                 }
+                // A unit value negates as the number it is stored in.
+                Type::Named(def) if self.out.defs.is_quantity(def) => {
+                    let kind = if self.base_of(def) == Type::Float {
+                        UnOpKind::NegFloat
+                    } else {
+                        UnOpKind::NegInt
+                    };
+                    self.out.un_ops.insert(e.id, kind);
+                    Type::Named(def)
+                }
                 Type::Named(def) => {
                     if let Some(protos) = self.trait_impls.get(&(def, defs::TRAIT_NEG)) {
                         let proto = protos[0];
@@ -781,6 +937,11 @@ impl<'a> Checker<'a> {
 
     fn check_arith(&mut self, e: &Expr, op: BinOp, lhs: &Expr, rhs: &Expr) -> Type {
         let lt = self.check_expr(lhs, None);
+        // Unit families scale by, and divide into, their backing number, so
+        // their operands do not have to match. Everything else does.
+        if let Some(ty) = self.check_unit_arith(e, op, &lt, rhs) {
+            return ty;
+        }
         let rt = self.check_expr(rhs, Some(&lt));
         self.unify_or_err(
             &lt,
@@ -790,6 +951,165 @@ impl<'a> Checker<'a> {
              (use `int(x)` / `float(x)` to convert)",
         );
         self.arith_result(e.id, e.span, op, &lt)
+    }
+
+    /// Arithmetic where either side is a unit family:
+    ///
+    /// ```text
+    /// D + D → D    D - D → D    D % D → D
+    /// D * n → D    n * D → D    D / n → D
+    /// D / D → n                 (n is the backing type)
+    /// ```
+    ///
+    /// Returns `None` when neither side is a unit family, so the caller
+    /// falls through to the ordinary same-type rule.
+    fn check_unit_arith(&mut self, e: &Expr, op: BinOp, lt: &Type, rhs: &Expr) -> Option<Type> {
+        // `n * D` — the literal-first form. Only `*` makes sense here:
+        // `2 / 5s` and `2 + 5s` have no meaning without dimensions.
+        let Some(def) = self.unit_family(lt) else {
+            if !matches!(lt, Type::Int | Type::Float) {
+                return None;
+            }
+            let rt = self.check_expr(rhs, None);
+            let def = self.unit_family(&rt)?;
+            let base = self.base_of(def);
+            if op != BinOp::Mul {
+                let (n, ts) = (self.out.defs.name_of(def).to_string(), self.ty_str(lt));
+                self.error_help(
+                    "E0234",
+                    e.span,
+                    format!("no `{}` operator for `{ts}` and `{n}`", op_symbol(op)),
+                    format!("a number can only scale a unit value: `{n} * n` or `n * {n}`"),
+                );
+                return Some(Type::Error);
+            }
+            self.unify_or_err(
+                &base,
+                lt,
+                e.span,
+                "scaling a unit value requires its backing type",
+            );
+            self.record_arith(e.id, &base, op);
+            return Some(Type::Named(def));
+        };
+
+        let base = self.base_of(def);
+        let self_ty = Type::Named(def);
+        match op {
+            // Same-family combination, or scaling by a plain number — the
+            // right operand decides which.
+            BinOp::Add | BinOp::Sub | BinOp::Rem => {
+                let rt = self.check_expr(rhs, Some(&self_ty));
+                self.unify_or_err(
+                    &self_ty,
+                    &rt,
+                    rhs.span,
+                    "both operands must be values of the same unit family",
+                );
+                self.record_arith(e.id, &base, op);
+                Some(self_ty)
+            }
+            BinOp::Mul => {
+                let rt = self.check_expr(rhs, Some(&base));
+                if self.unit_family(&rt).is_some() {
+                    let n = self.out.defs.name_of(def).to_string();
+                    let rn = self.ty_str(&rt);
+                    self.error_help(
+                        "E0234",
+                        e.span,
+                        format!("cannot multiply `{n}` by `{rn}`"),
+                        "multiplying two unit values would produce a new dimension, \
+                         which this release does not model — scale by a plain number \
+                         instead",
+                    );
+                    return Some(Type::Error);
+                }
+                self.unify_or_err(
+                    &base,
+                    &rt,
+                    rhs.span,
+                    "scaling a unit value requires its backing type",
+                );
+                self.record_arith(e.id, &base, op);
+                Some(self_ty)
+            }
+            // `D / D` is a plain ratio; `D / n` scales down.
+            BinOp::Div => {
+                let rt = self.check_expr(rhs, None);
+                match self.unit_family(&rt) {
+                    Some(other) if other == def => {
+                        self.record_arith(e.id, &base, op);
+                        Some(base)
+                    }
+                    Some(other) => {
+                        let (a, b) = (
+                            self.out.defs.name_of(def).to_string(),
+                            self.out.defs.name_of(other).to_string(),
+                        );
+                        self.error_help(
+                            "E0234",
+                            e.span,
+                            format!("cannot divide `{a}` by `{b}`"),
+                            "dividing across unit families would produce a new dimension, \
+                             which this release does not model",
+                        );
+                        Some(Type::Error)
+                    }
+                    None => {
+                        self.unify_or_err(
+                            &base,
+                            &rt,
+                            rhs.span,
+                            "dividing a unit value requires its own family or its \
+                             backing type",
+                        );
+                        self.record_arith(e.id, &base, op);
+                        Some(self_ty)
+                    }
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Record the int/float lowering for an operator on a unit family —
+    /// the values are already plain numbers at runtime.
+    fn record_arith(&mut self, node: NodeId, base: &Type, op: BinOp) {
+        let kind = if *base == Type::Float {
+            BinOpKind::FloatArith(op)
+        } else {
+            BinOpKind::IntArith(op)
+        };
+        self.out.bin_ops.insert(node, kind);
+    }
+
+    /// The primitive a unit family's values are stored in.
+    ///
+    /// Only call with a def that `unit_family`/`is_quantity` produced;
+    /// anything else is a checker bug, and `Error` keeps it from cascading.
+    pub(crate) fn base_of(&self, def: DefId) -> Type {
+        match self.out.defs.as_unit(def) {
+            Some(u) => u.base.clone(),
+            None => Type::Error,
+        }
+    }
+
+    /// Resolve `t`, replacing a unit family with the primitive it is
+    /// stored in.
+    pub(crate) fn backing_type(&mut self, t: &Type) -> Type {
+        let t = self.resolve(t);
+        match self.unit_family(&t) {
+            Some(def) => self.base_of(def),
+            None => t,
+        }
+    }
+
+    /// The unit family behind a type, if it is one.
+    pub(crate) fn unit_family(&mut self, t: &Type) -> Option<DefId> {
+        match self.resolve(t) {
+            Type::Named(id) if self.out.defs.is_quantity(id) => Some(id),
+            _ => None,
+        }
     }
 
     /// Classify an arithmetic operator application over `operand_ty`,
@@ -818,6 +1138,18 @@ impl<'a> Checker<'a> {
                     Type::Int
                 } else {
                     Type::Error
+                }
+            }
+            // Reached through paths that bypass `check_unit_arith` (both
+            // operands already known equal). Same lowering: plain numbers.
+            Type::Named(def) if self.out.defs.is_quantity(*def) => {
+                let def = *def;
+                let base = self.base_of(def);
+                self.record_arith(node, &base, op);
+                if op == BinOp::Div {
+                    base
+                } else {
+                    Type::Named(def)
                 }
             }
             Type::Named(def) => {
@@ -890,7 +1222,9 @@ impl<'a> Checker<'a> {
             rhs.span,
             "both sides of a comparison must have the same type",
         );
-        let t = self.resolve(&lt);
+        // Unit values compare as the number they are stored in; the unify
+        // above has already ruled out mixing families.
+        let t = self.backing_type(&lt);
         let kind = match &t {
             Type::Int => Some(PrimKind::Int),
             Type::Float => Some(PrimKind::Float),
@@ -997,7 +1331,9 @@ impl<'a> Checker<'a> {
             rhs.span,
             "both sides of a comparison must have the same type",
         );
-        let t = self.resolve(&lt);
+        // Unit values compare as the number they are stored in; the unify
+        // above has already ruled out mixing families.
+        let t = self.backing_type(&lt);
         let kind = match &t {
             Type::Int => Some(PrimKind::Int),
             Type::Float => Some(PrimKind::Float),
@@ -1130,6 +1466,20 @@ impl<'a> Checker<'a> {
                     // `place op= value` — the operator runs between the
                     // place's current value and `value`; the lowering is
                     // recorded under the Assign node's id.
+                    //
+                    // Unit places follow the same relaxed operand rules as
+                    // the binary form, so `d *= 2` and `d += 500ms` both
+                    // work; the result must still land back in the place.
+                    if let Some(result) = self.check_unit_arith(e, op, &place_ty, value) {
+                        self.unify_or_err(
+                            &place_ty,
+                            &result,
+                            e.span,
+                            "compound assignment must produce a value of the place's \
+                             own unit family",
+                        );
+                        return Type::Unit;
+                    }
                     let vt = self.check_expr(value, Some(&place_ty));
                     self.unify_or_err(
                         &place_ty,
@@ -1386,6 +1736,13 @@ impl<'a> Checker<'a> {
                 }
                 // Associated functions on structs: `Point::new(...)`.
                 if let Some(&def) = self.type_names.get(&first.name) {
+                    // Every unit doubles as a converter: `Duration::ms(n)`
+                    // builds a value from a number that isn't a literal.
+                    if self.out.defs.is_quantity(def)
+                        && let Some(r) = self.check_unit_ctor(e, def, second, args)
+                    {
+                        return Some(r);
+                    }
                     if let Some(r) = self.check_assoc_call(e, callee, def, first, second, args) {
                         return Some(r);
                     }
@@ -1593,6 +1950,24 @@ impl<'a> Checker<'a> {
             args,
         );
         Some((CallKind::Proto(proto), sig.ret))
+    }
+
+    /// `Duration::ms(n)` — build a unit value from a number that isn't a
+    /// literal. Every unit of the family names one of these.
+    fn check_unit_ctor(
+        &mut self,
+        e: &Expr,
+        def: DefId,
+        unit: &Ident,
+        args: &[Expr],
+    ) -> Option<(CallKind, Type)> {
+        let u = self.out.defs.as_unit(def)?;
+        let factor = u.factor_of(&unit.name)?;
+        let (base, family) = (u.base.clone(), u.name.clone());
+        let label = format!("`{family}::{}`", unit.name);
+        self.check_args(e.span, &label, std::slice::from_ref(&base), args);
+        self.out.unit_convs.insert(e.id, ConvKind::In { factor });
+        Some((CallKind::UnitConv, Type::Named(def)))
     }
 
     fn check_variant_ctor(
@@ -2146,6 +2521,28 @@ impl<'a> Checker<'a> {
                     );
                     Type::Error
                 }
+                // `d.ms` on a unit value converts out of the family. The
+                // receiver's family fixes the lookup, so this is never
+                // ambiguous.
+                DefKind::Unit(u) => match u.factor_of(&name.name) {
+                    Some(factor) => {
+                        let base = u.base.clone();
+                        self.out.unit_convs.insert(e.id, ConvKind::Out { factor });
+                        base
+                    }
+                    None => {
+                        let ty_name = u.name.clone();
+                        let avail: Vec<String> = u.units.iter().map(|(n, _)| n.clone()).collect();
+                        let fname = name.name.clone();
+                        self.error_help(
+                            "E0244",
+                            name.span,
+                            format!("no unit `{fname}` in `{ty_name}`"),
+                            format!("units of `{ty_name}`: {}", avail.join(", ")),
+                        );
+                        Type::Error
+                    }
+                },
                 DefKind::Trait(_) => Type::Error,
             },
             Type::Error | Type::Never => Type::Error,
@@ -2297,6 +2694,20 @@ impl<'a> Checker<'a> {
                             e.span,
                             format!("`{name}` is an enum, not a struct"),
                             format!("construct a variant: `{name}::Variant {{ ... }}`"),
+                        );
+                        self.check_lit_fields_poison(fields);
+                        return Type::Error;
+                    }
+                    DefKind::Unit(u) => {
+                        let (name, base) = (u.name.clone(), u.base_name().to_string());
+                        self.error_help(
+                            "E0246",
+                            e.span,
+                            format!("`{name}` is a unit family and has no fields"),
+                            format!(
+                                "write a value with a unit suffix (`5{base}`) or convert one: \
+                                 `{name}::{base}(n)`"
+                            ),
                         );
                         self.check_lit_fields_poison(fields);
                         return Type::Error;

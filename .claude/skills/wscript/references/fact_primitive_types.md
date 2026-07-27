@@ -12,10 +12,14 @@ The five value types, copied on assignment.
 
 There is no implicit numeric conversion: `1 + 2.0` is a type error. Convert with `int(x)` (float truncates; char gives the code point) and `float(x)`.
 
+`int` and `float` can also back a [unit family](../references/concept_units.md) — a distinct type with named units (`500ms`, `4MiB`) that stores its values in a base unit.
+
 ## Related
 
 - [Values & Types](../references/concept_values.md)
 
 - [Reference types](../references/fact_reference_types.md)
+
+- [Unit Families](../references/concept_units.md)
 
 [← Back to SKILL.md](../SKILL.md)

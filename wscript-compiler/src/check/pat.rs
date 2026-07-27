@@ -7,7 +7,7 @@
 //! scrutinee positions that cannot be destructured. Guarded arms never
 //! count toward exhaustiveness.
 
-use wscript_core::defs::{self, DefId, DefKind, VariantKind};
+use wscript_core::defs::{self, DefId, DefKind, Factor, VariantKind};
 use wscript_core::types::Type;
 
 use crate::ast::*;
@@ -63,6 +63,35 @@ impl<'a> Checker<'a> {
             }
             PatternKind::IntLit(_) => {
                 self.unify_or_err(&Type::Int, expected, pat.span, "integer pattern");
+            }
+            PatternKind::QuantityLit { value, unit } => {
+                let Some((def, folded)) =
+                    self.fold_quantity(pat.span, *value, unit, Some(expected))
+                else {
+                    return;
+                };
+                match folded {
+                    Factor::Int(_) => {
+                        self.out.quantity_lits.insert(pat.id, folded);
+                        self.unify_or_err(
+                            &Type::Named(def),
+                            expected,
+                            pat.span,
+                            "unit literal pattern",
+                        );
+                    }
+                    // Same rule as plain floats: no float patterns.
+                    Factor::Float(_) => {
+                        let n = self.out.defs.name_of(def).to_string();
+                        self.error_help(
+                            "E0113",
+                            pat.span,
+                            format!("`{n}` is backed by `float` and cannot be matched on"),
+                            "compare with `==` in a guard, or match a range of values \
+                             with `if`",
+                        );
+                    }
+                }
             }
             PatternKind::BoolLit(_) => {
                 self.unify_or_err(&Type::Bool, expected, pat.span, "bool pattern");
@@ -350,6 +379,7 @@ impl<'a> Checker<'a> {
                 }
             }
             PatternKind::IntLit(_)
+            | PatternKind::QuantityLit { .. }
             | PatternKind::BoolLit(_)
             | PatternKind::CharLit(_)
             | PatternKind::StrLit(_) => true,
@@ -491,6 +521,12 @@ impl<'a> Checker<'a> {
                 None => DPat::Wild,
             },
             PatternKind::IntLit(n) => DPat::Ctor(Ctor::Int(*n), vec![]),
+            // Unit patterns are erased to their base-unit constant, so they
+            // share the int ctor space (and its exhaustiveness rules).
+            PatternKind::QuantityLit { .. } => match self.out.quantity_lits.get(&pat.id) {
+                Some(Factor::Int(n)) => DPat::Ctor(Ctor::Int(*n), vec![]),
+                _ => DPat::Wild,
+            },
             PatternKind::BoolLit(b) => DPat::Ctor(Ctor::Bool(*b), vec![]),
             PatternKind::CharLit(c) => DPat::Ctor(Ctor::Char(*c), vec![]),
             PatternKind::StrLit(s) => DPat::Ctor(Ctor::Str(s.clone()), vec![]),

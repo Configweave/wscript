@@ -170,6 +170,16 @@ remain future stages; the rest of this section records the v1 stance.)*
 - One file = one script compilation unit in v1. `use module_name` / `use module_name::item` imports from *registered* modules (host or stdlib).
 - **Script-to-script imports are v2.** v1 scripts are single-file. (The CLI may later grow multi-file support; do not block on it.) *(Shipped post-v1: `use helpers` / `use "./x.wscript" as x` — merged-unit compilation with a source map, cycles allowed, entry-file-only exports; see the tour.)*
 
+### 3.10 Unit families *(post-v1)*
+
+`units Duration: int { ns = 1, ms = 1_000_000, s = 1_000 * ms }` declares a nominal type backed by `int` or `float`, with named units and exactly one base unit (factor 1). Values are written as suffixed literals (`500ms`, `1.5s`, `4MiB`), normalised to base units at compile time, and **erased** to the backing primitive at runtime — a unit family is a compile-time newtype with no VM representation.
+
+- Factors are const-evaluated in declaration order over numeric literals, earlier units of the same family, and `+ - * /`.
+- A suffix resolves by expected type, then by uniqueness among families in scope; `Family::unit(n)` converts a non-literal, `d.unit` converts back out.
+- Arithmetic is **within-family only** (`D±D→D`, `D*n→D`, `D/D→n`, comparisons → `bool`). No dimensional analysis: `5m / 2s` does not derive a speed.
+- Operators come from the backing number, so operator-trait impls and `#[derive(...)]` on a family are rejected; `impl Display` and inherent methods are allowed.
+- At the host boundary a unit type appears as its backing `i64`/`f64` in base units; `units` is not valid in `.wscripti` interface files.
+
 ---
 
 ## 4. Memory & mutation model

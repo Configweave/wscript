@@ -67,6 +67,10 @@ pub enum Builtin {
     /// `int(x)`, `float(x)` — numeric conversions.
     IntCast,
     FloatCast,
+    /// Render a unit-family value: `(raw, def_id)` → string. Emitted in
+    /// place of `Str` wherever the static type says a value belongs to a
+    /// unit family (PRD §3.9).
+    FmtQuantity,
     // ---- weak methods ----
     WeakUpgrade,
     // ---- string methods ----

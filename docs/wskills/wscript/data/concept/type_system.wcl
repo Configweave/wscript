@@ -1,7 +1,7 @@
 concept type_system {
   name     = "The Type System"
   summary  = "Static typing with local inference; annotations only on function signatures; host APIs checked at compile time."
-  related  = [functions, values, embedding]
+  related  = [functions, values, embedding, units]
   audience = :both
   body {
     p <<PROSE
@@ -16,6 +16,7 @@ term::print_at("oops", 1, 2)   // COMPILE error with a span and help message
 SRC
     }
     p "There is no implicit numeric conversion and no truthiness (see [Values & Types](concept_values))."
+    p "[Unit families](concept_units) extend that discipline to numbers that mean something: `units Duration: int { ns = 1, ms = 1_000_000 }` gives a distinct type whose values are written `500ms` and stored in base units, so a timespan and a byte count cannot be added. Like generics, they are erased — a unit value is its backing number at runtime."
     h2 "Generic functions"
     p "Top-level functions can declare type parameters, with the built-in bounds `Eq`, `Ord` and `Clone` (`Ord` implies `Eq`):"
     code "rust" { source = <<'SRC'

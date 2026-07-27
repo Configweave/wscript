@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use wscript_core::bytecode::Builtin;
-use wscript_core::defs::{DEF_OPTION, TAG_NONE, TAG_SOME};
+use wscript_core::defs::{DEF_OPTION, DefId, TAG_NONE, TAG_SOME};
 use wscript_core::fmt_spec::{self, FmtNum, FmtSpec};
 use wscript_core::value::{Key, Value};
 
@@ -219,6 +219,13 @@ impl Vm {
                     );
                 }
             },
+            Builtin::FmtQuantity => {
+                let Value::Int(def) = args[1] else {
+                    return Err(self.fault("FmtQuantity: expected a unit family id"));
+                };
+                let s = self.fmt_quantity(&args[0], DefId(def as u32))?;
+                Value::Str(Rc::from(s.as_str()))
+            }
             Builtin::ValueEq => {
                 let r = self.value_eq(&args[0], &args[1])?;
                 Value::Bool(r)
