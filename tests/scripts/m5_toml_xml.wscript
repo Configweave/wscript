@@ -5,6 +5,9 @@
 // expect: rect
 // expect: 2
 // expect: <shapes count="2"><shape kind="rect"/><shape kind="circle"/></shapes>
+// expect: Ben & Jerry's <best>
+// expect: a & b
+// expect: <note label="a &amp; b">Ben &amp; Jerry&apos;s &lt;best&gt;</note>
 
 use toml
 use xml
@@ -28,5 +31,12 @@ fn main() -> int {
 
     // round-trip back out
     println(xml::to_string(doc).unwrap())
+
+    // entity references resolve in both text and attributes, and round-trip
+    let note = xml::parse("<note label=\"a &amp; b\">Ben &amp; Jerry&apos;s &lt;best&gt;</note>").unwrap()
+    let body = note.get("note").unwrap()
+    println(body.get("#text").unwrap().as_string().unwrap())
+    println(body.get("@attrs").unwrap().get("label").unwrap().as_string().unwrap())
+    println(xml::to_string(note).unwrap())
     0
 }

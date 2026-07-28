@@ -19,8 +19,8 @@
 
 use std::collections::HashMap;
 
-use quick_xml::Reader;
 use quick_xml::events::Event;
+use quick_xml::{Reader, XmlVersion};
 use wscript_core::Module;
 
 use crate::value::DynValue;
@@ -46,7 +46,15 @@ fn parse_children(reader: &mut Reader<&[u8]>, parent: &mut Element) -> Result<()
                 parent.children.push((name, child));
             }
             Event::Text(t) => {
-                let text = t.unescape().map_err(|e| e.to_string())?;
+                let text = t.xml10_content().map_err(|e| e.to_string())?;
+                parent.text.push_str(&text);
+            }
+            // Entity references (`&amp;`, `&#65;`) arrive as their own event;
+            // resolve them back into the surrounding text run.
+            Event::GeneralRef(r) => {
+                let name = r.decode().map_err(|e| e.to_string())?;
+                let raw = format!("&{name};");
+                let text = quick_xml::escape::unescape(&raw).map_err(|e| e.to_string())?;
                 parent.text.push_str(&text);
             }
             Event::CData(c) => {
@@ -66,7 +74,7 @@ fn element_from_start(start: &quick_xml::events::BytesStart) -> Result<Element, 
         let attr = attr.map_err(|e| e.to_string())?;
         attrs.push((
             String::from_utf8_lossy(attr.key.as_ref()).into_owned(),
-            attr.unescape_value()
+            attr.normalized_value(XmlVersion::Implicit1_0)
                 .map_err(|e| e.to_string())?
                 .into_owned(),
         ));
@@ -258,8 +266,10 @@ pub fn xml() -> Module {
          \"@attrs\", text under \"#text\", repeated children become lists)",
     );
     m.fn_("parse", |s: &str| -> Result<DynValue, String> {
+        // No `trim_text`: it trims each Text event, and an entity reference
+        // splits a text run into several, so `x &amp; y` would come back as
+        // `x&y`. `element_to_value` trims the assembled run instead.
         let mut reader = Reader::from_str(s);
-        reader.config_mut().trim_text(true);
         let mut doc = Element {
             attrs: Vec::new(),
             children: Vec::new(),

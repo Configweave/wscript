@@ -52,7 +52,8 @@ pub fn toml() -> Module {
     let mut m = Module::new("toml");
     m.doc("TOML parsing and serialization (shared Value type)");
     m.fn_("parse", |s: &str| -> Result<DynValue, String> {
-        s.parse::<toml::Value>()
+        // `parse()` deserializes a bare TOML *value*; a document needs from_str.
+        toml::from_str::<toml::Value>(s)
             .map(from_toml)
             .map_err(|e| e.to_string())
     });

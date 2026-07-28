@@ -20,7 +20,7 @@ pub fn render(path: &str, source: &str, diags: &[Diagnostic]) {
             Severity::Warning => (ReportKind::Warning, Color::Yellow),
         };
         let span = clamp_span(source, d.span.lo as usize, d.span.hi as usize);
-        let mut report = Report::<(&str, std::ops::Range<usize>)>::build(kind, path, span.start)
+        let mut report = Report::build(kind, (path, span.clone()))
             .with_code(d.code)
             .with_message(&d.message)
             .with_config(Config::default().with_color(colored))
@@ -82,18 +82,14 @@ pub fn render_runtime_multi(
             let (path, source) = &sources[fi];
             let local = wscript_core_span_shift_back(span, base);
             let cspan = clamp_span(source, local.lo as usize, local.hi as usize);
-            let report = Report::<(&str, std::ops::Range<usize>)>::build(
-                ReportKind::Error,
-                path.as_str(),
-                cspan.start,
-            )
-            .with_message(&e.message)
-            .with_config(Config::default().with_color(colored))
-            .with_label(
-                Label::new((path.as_str(), cspan))
-                    .with_message("fault raised here")
-                    .with_color(Color::Red),
-            );
+            let report = Report::build(ReportKind::Error, (path.as_str(), cspan.clone()))
+                .with_message(&e.message)
+                .with_config(Config::default().with_color(colored))
+                .with_label(
+                    Label::new((path.as_str(), cspan))
+                        .with_message("fault raised here")
+                        .with_color(Color::Red),
+                );
             let _ = report
                 .finish()
                 .eprint((path.as_str(), Source::from(source.as_str())));
@@ -136,18 +132,14 @@ pub fn render_runtime(path: &str, source: &str, e: &RuntimeError) {
     match e.span {
         Some(span) => {
             let cspan = clamp_span(source, span.lo as usize, span.hi as usize);
-            let report = Report::<(&str, std::ops::Range<usize>)>::build(
-                ReportKind::Error,
-                path,
-                cspan.start,
-            )
-            .with_message(&e.message)
-            .with_config(Config::default().with_color(colored))
-            .with_label(
-                Label::new((path, cspan))
-                    .with_message("fault raised here")
-                    .with_color(Color::Red),
-            );
+            let report = Report::build(ReportKind::Error, (path, cspan.clone()))
+                .with_message(&e.message)
+                .with_config(Config::default().with_color(colored))
+                .with_label(
+                    Label::new((path, cspan))
+                        .with_message("fault raised here")
+                        .with_color(Color::Red),
+                );
             let _ = report.finish().eprint((path, Source::from(source)));
             render_trace(path, source, e);
         }

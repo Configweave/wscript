@@ -43,7 +43,7 @@ pub fn find(start: &Path) -> Option<Manifest> {
 
 fn parse(path: &Path) -> Option<Manifest> {
     let text = std::fs::read_to_string(path).ok()?;
-    let value: toml::Value = match text.parse() {
+    let value: toml::Value = match toml::from_str(&text) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("warning: {} is not valid TOML: {e}", path.display());

@@ -1,14 +1,14 @@
-//! `wscript lsp` — the language server (PRD §9), built on tower-lsp over
-//! stdio. The four v1 features, in priority order: diagnostics, hover,
+//! `wscript lsp` — the language server (PRD §9), built on tower-lsp-server
+//! over stdio. The four v1 features, in priority order: diagnostics, hover,
 //! go-to-definition, completions. That list is a ceiling.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use tower_lsp::jsonrpc::Result as LspResult;
-use tower_lsp::lsp_types::*;
-use tower_lsp::{Client, LanguageServer, LspService, Server};
+use tower_lsp_server::jsonrpc::Result as LspResult;
+use tower_lsp_server::ls_types::*;
+use tower_lsp_server::{Client, LanguageServer, LspService, Server};
 use wscript_compiler::ast;
 use wscript_compiler::wscripti::WscriptiIndex;
 
@@ -39,7 +39,7 @@ struct State {
     /// Registry incl. wscript.toml interfaces (built at initialize).
     registry: Option<wscript::Registry>,
     wscripti_indexes: Vec<(PathBuf, WscriptiIndex)>,
-    docs: HashMap<Url, String>,
+    docs: HashMap<Uri, String>,
 }
 
 impl State {
@@ -316,12 +316,15 @@ const PRELUDE: &[&str] = &[
 
 // --------------------------------------------------------------- server
 
-#[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> LspResult<InitializeResult> {
         // Load wscript.toml interfaces from the workspace root (PRD §9.1).
         #[allow(deprecated)]
-        let root = params.root_uri.as_ref().and_then(|u| u.to_file_path().ok());
+        let root = params
+            .root_uri
+            .as_ref()
+            .and_then(|u| u.to_file_path())
+            .map(|p| p.into_owned());
         if let Some(root) = root
             && let Some(m) = manifest::find(&root)
         {
@@ -352,6 +355,7 @@ impl LanguageServer for Backend {
                 name: "wscript-lsp".into(),
                 version: Some(env!("CARGO_PKG_VERSION").into()),
             }),
+            offset_encoding: None,
         })
     }
 
@@ -513,7 +517,7 @@ impl LanguageServer for Backend {
         };
         if let Some((path, span)) = target
             && let Ok(file_text) = std::fs::read_to_string(&path)
-            && let Ok(file_uri) = Url::from_file_path(&path)
+            && let Some(file_uri) = Uri::from_file_path(&path)
         {
             return Ok(Some(GotoDefinitionResponse::Scalar(Location {
                 uri: file_uri,
@@ -739,7 +743,7 @@ impl LanguageServer for Backend {
 }
 
 impl Backend {
-    async fn publish_diagnostics(&self, uri: Url, text: String) {
+    async fn publish_diagnostics(&self, uri: Uri, text: String) {
         let registry = {
             let state = self.state.lock().unwrap();
             state.registry()
@@ -751,7 +755,7 @@ impl Backend {
         let entry_path = uri
             .to_file_path()
             .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| "script".to_string());
+            .unwrap_or_else(|| "script".to_string());
         let resolver = wscript::FsResolver::new();
         let analysis = wscript_compiler::analyze_entry(&entry_path, &text, &resolver, &registry);
         let entry_len = text.len() as u32;
@@ -785,11 +789,11 @@ impl Backend {
 
 /// Analyze an open document with script imports resolved relative to
 /// its own path (multi-file support in every LSP feature).
-fn analyze_doc(uri: &Url, text: &str, registry: &wscript::Registry) -> wscript_compiler::Analysis {
+fn analyze_doc(uri: &Uri, text: &str, registry: &wscript::Registry) -> wscript_compiler::Analysis {
     let entry_path = uri
         .to_file_path()
         .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "script".to_string());
+        .unwrap_or_else(|| "script".to_string());
     wscript_compiler::analyze_entry(&entry_path, text, &wscript::FsResolver::new(), registry)
 }
 

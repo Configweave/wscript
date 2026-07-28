@@ -13,10 +13,10 @@ path = "src/main.rs"
 wscript.workspace = true
 wscript-std.workspace = true
 wscript-compiler.workspace = true
-ariadne = "0.4"
-rustyline = "14"
-toml = "0.8"
-tower-lsp = "0.20"
+ariadne = "0.6"
+rustyline = "18"
+toml = "1"
+tower-lsp-server = "0.23"
 tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros"] }
 
 [dev-dependencies]
