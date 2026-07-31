@@ -19,7 +19,10 @@ const MAX_EXPR_DEPTH: u32 = 500;
 
 impl<'a> Checker<'a> {
     pub(crate) fn check_block(&mut self, block: &Block, expect: Option<&Type>) -> Type {
-        self.push_scope();
+        self.in_scope(|c| c.check_block_inner(block, expect))
+    }
+
+    fn check_block_inner(&mut self, block: &Block, expect: Option<&Type>) -> Type {
         let n = block.stmts.len();
         let mut diverged = false;
         let mut tail: Option<Type> = None;
@@ -95,7 +98,6 @@ impl<'a> Checker<'a> {
                 }
             }
         }
-        self.pop_scope();
         match tail {
             Some(t) => t,
             None if diverged => Type::Never,
@@ -216,16 +218,16 @@ impl<'a> Checker<'a> {
             ExprKind::While { cond, body } => {
                 let cond_ty = self.check_expr(cond, Some(&Type::Bool));
                 self.expect_bool(&cond_ty, cond.span, "a `while` condition");
-                self.enter_loop();
                 // Loop body values are discarded.
-                self.check_block(body, None);
-                self.exit_loop();
+                self.in_loop(|c| {
+                    c.check_block(body, None);
+                });
                 Type::Unit
             }
             ExprKind::Loop { body } => {
-                self.enter_loop();
-                self.check_block(body, None);
-                let has_break = self.exit_loop();
+                let (_, has_break) = self.in_loop(|c| {
+                    c.check_block(body, None);
+                });
                 if has_break { Type::Unit } else { Type::Never }
             }
             ExprKind::For { var, iter, body } => self.check_for(e, var, iter, body),
@@ -243,7 +245,7 @@ impl<'a> Checker<'a> {
                 Type::Never
             }
             ExprKind::Continue => {
-                if !self.in_loop() {
+                if !self.inside_loop() {
                     self.error("E0221", e.span, "`continue` outside of a loop");
                 }
                 Type::Never
@@ -488,10 +490,10 @@ impl<'a> Checker<'a> {
                 "irrefutable pattern in `if let`: the branch always runs",
             );
         }
-        self.push_scope();
-        self.check_pattern(pat, &scrut_ty);
-        let then_ty = self.check_block(then, expect);
-        self.pop_scope();
+        let then_ty = self.in_scope(|c| {
+            c.check_pattern(pat, &scrut_ty);
+            c.check_block(then, expect)
+        });
         match else_ {
             None => Type::Unit,
             Some(else_expr) => {
@@ -2852,13 +2854,13 @@ impl<'a> Checker<'a> {
             }
         };
         self.out.for_kinds.insert(e.id, kind);
-        self.push_scope();
-        let local = self.declare_local(var, elem_ty);
-        self.out.decl_locals.insert(e.id, local);
-        self.enter_loop();
-        self.check_block(body, None);
-        self.exit_loop();
-        self.pop_scope();
+        self.in_scope(|c| {
+            let local = c.declare_local(var, elem_ty);
+            c.out.decl_locals.insert(e.id, local);
+            c.in_loop(|c| {
+                c.check_block(body, None);
+            });
+        });
         Type::Unit
     }
 
@@ -2977,22 +2979,23 @@ impl<'a> Checker<'a> {
         }
 
         let sig = FnSig::new(param_tys.clone(), ret_ty.clone());
-        let proto = self.begin_closure(e.id, sig.clone(), e.span);
-        self.set_closure_ret(ret_ty.clone());
-        for ((name, _), ty) in params.iter().zip(&param_tys) {
-            self.declare_local(name, ty.clone());
-        }
-        let body_ty = self.check_expr(body, Some(&ret_ty));
-        let body_rt = self.resolve(&body_ty);
-        if !matches!(body_rt, Type::Never) {
-            self.unify_or_err(
-                &ret_ty,
-                &body_ty,
-                body.span,
-                "the closure body must produce the closure's return type",
-            );
-        }
-        self.end_closure(proto);
+        let decls: Vec<(&Ident, Type)> = params
+            .iter()
+            .zip(&param_tys)
+            .map(|((name, _), ty)| (name, ty.clone()))
+            .collect();
+        let (_, proto) = self.in_closure(e.id, sig.clone(), e.span, &decls, |c| {
+            let body_ty = c.check_expr(body, Some(&ret_ty));
+            let body_rt = c.resolve(&body_ty);
+            if !matches!(body_rt, Type::Never) {
+                c.unify_or_err(
+                    &ret_ty,
+                    &body_ty,
+                    body.span,
+                    "the closure body must produce the closure's return type",
+                );
+            }
+        });
 
         // Unresolved parameter types are an error: inference is local.
         for ((name, _), ty) in params.iter().zip(&param_tys) {

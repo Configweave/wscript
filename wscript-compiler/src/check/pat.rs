@@ -438,33 +438,32 @@ impl<'a> Checker<'a> {
         let mut result: Option<Type> = None;
         let mut unguarded: Vec<Vec<DPat>> = Vec::new();
         for arm in arms {
-            self.push_scope();
-            self.check_pattern(&arm.pat, &scrut_ty);
-            let row = vec![self.lower_pattern(&arm.pat)];
-            if !unguarded.is_empty()
-                && self
-                    .is_useful(&unguarded, &row, std::slice::from_ref(&rt))
-                    .is_none()
-            {
-                self.warn(
-                    "W0002",
-                    arm.pat.span,
-                    "unreachable match arm: previous patterns already cover this case",
-                );
-            }
-            let guarded = match &arm.guard {
-                Some(g) => {
-                    let gt = self.check_expr(g, Some(&Type::Bool));
-                    self.unify_or_err(&Type::Bool, &gt, g.span, "match guards are `bool`");
-                    true
+            let body_ty = self.in_scope(|c| {
+                c.check_pattern(&arm.pat, &scrut_ty);
+                let row = vec![c.lower_pattern(&arm.pat)];
+                if !unguarded.is_empty()
+                    && c.is_useful(&unguarded, &row, std::slice::from_ref(&rt))
+                        .is_none()
+                {
+                    c.warn(
+                        "W0002",
+                        arm.pat.span,
+                        "unreachable match arm: previous patterns already cover this case",
+                    );
                 }
-                None => false,
-            };
-            if !guarded {
-                unguarded.push(row);
-            }
-            let body_ty = self.check_expr(&arm.body, expect);
-            self.pop_scope();
+                let guarded = match &arm.guard {
+                    Some(g) => {
+                        let gt = c.check_expr(g, Some(&Type::Bool));
+                        c.unify_or_err(&Type::Bool, &gt, g.span, "match guards are `bool`");
+                        true
+                    }
+                    None => false,
+                };
+                if !guarded {
+                    unguarded.push(row);
+                }
+                c.check_expr(&arm.body, expect)
+            });
             let body_rt = self.resolve(&body_ty);
             if !matches!(body_rt, Type::Never) {
                 result = Some(match result {

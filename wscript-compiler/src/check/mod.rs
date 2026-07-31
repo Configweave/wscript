@@ -4,6 +4,7 @@
 //! bytecode emitter consumes. All host signatures are known before any
 //! script code is checked (PRD §2's key invariant).
 
+mod env;
 mod expr;
 mod infer;
 mod methods;
@@ -22,6 +23,7 @@ use wscript_core::span::Span;
 use wscript_core::types::{FnSig, Type};
 
 use crate::ast::*;
+use env::{Env, FnFrame};
 use infer::Infer;
 
 pub use infer::subst_params;
@@ -326,35 +328,6 @@ pub struct CheckResult {
 
 // ----------------------------------------------------------------- scope
 
-#[derive(Clone)]
-struct Binding {
-    local: LocalId,
-    ty: Type,
-    /// Definition span (for the LSP's goto-definition).
-    #[allow(dead_code)] // consumed by the LSP (M6)
-    span: Span,
-}
-
-struct Scope {
-    bindings: HashMap<String, Binding>,
-    /// Index into `fn_states` of the owning function.
-    fn_depth: usize,
-}
-
-struct LoopCtx {
-    has_break: bool,
-}
-
-struct FnState {
-    ret: Type,
-    n_locals: u32,
-    captured: HashSet<LocalId>,
-    captures: Vec<CapSrc>,
-    /// Dedup: (owner fn depth, local) → capture slot.
-    capture_map: HashMap<(usize, LocalId), u16>,
-    loops: Vec<LoopCtx>,
-}
-
 /// Item imported via `use module::item`.
 #[derive(Clone)]
 enum Imported {
@@ -408,10 +381,6 @@ pub struct Checker<'a> {
     pub(crate) inherent: HashMap<DefId, HashMap<String, u32>>,
     /// Associated functions (no-self fns in inherent impls): `Type::func`.
     pub(crate) assoc: HashMap<DefId, HashMap<String, u32>>,
-    /// Type parameters in scope — set while resolving a generic fn's
-    /// signature and while checking its body. `Type::Param(i)` indexes
-    /// this list (rigid: unifies only with itself).
-    pub(crate) current_type_params: Vec<(String, Option<BoundKind>)>,
     /// Generic calls whose instantiation wasn't resolved at the callsite:
     /// re-checked (bounds + inference) when the enclosing top-level fn
     /// finishes. (call span, fn name, type_params, fresh instantiation).
@@ -426,8 +395,9 @@ pub struct Checker<'a> {
     unit_suffixes: HashMap<String, Vec<DefId>>,
 
     // body-checking state
-    scopes: Vec<Scope>,
-    fn_states: Vec<FnState>,
+    /// Lexical scopes, function frames, loops and type parameters. Entered
+    /// through `in_scope` / `in_fn` / `in_loop` / `with_type_params`.
+    pub(crate) env: Env,
     /// Nodes whose recorded types must be finalized when the current
     /// top-level function completes (inference vars are per top-level fn).
     nodes_this_fn: Vec<NodeId>,
@@ -477,14 +447,12 @@ pub fn check_files<'a>(files: &'a [(String, &'a SourceFile)], registry: &Registr
         script_modules,
         inherent: HashMap::new(),
         assoc: HashMap::new(),
-        current_type_params: Vec::new(),
         pending_instantiations: Vec::new(),
         trait_impls: HashMap::new(),
         derives: HashMap::new(),
         vtable_cache: HashMap::new(),
         unit_suffixes: HashMap::new(),
-        scopes: Vec::new(),
-        fn_states: Vec::new(),
+        env: Env::default(),
         nodes_this_fn: Vec::new(),
         must_resolve: Vec::new(),
         or_depth: 0,
@@ -1259,9 +1227,7 @@ impl<'a> Checker<'a> {
             // Generic fns: validate the type-parameter list and resolve
             // the signature with those params in scope.
             let type_params = self.collect_type_params(f);
-            self.current_type_params = type_params.clone();
-            let sig = self.fn_decl_sig(f, None);
-            self.current_type_params.clear();
+            let sig = self.with_type_params(type_params.clone(), |c| c.fn_decl_sig(f, None));
             for (i, (name, _)) in type_params.iter().enumerate() {
                 if !sig_mentions_param(&sig, i as u32) {
                     let span = f
@@ -1789,11 +1755,7 @@ impl<'a> Checker<'a> {
     /// Does the in-scope type parameter `i` carry (at least) `need`?
     /// `Ord` implies `Eq`.
     pub(crate) fn param_has_bound(&self, i: u32, need: BoundKind) -> bool {
-        match self
-            .current_type_params
-            .get(i as usize)
-            .and_then(|(_, b)| *b)
-        {
+        match self.env.type_params().get(i as usize).and_then(|(_, b)| *b) {
             Some(BoundKind::Ord) => matches!(need, BoundKind::Ord | BoundKind::Eq),
             Some(b) => b == need,
             None => false,
@@ -1803,7 +1765,8 @@ impl<'a> Checker<'a> {
     /// The declared name of the in-scope type parameter `i` (for
     /// diagnostics), falling back to the display letter.
     pub(crate) fn param_name(&self, i: u32) -> String {
-        self.current_type_params
+        self.env
+            .type_params()
             .get(i as usize)
             .map(|(n, _)| n.clone())
             .unwrap_or_else(|| Type::Param(i).display(&self.out.defs))
@@ -1928,11 +1891,7 @@ impl<'a> Checker<'a> {
                     // In-scope generic type parameters resolve first
                     // (shadowing an existing type name is an error at the
                     // declaration, so no ambiguity survives here).
-                    if let Some(i) = self
-                        .current_type_params
-                        .iter()
-                        .position(|(n, _)| n == other)
-                    {
+                    if let Some(i) = self.env.type_params().iter().position(|(n, _)| n == other) {
                         return Type::Param(i as u32);
                     }
                     match self.type_names.get(other) {
@@ -2032,7 +1991,7 @@ impl<'a> Checker<'a> {
                     other => {
                         let span = t.span;
                         let msg = format!("`{other}` does not take type arguments");
-                        let help = if self.current_type_params.iter().any(|(n, _)| n == other) {
+                        let help = if self.env.type_params().iter().any(|(n, _)| n == other) {
                             "type parameters do not take type arguments".to_string()
                         } else {
                             "user-defined generic *types* are not supported yet; generic \
@@ -2124,60 +2083,52 @@ impl<'a> Checker<'a> {
         self.infer.reset();
         self.nodes_this_fn.clear();
         let info = self.out.fn_infos[proto as usize].clone();
-        // Generic fns: their rigid type parameters are in scope for the
-        // whole body (cleared after finalize below).
-        self.current_type_params = info.type_params.clone();
         let source = info.source;
-        let (decl, _item_idx) = match source {
+        let decl = match source {
             FnSource::Top { file, item } => {
                 self.cur_file = file;
                 match &self.file().items[item] {
-                    Item::Fn(f) => (f, item),
+                    Item::Fn(f) => f,
                     _ => return,
                 }
             }
             FnSource::Method { file, item, fn_idx } => {
                 self.cur_file = file;
                 match &self.file().items[item] {
-                    Item::Impl(im) => (&im.fns[fn_idx], item),
+                    Item::Impl(im) => &im.fns[fn_idx],
                     _ => return,
                 }
             }
             FnSource::Closure { .. } | FnSource::Synthesized => return,
         };
 
-        self.fn_states.push(FnState {
-            ret: info.sig.ret.clone(),
-            n_locals: 0,
-            captured: HashSet::new(),
-            captures: Vec::new(),
-            capture_map: HashMap::new(),
-            loops: Vec::new(),
-        });
-        self.push_scope();
-        for (i, p) in decl.params.iter().enumerate() {
-            let ty = info.sig.params.get(i).cloned().unwrap_or(Type::Error);
-            self.declare_local(&p.name, ty);
-        }
-
         let ret = info.sig.ret.clone();
-        let body_ty = self.check_block(&decl.body, Some(&ret));
-        self.unify_or_err(
-            &ret,
-            &body_ty,
-            last_meaningful_span(&decl.body).unwrap_or(decl.sig_span),
-            "function body does not match the declared return type",
-        );
+        let param_tys = info.sig.params.clone();
+        // Generic fns: their rigid type parameters are in scope for the
+        // whole body *and* for `finalize_types`, which reports uninferable
+        // parameters by name. Keeping both inside one scope is what makes
+        // that ordering lexical rather than remembered.
+        self.with_type_params(info.type_params.clone(), |c| {
+            let (_, frame) = c.in_fn(ret.clone(), |c| {
+                for (i, p) in decl.params.iter().enumerate() {
+                    let ty = param_tys.get(i).cloned().unwrap_or(Type::Error);
+                    c.declare_local(&p.name, ty);
+                }
+                let body_ty = c.check_block(&decl.body, Some(&ret));
+                c.unify_or_err(
+                    &ret,
+                    &body_ty,
+                    last_meaningful_span(&decl.body).unwrap_or(decl.sig_span),
+                    "function body does not match the declared return type",
+                );
+            });
+            let fi = &mut c.out.fn_infos[proto as usize];
+            fi.n_locals = frame.n_locals;
+            fi.captured = frame.captured;
+            fi.pending = false;
 
-        self.pop_scope();
-        let state = self.fn_states.pop().unwrap();
-        let fi = &mut self.out.fn_infos[proto as usize];
-        fi.n_locals = state.n_locals;
-        fi.captured = state.captured;
-        fi.pending = false;
-
-        self.finalize_types();
-        self.current_type_params.clear();
+            c.finalize_types();
+        });
     }
 
     /// After a top-level function (and its closures) is checked, substitute
@@ -2256,80 +2207,60 @@ impl<'a> Checker<'a> {
         }
     }
 
-    // -------------------------------------------------- scopes & locals
+    // -------------------------------------------- scopes, frames, loops
+    //
+    // Entry is scoped: the callback receives `&mut Checker`, so the push
+    // and the matching pop cannot drift apart. A guard holding
+    // `&mut self.env` would block the `&mut self` the body needs.
 
-    pub(crate) fn push_scope(&mut self) {
-        self.scopes.push(Scope {
-            bindings: HashMap::new(),
-            fn_depth: self.fn_states.len() - 1,
-        });
+    /// Check `f` inside a fresh lexical scope.
+    pub(crate) fn in_scope<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.env.push_scope();
+        let out = f(self);
+        self.env.pop_scope();
+        out
     }
 
-    pub(crate) fn pop_scope(&mut self) {
-        self.scopes.pop();
+    /// Check `f` inside a fresh function frame and its body scope,
+    /// returning what the frame contributes to its `FnInfo`.
+    pub(crate) fn in_fn<T>(&mut self, ret: Type, f: impl FnOnce(&mut Self) -> T) -> (T, FnFrame) {
+        self.env.push_fn(ret);
+        self.env.push_scope();
+        let out = f(self);
+        self.env.pop_scope();
+        (out, self.env.pop_fn())
+    }
+
+    /// Check `f` inside a loop; the flag reports whether it contained a
+    /// `break`.
+    pub(crate) fn in_loop<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> (T, bool) {
+        self.env.enter_loop();
+        let out = f(self);
+        (out, self.env.exit_loop())
+    }
+
+    /// Check `f` with `params` as the rigid type parameters in scope.
+    pub(crate) fn with_type_params<T>(
+        &mut self,
+        params: Vec<(String, Option<BoundKind>)>,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        self.env.push_type_params(params);
+        let out = f(self);
+        self.env.pop_type_params();
+        out
     }
 
     pub(crate) fn declare_local(&mut self, name: &Ident, ty: Type) -> LocalId {
-        let state = self.fn_states.last_mut().unwrap();
-        let local = state.n_locals;
-        state.n_locals += 1;
-        self.scopes.last_mut().unwrap().bindings.insert(
-            name.name.clone(),
-            Binding {
-                local,
-                ty,
-                span: name.span,
-            },
-        );
-        local
+        self.env.declare(name, ty)
     }
 
-    /// Resolve a variable name, wiring captures through any intervening
-    /// closures. Returns the reference kind and the variable's type.
     pub(crate) fn lookup_var(&mut self, name: &str) -> Option<(VarRes, Type)> {
-        let current_depth = self.fn_states.len() - 1;
-        // Find the binding, innermost scope first.
-        let mut found: Option<(usize, Binding)> = None;
-        for scope in self.scopes.iter().rev() {
-            if let Some(b) = scope.bindings.get(name) {
-                found = Some((scope.fn_depth, b.clone()));
-                break;
-            }
-        }
-        let (owner_depth, binding) = found?;
-        if owner_depth == current_depth {
-            return Some((VarRes::Local(binding.local), binding.ty));
-        }
-        // Captured: mark the local in its owner and thread capture slots
-        // through every closure between owner and current.
-        self.fn_states[owner_depth].captured.insert(binding.local);
-        let mut src = CapSrc::Local(binding.local);
-        let mut slot = 0u16;
-        for depth in (owner_depth + 1)..=current_depth {
-            let key = (owner_depth, binding.local);
-            let state = &mut self.fn_states[depth];
-            slot = match state.capture_map.get(&key) {
-                Some(&s) => s,
-                None => {
-                    let s = state.captures.len() as u16;
-                    state.captures.push(src);
-                    state.capture_map.insert(key, s);
-                    s
-                }
-            };
-            src = CapSrc::Capture(slot);
-        }
-        Some((VarRes::Capture(slot), binding.ty))
+        self.env.lookup(name)
     }
 
-    /// Span of a local's definition (for LSP goto-definition).
     pub(crate) fn lookup_var_span(&self, name: &str) -> Option<Span> {
-        for scope in self.scopes.iter().rev() {
-            if let Some(b) = scope.bindings.get(name) {
-                return Some(b.span);
-            }
-        }
-        None
+        self.env.lookup_span(name)
     }
 
     // ----------------------------------------------------- type recording
@@ -2419,53 +2350,40 @@ impl<'a> Checker<'a> {
     }
 
     pub(crate) fn current_ret(&self) -> Type {
-        self.fn_states
-            .last()
-            .map(|s| s.ret.clone())
-            .unwrap_or(Type::Error)
-    }
-
-    pub(crate) fn enter_loop(&mut self) {
-        self.fn_states
-            .last_mut()
-            .unwrap()
-            .loops
-            .push(LoopCtx { has_break: false });
-    }
-
-    /// Returns whether the loop contained a `break`.
-    pub(crate) fn exit_loop(&mut self) -> bool {
-        self.fn_states
-            .last_mut()
-            .unwrap()
-            .loops
-            .pop()
-            .map(|l| l.has_break)
-            .unwrap_or(false)
+        self.env.current_ret()
     }
 
     pub(crate) fn mark_break(&mut self, span: Span) -> bool {
-        match self.fn_states.last_mut().unwrap().loops.last_mut() {
-            Some(l) => {
-                l.has_break = true;
-                true
-            }
-            None => {
-                self.error("E0221", span, "`break` outside of a loop");
-                false
-            }
+        if self.env.mark_break() {
+            return true;
         }
+        self.error("E0221", span, "`break` outside of a loop");
+        false
     }
 
-    pub(crate) fn in_loop(&self) -> bool {
-        self.fn_states.last().is_some_and(|s| !s.loops.is_empty())
+    pub(crate) fn inside_loop(&self) -> bool {
+        self.env.inside_loop()
     }
 
     // -------------------------------------------------- closure checking
 
-    /// Begin checking a closure body: allocates its proto and state.
-    pub(crate) fn begin_closure(&mut self, node: NodeId, sig: FnSig, span: Span) -> u32 {
+    /// Allocate a closure's proto, check its body inside a fresh frame,
+    /// and write the frame back into the proto's `FnInfo`.
+    ///
+    /// One call rather than the previous four (`begin_closure`,
+    /// `set_closure_ret`, `declare_local` per parameter, `end_closure`),
+    /// where the return type had to be supplied separately or every
+    /// `return` in the body silently resolved against `Type::Error`.
+    pub(crate) fn in_closure<T>(
+        &mut self,
+        node: NodeId,
+        sig: FnSig,
+        span: Span,
+        params: &[(&Ident, Type)],
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> (T, u32) {
         let proto = self.out.fn_infos.len() as u32;
+        let ret = sig.ret.clone();
         self.out.fn_infos.push(FnInfo {
             name: format!("<closure@{}>", span.lo),
             sig,
@@ -2477,30 +2395,18 @@ impl<'a> Checker<'a> {
             span,
             pending: true,
         });
-        self.fn_states.push(FnState {
-            ret: Type::Error, // set by caller once known
-            n_locals: 0,
-            captured: HashSet::new(),
-            captures: Vec::new(),
-            capture_map: HashMap::new(),
-            loops: Vec::new(),
+        let (out, frame) = self.in_fn(ret, |c| {
+            for (name, ty) in params {
+                c.declare_local(name, ty.clone());
+            }
+            f(c)
         });
-        self.push_scope();
-        proto
-    }
-
-    pub(crate) fn set_closure_ret(&mut self, ret: Type) {
-        self.fn_states.last_mut().unwrap().ret = ret;
-    }
-
-    pub(crate) fn end_closure(&mut self, proto: u32) {
-        self.pop_scope();
-        let state = self.fn_states.pop().unwrap();
         let fi = &mut self.out.fn_infos[proto as usize];
-        fi.n_locals = state.n_locals;
-        fi.captured = state.captured;
-        fi.captures = state.captures;
+        fi.n_locals = frame.n_locals;
+        fi.captured = frame.captured;
+        fi.captures = frame.captures;
         fi.pending = false;
+        (out, proto)
     }
 }
 
