@@ -1,5 +1,9 @@
 name: CI
 
+# Every job invokes a recipe from the `ci` just module rather than inlining the
+# command, so the workflow and `just ci::check` cannot drift in what a check
+# actually does. Jobs stay separate to preserve parallelism.
+
 on:
   push:
     branches: [main]
@@ -9,17 +13,45 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  ci:
+  fmt:
+    name: Format
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: rustfmt
+      - uses: taiki-e/install-action@just
+      - run: just ci::workspace-fmt-check
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Format
-        run: cargo fmt --check
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Test
-        run: cargo test --workspace
+      - uses: taiki-e/install-action@just
+      - run: just ci::workspace-lint
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@just
+      - run: just ci::workspace-test
+
+  examples:
+    name: Examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@just
+      - run: just ci::examples-run

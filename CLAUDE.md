@@ -36,5 +36,9 @@ the skill (delete `.claude/skills/wscript` first — stale files aren't wiped).
   change, and a direct push bypasses them.
 - Standard Rust toolchain: `cargo build`, `cargo test`, `cargo clippy`,
   `cargo fmt`.
+- `just ci::check` is the merge bar — format check, lint, tests, examples. It
+  lives in `.just/ci/mod.just`; its recipes are in `.just/shared.just` so both
+  the module and the root justfile can import them. `.github/workflows/ci.yml`
+  fans the same recipes out one per job, so the two cannot drift.
 - Regenerate the stdlib interface after changing registrations:
   `WSCRIPT_REGEN_WSCRIPTI=1 cargo test -p wscript-cli --test wscripti_gen`.

@@ -7,7 +7,8 @@ use fs
 use math
 
 fn main() -> int {
-    let raw = "{\"name\": \"demo\", \"port\": 8080, \"retries\": [1, 2, 3]}"
+    // braces are interpolation holes, so inline JSON escapes them as `{{`/`}}`
+    let raw = "{{\"name\": \"demo\", \"port\": 8080, \"retries\": [1, 2, 3]}}"
     let conf = json::parse(raw).unwrap()
 
     let name = conf.get("name").unwrap().as_string().unwrap_or("unnamed")
