@@ -366,10 +366,7 @@ impl<'s> Lexer<'s> {
     /// Consume a `\x` escape (cursor on the backslash).
     fn escape(&mut self, lit_start: usize) -> Option<char> {
         self.pos += 1; // backslash
-        let c = match self.bytes.get(self.pos) {
-            None => return None,
-            Some(c) => *c,
-        };
+        let c = *self.bytes.get(self.pos)?;
         self.pos += 1;
         match c {
             b'n' => Some('\n'),

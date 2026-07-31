@@ -91,3 +91,6 @@ embedding guide, benchmarks), projected into a book, a Claude Code skill
 Standard Rust toolchain: `cargo build`, `cargo test`, `cargo clippy`.
 Examples live in `examples/` (run with `wscript run`) and
 `wscript/examples/host_app.rs` (`cargo run -p wscript --example host_app`).
+
+`just ci::check` is the merge bar — format check, lint, tests, examples — and is
+what CI runs, one job per part. `just --list ci` shows the parts individually.
