@@ -34,6 +34,11 @@ build: workspace-build
 wscripti-regen:
 	WSCRIPT_REGEN_WSCRIPTI=1 cargo test -p wscript-cli --test wscripti_gen
 
+# Regenerate committed diagnostic/parser snapshots, then review with `git diff`
+[group('test')]
+snap-regen:
+	WSCRIPT_REGEN_SNAP=1 cargo test -p wscript-compiler
+
 # Test everything
 [group('test')]
 test: workspace-test
