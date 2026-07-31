@@ -10,8 +10,10 @@ pub mod lsp;
 pub mod manifest;
 pub mod repl;
 
+use std::io::Write;
 use std::process::ExitCode;
 
+use diag_render::Renderer;
 use wscript::{Context, Error, PrintHook, Value, Vm, VmConfig};
 
 /// The CLI enables the full stdlib by default (PRD §7/§8).
@@ -40,45 +42,54 @@ pub fn file_resolver(script_path: &str) -> wscript::FsResolver {
     resolver
 }
 
-/// How a script run ended, before anything is rendered.
+/// How a script run ended.
 ///
-/// Separating the outcome from its rendering is what lets a test assert on
-/// a run without a subprocess. Rendering still goes to stderr; giving
-/// `diag_render` a sink is #18.
+/// Diagnostics and faults are rendered to the caller's [`Renderer`] as
+/// they happen; this reports *what* happened so a caller can map it to an
+/// exit code, or a test can assert on it.
+#[derive(Debug, PartialEq, Eq)]
 pub enum Outcome {
     /// Ran to completion with this process exit code.
     Exited(u8),
-    /// The script (or its imports) failed to compile.
-    CompileFailed(wscript::CompileFailure),
-    /// A trappable runtime fault, with the sources needed to render it.
-    Faulted {
-        sources: Vec<(String, String)>,
-        source_map: wscript::SourceMap,
-        error: wscript::RuntimeError,
-    },
+    /// The script (or one of its imports) failed to compile.
+    CompileFailed,
+    /// A trappable runtime fault.
+    Faulted,
     /// Compiled, but has no `fn main()`.
     NoMain,
-    /// Anything else at the host boundary (conversion, signature).
-    Failed(String),
+    /// Anything else at the host boundary (unreadable file, conversion,
+    /// signature).
+    Failed,
 }
 
-/// Compile and run `path`, delivering script output to `out`.
+/// Compile and run `path`, delivering script output to `out` and
+/// diagnostics to `err`.
 ///
-/// Warnings are rendered to stderr as they are found; everything else is
-/// returned for the caller to render or assert on.
-pub fn run_script(path: &str, script_args: Vec<String>, out: PrintHook) -> Outcome {
+/// Both sinks are parameters so a test can run a script and assert on
+/// either stream without spawning a process.
+pub fn run_script(
+    path: &str,
+    script_args: Vec<String>,
+    out: PrintHook,
+    err: &mut Renderer,
+) -> Outcome {
     let Ok(source) = std::fs::read_to_string(path) else {
-        return Outcome::Failed(format!("cannot read `{path}`"));
+        let _ = writeln!(err, "error: cannot read `{path}`");
+        return Outcome::Failed;
     };
     let ctx = default_context(script_args);
     let resolver = file_resolver(path);
     let compiled = match ctx.compile_entry(path, &source, &resolver) {
         Ok(c) => c,
-        Err(failure) => return Outcome::CompileFailed(failure),
+        Err(failure) => {
+            err.render_multi(&failure.sources, &failure.source_map, &failure.diags);
+            return Outcome::CompileFailed;
+        }
     };
     let (unit, warnings, sources) = (compiled.unit, compiled.warnings, compiled.sources);
-    diag_render::render_multi(&sources, &unit.source_map, &warnings);
+    err.render_multi(&sources, &unit.source_map, &warnings);
     if !unit.exports.contains_key("main") {
+        let _ = writeln!(err, "error: `{path}` has no `fn main()`");
         return Outcome::NoMain;
     }
     let mut vm = Vm::with_config(
@@ -96,38 +107,22 @@ pub fn run_script(path: &str, script_args: Vec<String>, out: PrintHook) -> Outco
         Err(Error::Runtime(e)) if e.exit_code.is_some() => {
             Outcome::Exited((e.exit_code.unwrap() & 0xff) as u8)
         }
-        Err(Error::Runtime(e)) => Outcome::Faulted {
-            sources,
-            source_map: unit.source_map,
-            error: e,
-        },
-        Err(e) => Outcome::Failed(e.to_string()),
+        Err(Error::Runtime(e)) => {
+            err.render_runtime_multi(&sources, &unit.source_map, &e);
+            Outcome::Faulted
+        }
+        Err(e) => {
+            let _ = writeln!(err, "error: {e}");
+            Outcome::Failed
+        }
     }
 }
 
 pub fn cmd_run(path: &str, script_args: Vec<String>) -> ExitCode {
-    match run_script(path, script_args, wscript::stdout_sink()) {
+    let mut err = Renderer::stderr();
+    match run_script(path, script_args, wscript::stdout_sink(), &mut err) {
         Outcome::Exited(code) => ExitCode::from(code),
-        Outcome::CompileFailed(failure) => {
-            diag_render::render_multi(&failure.sources, &failure.source_map, &failure.diags);
-            ExitCode::FAILURE
-        }
-        Outcome::Faulted {
-            sources,
-            source_map,
-            error,
-        } => {
-            diag_render::render_runtime_multi(&sources, &source_map, &error);
-            ExitCode::FAILURE
-        }
-        Outcome::NoMain => {
-            eprintln!("error: `{path}` has no `fn main()`");
-            ExitCode::FAILURE
-        }
-        Outcome::Failed(msg) => {
-            eprintln!("error: {msg}");
-            ExitCode::FAILURE
-        }
+        _ => ExitCode::FAILURE,
     }
 }
 
@@ -150,13 +145,14 @@ pub fn cmd_check(path: &str) -> ExitCode {
         None => default_context(Vec::new()),
     };
     let resolver = file_resolver(path);
+    let mut err = Renderer::stderr();
     match ctx.compile_entry(path, &source, &resolver) {
         Ok(c) => {
-            diag_render::render_multi(&c.sources, &c.unit.source_map, &c.warnings);
+            err.render_multi(&c.sources, &c.unit.source_map, &c.warnings);
             ExitCode::SUCCESS
         }
         Err(failure) => {
-            diag_render::render_multi(&failure.sources, &failure.source_map, &failure.diags);
+            err.render_multi(&failure.sources, &failure.source_map, &failure.diags);
             ExitCode::FAILURE
         }
     }

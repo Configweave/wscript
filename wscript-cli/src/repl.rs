@@ -209,10 +209,10 @@ impl Repl {
         let probe = format!("{candidate}\nfn __probe() {{}}\n");
         match self.ctx.compile_verbose(&probe) {
             Ok((_, warnings)) => {
-                diag_render::render("<repl>", &probe, &warnings);
+                diag_render::Renderer::stderr().render("<repl>", &probe, &warnings);
                 self.items = candidate;
             }
-            Err(diags) => diag_render::render("<repl>", &probe, &diags),
+            Err(diags) => diag_render::Renderer::stderr().render("<repl>", &probe, &diags),
         }
     }
 
@@ -245,7 +245,7 @@ impl Repl {
             .iter()
             .any(|d| d.severity == wscript::Severity::Error)
         {
-            diag_render::render("<repl>", &src1, &errors);
+            diag_render::Renderer::stderr().render("<repl>", &src1, &errors);
             return;
         }
 
@@ -324,12 +324,12 @@ impl Repl {
     fn execute(&mut self, src: &str, _expect: Option<&str>) -> Option<Value> {
         let unit = match self.ctx.compile_verbose(src) {
             Ok((unit, warnings)) => {
-                diag_render::render("<repl>", src, &warnings);
+                diag_render::Renderer::stderr().render("<repl>", src, &warnings);
                 self.defs = unit.defs.clone();
                 unit
             }
             Err(diags) => {
-                diag_render::render("<repl>", src, &diags);
+                diag_render::Renderer::stderr().render("<repl>", src, &diags);
                 return None;
             }
         };
@@ -342,7 +342,7 @@ impl Repl {
                 None
             }
             Err(wscript::Error::Runtime(e)) => {
-                diag_render::render_runtime("<repl>", src, &e);
+                diag_render::Renderer::stderr().render_runtime("<repl>", src, &e);
                 None
             }
             Err(e) => {
