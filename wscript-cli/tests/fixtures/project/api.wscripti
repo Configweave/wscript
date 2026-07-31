@@ -1,0 +1,3 @@
+mod host {
+    fn greet(a0: string) -> string
+}

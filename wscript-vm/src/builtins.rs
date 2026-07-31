@@ -103,7 +103,7 @@ impl Vm {
             // ------------------------------------------------- prelude
             Builtin::Print => {
                 let s = self.display_value(&args[0])?;
-                crate::print_text(&s, false);
+                self.print_text(&s, false);
                 Value::Unit
             }
             Builtin::Println => {
@@ -111,7 +111,7 @@ impl Vm {
                     Some(v) => self.display_value(v)?,
                     None => String::new(),
                 };
-                crate::print_text(&s, true);
+                self.print_text(&s, true);
                 Value::Unit
             }
             Builtin::Str => {

@@ -1,0 +1,3 @@
+# A minimal project manifest, exercising both keys (PRD §9.1).
+interfaces = ["api.wscripti"]
+src_roots = ["scripts"]

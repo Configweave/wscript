@@ -77,7 +77,7 @@ fn scripts_typecheck_against_wscripti_alone() {
     let unit = wscript_compiler::compile("use math\nfn main() -> float { math::abs(-1.0) }", &reg)
         .unwrap()
         .unit;
-    let mut vm = wscript_vm::Vm::new(&reg);
+    let mut vm = wscript_vm::Vm::new(&reg, wscript_vm::VmConfig::default());
     let result = vm.call_name(&unit, "main", vec![]);
     assert!(result.is_err());
 }

@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+name = "wscript_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "wscript"
 path = "src/main.rs"

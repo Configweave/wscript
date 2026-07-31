@@ -3,7 +3,7 @@
 
 use wscript_core::bytecode::CompiledUnit;
 use wscript_core::registry::Registry;
-use wscript_vm::Vm;
+use wscript_vm::{Vm, VmConfig};
 
 fn compile(src: &str) -> CompiledUnit {
     wscript_compiler::compile(src, &Registry::new())
@@ -12,7 +12,7 @@ fn compile(src: &str) -> CompiledUnit {
 }
 
 fn vm() -> Vm {
-    Vm::new(&Registry::new())
+    Vm::new(&Registry::new(), VmConfig::default())
 }
 
 #[test]

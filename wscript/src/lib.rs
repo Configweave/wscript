@@ -38,7 +38,10 @@ pub use wscript_core::span::Span;
 pub use wscript_core::types::{FnSig, Type};
 pub use wscript_core::value::Value;
 pub use wscript_macros::Script;
-pub use wscript_vm::{DEFAULT_CALL_DEPTH_LIMIT, RuntimeError, TraceFrame};
+pub use wscript_vm::{
+    DEFAULT_CALL_DEPTH_LIMIT, PrintHook, REENTRY_DEPTH_LIMIT, RuntimeError, TraceFrame, VmConfig,
+    stdout_sink,
+};
 
 // Used by `#[derive(Script)]` expansions; not public API.
 #[doc(hidden)]
@@ -259,9 +262,30 @@ pub struct Vm {
 }
 
 impl Vm {
+    /// A VM with the default configuration: unmetered, the default
+    /// call-depth limit, and `print`/`println` going to stdout.
     pub fn new(ctx: &Context) -> Vm {
+        Vm::with_config(ctx, VmConfig::default())
+    }
+
+    /// A VM configured explicitly — most usefully to redirect script
+    /// output, for a host whose stdout is not a plain text stream (a TUI,
+    /// or a tool emitting machine-readable output on stdout):
+    ///
+    /// ```ignore
+    /// let seen = Rc::new(RefCell::new(String::new()));
+    /// let sink = seen.clone();
+    /// let mut vm = Vm::with_config(&ctx, VmConfig {
+    ///     out: Box::new(move |s, nl| {
+    ///         sink.borrow_mut().push_str(s);
+    ///         if nl { sink.borrow_mut().push('\n'); }
+    ///     }),
+    ///     ..VmConfig::default()
+    /// });
+    /// ```
+    pub fn with_config(ctx: &Context, config: VmConfig) -> Vm {
         Vm {
-            inner: wscript_vm::Vm::new(ctx.registry()),
+            inner: wscript_vm::Vm::new(ctx.registry(), config),
         }
     }
 

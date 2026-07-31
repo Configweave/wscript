@@ -33,39 +33,21 @@ pub use wscript_core::fault::TraceFrame;
 /// A trappable runtime fault (alias of [`wscript_core::ScriptFault`]).
 pub type RuntimeError = wscript_core::fault::ScriptFault;
 
-// ------------------------------------------------------------ print hook
+// ---------------------------------------------------------------- output
 //
 // `print`/`println` write to stdout by default, but an embedder may need
 // to capture script output (a TUI host whose stdout is a live screen, or
-// a tool whose stdout carries machine-readable output). The hook is
-// per-thread, matching the one-`Vm`-per-thread model.
+// a tool whose stdout carries machine-readable output). The sink belongs
+// to the `Vm`: it is already one-per-thread and `!Send`, so a thread-local
+// bought nothing a plain field does not, and leaked between VMs and across
+// tests on the same thread.
 
-/// A print hook receives the printed text and `true` for `println`
-/// (trailing newline).
+/// Receives printed text and `true` for `println` (trailing newline).
 pub type PrintHook = Box<dyn FnMut(&str, bool)>;
 
-thread_local! {
-    static PRINT_HOOK: std::cell::RefCell<Option<PrintHook>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Install (or clear, with `None`) the current thread's print hook. While
-/// set, `print`/`println` deliver their text to the hook instead of
-/// stdout.
-pub fn set_print_hook(hook: Option<PrintHook>) {
-    PRINT_HOOK.with(|h| *h.borrow_mut() = hook);
-}
-
-pub(crate) fn print_text(s: &str, newline: bool) {
-    let hooked = PRINT_HOOK.with(|h| {
-        if let Some(hook) = h.borrow_mut().as_mut() {
-            hook(s, newline);
-            true
-        } else {
-            false
-        }
-    });
-    if !hooked {
+/// The default sink: the process's stdout.
+pub fn stdout_sink() -> PrintHook {
+    Box::new(|s: &str, newline: bool| {
         use std::io::Write;
         let mut out = std::io::stdout().lock();
         let _ = out.write_all(s.as_bytes());
@@ -73,6 +55,49 @@ pub(crate) fn print_text(s: &str, newline: bool) {
             let _ = out.write_all(b"\n");
         }
         let _ = out.flush();
+    })
+}
+
+/// Everything a [`Vm`] is configured with, supplied at construction.
+///
+/// The limits previously had three different shapes — a setter pair, a
+/// setter pair over `Option`, and a private constant — and output was a
+/// thread-local installed by a free function. Collecting them here means a
+/// `Vm` is fully described by the value it was built from.
+pub struct VmConfig {
+    /// Execution budget in dispatched instructions; see [`Vm::set_fuel`].
+    /// `None` (the default) is unmetered.
+    pub fuel: Option<u64>,
+    /// Script call-depth limit; see [`Vm::set_call_depth_limit`].
+    pub call_depth: usize,
+    /// Maximum concurrently-nested host→script re-entries. Each level holds
+    /// a full nested dispatch-loop native frame (tens of KiB in debug
+    /// builds), so this is sized to fit a 2 MiB thread stack with a wide
+    /// margin — deeper ping-pong than this is pathological.
+    pub reentry_depth: usize,
+    /// Where `print`/`println` deliver their text.
+    pub out: PrintHook,
+}
+
+impl Default for VmConfig {
+    fn default() -> VmConfig {
+        VmConfig {
+            fuel: None,
+            call_depth: DEFAULT_CALL_DEPTH_LIMIT,
+            reentry_depth: REENTRY_DEPTH_LIMIT,
+            out: stdout_sink(),
+        }
+    }
+}
+
+impl std::fmt::Debug for VmConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VmConfig")
+            .field("fuel", &self.fuel)
+            .field("call_depth", &self.call_depth)
+            .field("reentry_depth", &self.reentry_depth)
+            .field("out", &"<sink>")
+            .finish()
     }
 }
 
@@ -109,6 +134,15 @@ pub struct Vm {
     /// *native* stack (a nested dispatch loop plus the host closure), so
     /// it gets its own, much smaller limit than script frame depth.
     reentry_depth: usize,
+    /// Ceiling for `reentry_depth`; see [`VmConfig::reentry_depth`].
+    reentry_limit: usize,
+    /// Where `print`/`println` deliver their text.
+    out: PrintHook,
+    /// Defs visible before any unit is loaded (builtins + host
+    /// registrations), so structural ops work on a freshly-built `Vm`.
+    base_defs: wscript_core::defs::DefTable,
+    /// Returned by [`Vm::unit_impls`] when no unit is loaded.
+    no_impls: wscript_core::bytecode::ImplMaps,
 }
 
 /// Maximum concurrently-nested host→script re-entries; see
@@ -123,7 +157,12 @@ pub const REENTRY_DEPTH_LIMIT: usize = 32;
 pub const DEFAULT_CALL_DEPTH_LIMIT: usize = 10_000;
 
 impl Vm {
-    pub fn new(registry: &Registry) -> Vm {
+    /// Build a VM against `registry`, configured by `config`.
+    ///
+    /// The result is usable immediately: structural operations fall back
+    /// to the registry's defs until a unit is loaded, so nothing panics on
+    /// a freshly-built `Vm`.
+    pub fn new(registry: &Registry, config: VmConfig) -> Vm {
         Vm {
             host_fns: registry.host_fns.iter().map(|e| e.imp.clone()).collect(),
             units: Vec::new(),
@@ -131,10 +170,19 @@ impl Vm {
             cur_unit: 0,
             stack: Vec::new(),
             frames: Vec::new(),
-            depth_limit: DEFAULT_CALL_DEPTH_LIMIT,
-            fuel: None,
+            depth_limit: config.call_depth,
+            fuel: config.fuel,
             reentry_depth: 0,
+            reentry_limit: config.reentry_depth,
+            out: config.out,
+            base_defs: registry.defs.clone(),
+            no_impls: wscript_core::bytecode::ImplMaps::default(),
         }
+    }
+
+    /// Deliver script output to the configured sink.
+    pub(crate) fn print_text(&mut self, s: &str, newline: bool) {
+        (self.out)(s, newline);
     }
 
     /// Set the script call-depth limit (default
@@ -304,7 +352,7 @@ impl Vm {
     /// `call_function`, frames are unwound on `Err` — the host may catch
     /// the error and continue, so no stale frames can be left behind.
     fn reenter(&mut self, f: &Value, args: Vec<Value>) -> Result<Value, RuntimeError> {
-        if self.reentry_depth >= REENTRY_DEPTH_LIMIT {
+        if self.reentry_depth >= self.reentry_limit {
             return Err(
                 self.fault("host re-entry too deep (host function and script calling each other?)")
             );
@@ -376,8 +424,22 @@ impl Vm {
         }
     }
 
-    pub(crate) fn unit(&self) -> &CompiledUnit {
-        &self.units[self.cur_unit].unit
+    /// Defs of the current unit, falling back to the registry's when none
+    /// is loaded. Total, so structural ops are safe on a fresh `Vm`.
+    pub(crate) fn unit_defs(&self) -> &wscript_core::defs::DefTable {
+        match self.units.get(self.cur_unit) {
+            Some(u) => &u.unit.defs,
+            None => &self.base_defs,
+        }
+    }
+
+    /// Custom operator impls of the current unit; empty when none is
+    /// loaded (a unit-less VM has no script `impl`s by construction).
+    pub(crate) fn unit_impls(&self) -> &wscript_core::bytecode::ImplMaps {
+        match self.units.get(self.cur_unit) {
+            Some(u) => &u.unit.impls,
+            None => &self.no_impls,
+        }
     }
 
     // --------------------------------------------------------- dispatch

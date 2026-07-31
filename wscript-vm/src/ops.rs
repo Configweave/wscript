@@ -117,7 +117,7 @@ impl Vm {
                 if Rc::ptr_eq(x, y) {
                     return Ok(true);
                 }
-                if let Some(&proto) = self.unit().impls.eq.get(&x.def.0) {
+                if let Some(&proto) = self.unit_impls().eq.get(&x.def.0) {
                     let r = self.call_proto_nested(
                         proto,
                         vec![Value::Struct(x.clone()), Value::Struct(y.clone())],
@@ -147,7 +147,7 @@ impl Vm {
                 if Rc::ptr_eq(x, y) {
                     return Ok(true);
                 }
-                if let Some(&proto) = self.unit().impls.eq.get(&x.def.0) {
+                if let Some(&proto) = self.unit_impls().eq.get(&x.def.0) {
                     let r = self.call_proto_nested(
                         proto,
                         vec![Value::Enum(x.clone()), Value::Enum(y.clone())],
@@ -223,7 +223,7 @@ impl Vm {
                 }
             }
             (Value::Struct(x), Value::Struct(y)) if x.def == y.def => {
-                if let Some(&proto) = self.unit().impls.cmp.get(&x.def.0) {
+                if let Some(&proto) = self.unit_impls().cmp.get(&x.def.0) {
                     let r = self.call_proto_nested(
                         proto,
                         vec![Value::Struct(x.clone()), Value::Struct(y.clone())],
@@ -254,7 +254,7 @@ impl Vm {
                 }
             }
             (Value::Enum(x), Value::Enum(y)) if x.def == y.def => {
-                if let Some(&proto) = self.unit().impls.cmp.get(&x.def.0) {
+                if let Some(&proto) = self.unit_impls().cmp.get(&x.def.0) {
                     let r = self.call_proto_nested(
                         proto,
                         vec![Value::Enum(x.clone()), Value::Enum(y.clone())],
@@ -368,7 +368,7 @@ impl Vm {
     /// so the rendering always round-trips; float-backed ones take the
     /// largest unit the value reaches.
     pub(crate) fn fmt_quantity(&mut self, v: &Value, def: DefId) -> Result<String, RuntimeError> {
-        match self.unit().defs.as_unit(def).and_then(|u| u.render(v)) {
+        match self.unit_defs().as_unit(def).and_then(|u| u.render(v)) {
             Some(s) => Ok(s),
             // Not a unit family, or not its backing primitive: the emitter
             // only asks for this where the static type said otherwise, so
@@ -397,8 +397,8 @@ impl Vm {
         self.charge_structural()?;
         // Custom Display impls take priority for nominal types.
         let custom = match v {
-            Value::Struct(s) => self.unit().impls.display.get(&s.def.0).copied(),
-            Value::Enum(e) => self.unit().impls.display.get(&e.def.0).copied(),
+            Value::Struct(s) => self.unit_impls().display.get(&s.def.0).copied(),
+            Value::Enum(e) => self.unit_impls().display.get(&e.def.0).copied(),
             Value::Dyn(d) => {
                 let inner = d.inner.clone();
                 return self.fmt_value(&inner, out, nested, depth + 1);
@@ -453,7 +453,7 @@ impl Vm {
             }
             Value::Struct(s) => {
                 let (name, field_names) = {
-                    let defs = &self.unit().defs;
+                    let defs = self.unit_defs();
                     let name = defs.name_of(s.def).to_string();
                     let names: Vec<String> = defs
                         .as_struct(s.def)
@@ -462,7 +462,7 @@ impl Vm {
                     (name, names)
                 };
                 let opaque = matches!(
-                    self.unit().defs.get(s.def),
+                    self.unit_defs().get(s.def),
                     DefKind::Struct(sd) if sd.opaque
                 );
                 out.push_str(&name);
@@ -490,7 +490,7 @@ impl Vm {
             }
             Value::Enum(e) => {
                 let (enum_name, vname, kind, field_names) = {
-                    let defs = &self.unit().defs;
+                    let defs = self.unit_defs();
                     let enum_name = defs.name_of(e.def).to_string();
                     let (vname, kind, names) = defs
                         .as_enum(e.def)
@@ -557,7 +557,7 @@ impl Vm {
 
 fn other_display(v: &Value, vm: &Vm, nested: bool) -> String {
     // Primitives and remaining kinds: reuse the structural renderer.
-    let defs = &vm.unit().defs;
+    let defs = vm.unit_defs();
     let mut s = v.display(defs);
     if nested && matches!(v, Value::Str(_) | Value::Char(_)) {
         s = match v {
@@ -576,17 +576,12 @@ mod tests {
     use wscript_core::registry::Registry;
     use wscript_core::value::{MAX_VALUE_DEPTH, Value};
 
-    use crate::Vm;
+    use crate::{Vm, VmConfig};
 
-    /// A VM with an (empty) unit loaded so ops that consult `self.unit()`
-    /// (struct/enum arms, primitive display) are safe to call directly.
+    /// A bare VM. No unit needs loading: `unit_defs`/`unit_impls` fall
+    /// back to the registry, so structural ops are safe on a fresh `Vm`.
     fn test_vm() -> Vm {
-        let registry = Registry::new();
-        let compiled =
-            wscript_compiler::compile("fn main() {}", &registry).expect("empty script compiles");
-        let mut vm = Vm::new(&registry);
-        vm.load(&compiled.unit);
-        vm
+        Vm::new(&Registry::new(), VmConfig::default())
     }
 
     /// A VM plus values produced by running script functions — the way to
@@ -596,7 +591,7 @@ mod tests {
         let compiled = wscript_compiler::compile(src, &registry).unwrap_or_else(|d| {
             panic!("test script failed to compile: {d:?}");
         });
-        let mut vm = Vm::new(&registry);
+        let mut vm = Vm::new(&registry, VmConfig::default());
         vm.load(&compiled.unit);
         (vm, compiled.unit)
     }
