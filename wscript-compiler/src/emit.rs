@@ -111,12 +111,9 @@ impl<'a> Emitter<'a> {
                 self.emit_fn(proto, &f.params, FnBody::Block(&f.body), f.span)
             }
             FnSource::Closure { node } => {
-                let Some((params_len, body)) =
-                    self.files.iter().find_map(|f| find_closure(f, node))
-                else {
+                let Some(body) = self.files.iter().find_map(|f| find_closure(f, node)) else {
                     unreachable!("closure node not found")
                 };
-                let _ = params_len;
                 self.emit_fn(proto, &[], FnBody::Expr(body), body.span)
             }
             FnSource::Synthesized => FnProto {
@@ -221,101 +218,28 @@ enum FnBody<'a> {
 
 /// Find the closure expression with the given node id (closure protos are
 /// emitted from their AST node).
-fn find_closure(file: &SourceFile, node: NodeId) -> Option<(usize, &Expr)> {
-    struct Finder {
+fn find_closure(file: &SourceFile, node: NodeId) -> Option<&Expr> {
+    struct Finder<'a> {
         node: NodeId,
+        found: Option<&'a Expr>,
     }
-    impl Finder {
-        fn in_expr<'a>(&self, e: &'a Expr) -> Option<&'a Expr> {
+    impl<'a> Visit<'a> for Finder<'a> {
+        fn visit_expr(&mut self, e: &'a Expr) {
+            if self.found.is_some() {
+                return;
+            }
             if let ExprKind::Closure { body, .. } = &e.kind
                 && e.id == self.node
             {
-                return Some(body);
+                self.found = Some(body);
+                return;
             }
-            match &e.kind {
-                ExprKind::Unary { expr, .. } | ExprKind::Try(expr) => self.in_expr(expr),
-                ExprKind::StrInterp(parts) => parts.iter().find_map(|p| match p {
-                    crate::ast::InterpPart::Hole(h) => self.in_expr(h),
-                    crate::ast::InterpPart::Lit(_) => None,
-                }),
-                ExprKind::Binary { lhs, rhs, .. } => {
-                    self.in_expr(lhs).or_else(|| self.in_expr(rhs))
-                }
-                ExprKind::Assign { target, value, .. } => {
-                    self.in_expr(target).or_else(|| self.in_expr(value))
-                }
-                ExprKind::Call { callee, args } => self
-                    .in_expr(callee)
-                    .or_else(|| args.iter().find_map(|a| self.in_expr(a))),
-                ExprKind::MethodCall { recv, args, .. } => self
-                    .in_expr(recv)
-                    .or_else(|| args.iter().find_map(|a| self.in_expr(a))),
-                ExprKind::Field { obj, .. } => self.in_expr(obj),
-                ExprKind::Index { obj, idx } => self.in_expr(obj).or_else(|| self.in_expr(idx)),
-                ExprKind::StructLit { fields, .. } => {
-                    fields.iter().find_map(|(_, v)| self.in_expr(v))
-                }
-                ExprKind::ListLit(items) => items.iter().find_map(|i| self.in_expr(i)),
-                ExprKind::MapLit(entries) => entries
-                    .iter()
-                    .find_map(|(k, v)| self.in_expr(k).or_else(|| self.in_expr(v))),
-                ExprKind::If { cond, then, else_ } => self
-                    .in_expr(cond)
-                    .or_else(|| self.in_block(then))
-                    .or_else(|| else_.as_ref().and_then(|e| self.in_expr(e))),
-                ExprKind::IfLet {
-                    scrutinee,
-                    then,
-                    else_,
-                    ..
-                } => self
-                    .in_expr(scrutinee)
-                    .or_else(|| self.in_block(then))
-                    .or_else(|| else_.as_ref().and_then(|e| self.in_expr(e))),
-                ExprKind::Match { scrutinee, arms } => self.in_expr(scrutinee).or_else(|| {
-                    arms.iter().find_map(|a| {
-                        a.guard
-                            .as_ref()
-                            .and_then(|g| self.in_expr(g))
-                            .or_else(|| self.in_expr(&a.body))
-                    })
-                }),
-                ExprKind::While { cond, body } => {
-                    self.in_expr(cond).or_else(|| self.in_block(body))
-                }
-                ExprKind::Loop { body } => self.in_block(body),
-                ExprKind::For { iter, body, .. } => {
-                    self.in_expr(iter).or_else(|| self.in_block(body))
-                }
-                ExprKind::Range { lo, hi, .. } => self.in_expr(lo).or_else(|| self.in_expr(hi)),
-                ExprKind::Return(Some(v)) => self.in_expr(v),
-                ExprKind::Block(b) => self.in_block(b),
-                ExprKind::Closure { body, .. } => self.in_expr(body),
-                _ => None,
-            }
-        }
-        fn in_block<'a>(&self, b: &'a Block) -> Option<&'a Expr> {
-            b.stmts.iter().find_map(|s| match s {
-                Stmt::Let { init, .. } => self.in_expr(init),
-                Stmt::LetElse {
-                    init, else_block, ..
-                } => self.in_expr(init).or_else(|| self.in_block(else_block)),
-                Stmt::Expr { expr, .. } => self.in_expr(expr),
-            })
+            walk_expr(self, e);
         }
     }
-    let finder = Finder { node };
-    for item in &file.items {
-        let found = match item {
-            Item::Fn(f) => finder.in_block(&f.body),
-            Item::Impl(im) => im.fns.iter().find_map(|f| finder.in_block(&f.body)),
-            _ => None,
-        };
-        if let Some(body) = found {
-            return Some((0, body));
-        }
-    }
-    None
+    let mut finder = Finder { node, found: None };
+    walk_file(&mut finder, file);
+    finder.found
 }
 
 struct LoopFrame {

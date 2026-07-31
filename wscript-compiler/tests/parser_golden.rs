@@ -338,15 +338,14 @@ fn render_expr_inner(src: &str, e: &Expr, out: &mut String, depth: usize) {
             render_expr(src, scrutinee, out, depth + 1);
             for arm in arms {
                 pad(out, depth + 1);
-                out.push_str(&format!(
-                    "arm {}{}\n",
-                    render_pat(&arm.pat),
-                    if arm.guard.is_some() {
-                        " if <guard>"
-                    } else {
-                        ""
-                    }
-                ));
+                out.push_str(&format!("arm {}\n", render_pat(&arm.pat)));
+                // The guard is a full expression; rendering it as `<guard>`
+                // hid its subtree from the goldens entirely.
+                if let Some(guard) = &arm.guard {
+                    pad(out, depth + 2);
+                    out.push_str("guard\n");
+                    render_expr(src, guard, out, depth + 3);
+                }
                 render_expr(src, &arm.body, out, depth + 2);
             }
         }
@@ -527,6 +526,49 @@ fn parser_snapshots() {
         }
     }
     common::report(failures);
+}
+
+/// `ast::Visit` and this renderer are two independent traversals of the
+/// same tree, so the risk is that they drift: someone adds an `ExprKind`,
+/// updates one and not the other. Both are exhaustive matches, so neither
+/// can silently *skip* a variant — but only comparing them catches a
+/// variant wired into one walk and not the other.
+///
+/// Once the LSP's `expr_index` is reachable from a test (it needs the lib
+/// target from #6), it belongs in this comparison too — it is a third
+/// traversal, kept iterative for stack reasons.
+#[test]
+fn visit_reaches_the_same_nodes_as_the_renderer() {
+    struct Ids(std::collections::HashSet<NodeId>);
+    impl<'a> Visit<'a> for Ids {
+        fn visit_expr(&mut self, e: &'a Expr) {
+            self.0.insert(e.id);
+            walk_expr(self, e);
+        }
+    }
+
+    for fixture in common::fixtures(std::path::Path::new("tests/fixtures/parser")) {
+        let src = std::fs::read_to_string(&fixture).unwrap();
+        let parsed = wscript_compiler::parse(&src);
+
+        let mut visited = Ids(std::collections::HashSet::new());
+        walk_file(&mut visited, &parsed.file);
+
+        let rendered: std::collections::HashSet<NodeId> = render(&src, &parsed.file)
+            .split('#')
+            .skip(1)
+            .filter_map(|s| s.split_whitespace().next())
+            .filter_map(|s| s.parse().ok())
+            .collect();
+
+        let only_visit: Vec<_> = visited.0.difference(&rendered).collect();
+        let only_render: Vec<_> = rendered.difference(&visited.0).collect();
+        assert!(
+            only_visit.is_empty() && only_render.is_empty(),
+            "{}: traversals disagree\n  ast::Visit only: {only_visit:?}\n  renderer only:   {only_render:?}",
+            fixture.display()
+        );
+    }
 }
 
 /// Node ids must be unique across a file — the checker's side tables are

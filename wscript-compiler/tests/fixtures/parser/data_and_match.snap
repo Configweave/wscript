@@ -10,7 +10,9 @@ fn f(e:E) -> int
         int 0  @5:17-5:18 #3
       arm E::B(n) | E::B(_)
         path n  @6:30-6:31 #9
-      arm E::C { v: v } if <guard>
+      arm E::C { v: v }
+        guard
+          path v  @7:23-7:24 #12
         int 1  @7:28-7:29 #13
       arm _
         int 2  @8:14-8:15 #15

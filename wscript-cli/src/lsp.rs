@@ -110,6 +110,13 @@ fn span_to_range(text: &str, span: wscript::Span) -> Range {
 /// runs on a tokio stack. A node is recorded when popped, its children
 /// later — parents always precede children in the output (the `find`
 /// tie-break below relies on that).
+///
+/// This deliberately does *not* use `ast::Visit`, which is recursive.
+/// `analyze_doc` runs the pipeline on a 32 MiB scoped thread, but this
+/// index is built afterwards on tokio's 2 MiB stack, and it runs on
+/// documents that failed to check — so a deep-but-parseable AST would
+/// reach it. The exhaustive match below keeps the compile-time guarantee
+/// that `Visit` provides; only the traversal strategy differs.
 fn expr_index(file: &ast::SourceFile) -> Vec<(wscript::Span, ast::NodeId)> {
     enum Work<'a> {
         E(&'a ast::Expr),
@@ -224,10 +231,28 @@ fn expr_index(file: &ast::SourceFile) -> Vec<(wscript::Span, ast::NodeId)> {
                 stack.push(Work::E(lo));
                 stack.push(Work::E(hi));
             }
-            Return(Some(v)) => stack.push(Work::E(v)),
+            Return(v) => {
+                if let Some(v) = v {
+                    stack.push(Work::E(v));
+                }
+            }
             Block(b) => stack.push(Work::B(b)),
             Closure { body, .. } => stack.push(Work::E(body)),
-            _ => {}
+            // Leaves, listed rather than caught by `_`: this walk cannot
+            // share `ast::walk_expr` (see the note above), so an exhaustive
+            // match is what makes a new expression form a compile error
+            // here instead of a subtree that silently stops being indexed.
+            IntLit(_)
+            | FloatLit(_)
+            | QuantityLit { .. }
+            | BoolLit(_)
+            | CharLit(_)
+            | StrLit(_)
+            | UnitLit
+            | Path(_)
+            | Break
+            | Continue
+            | Error => {}
         }
     }
     out
