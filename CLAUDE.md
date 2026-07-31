@@ -42,3 +42,20 @@ the skill (delete `.claude/skills/wscript` first — stale files aren't wiped).
   fans the same recipes out one per job, so the two cannot drift.
 - Regenerate the stdlib interface after changing registrations:
   `WSCRIPT_REGEN_WSCRIPTI=1 cargo test -p wscript-cli --test wscripti_gen`.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues for `Configweave/wscript`, driven via the `gh`
+CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical roles, each label string equal to its name. See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` and `docs/adr/` at the repo root. See
+`docs/agents/domain.md`.
