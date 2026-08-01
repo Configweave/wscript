@@ -80,6 +80,120 @@ struct Parser {
     depth_exceeded: bool,
 }
 
+/// The bracket pair around a delimited list.
+///
+/// Everything [`Parser::list`] needs beyond the element parser is derived
+/// from this: the closing token, whether newlines inside are noise, and
+/// where a malformed element resyncs to. A call site names the brackets it
+/// wrote and gets the rest, so the lexer's delimiter table stops being
+/// tribal knowledge — it used to surface as a `skip_newlines` present at
+/// some list sites and absent at others, with nothing at either saying why.
+#[derive(Clone, Copy)]
+enum Brackets {
+    /// `(` … `)`.
+    Paren,
+    /// `[` … `]`.
+    Bracket,
+    /// `{` … `}`, including the `#{` of a map literal.
+    Brace,
+    /// `|` … `|` — closure parameters. Not a lexer delimiter, so newlines
+    /// stay significant and end the list rather than being skipped.
+    Pipe,
+}
+
+impl Brackets {
+    fn close(self) -> TokenKind {
+        match self {
+            Brackets::Paren => TokenKind::RParen,
+            Brackets::Bracket => TokenKind::RBracket,
+            Brackets::Brace => TokenKind::RBrace,
+            Brackets::Pipe => TokenKind::Pipe,
+        }
+    }
+
+    /// Are newlines inside this list noise the list has to skip itself?
+    ///
+    /// Only in braces. The lexer suppresses newlines outright inside `(`
+    /// and `[` (`Delim::Paren`/`Delim::Bracket`), so there is nothing left
+    /// to skip; `{` and `#{` both push `Delim::Brace`, which does not. `|`
+    /// is not a delimiter at all, so a newline there ends the construct.
+    fn skips_newlines(self) -> bool {
+        matches!(self, Brackets::Brace)
+    }
+
+    /// Where a malformed element resyncs to: the list's own punctuation,
+    /// plus the boundaries it must not recover past.
+    ///
+    /// Four sets, one per bracket shape, replacing six literals that
+    /// expressed about four concepts — two of them the same three tokens
+    /// written in a different order.
+    ///
+    /// Outside braces the set also carries `{` and `}`, which are the
+    /// block *around* the list. They matter because the lexer suppresses
+    /// newlines inside `(` and `[`: without them the only stop reachable
+    /// in `fn main() { let x = [1 2\n}` is the `{` of the *next*
+    /// declaration, so recovery eats the block's `}` and the whole
+    /// declaration after it — the silent-declaration-loss that `starts_item`
+    /// was introduced to end. Inside braces `}` is already the close.
+    fn follow(self) -> &'static [TokenKind] {
+        match self {
+            Brackets::Paren => &[
+                TokenKind::Comma,
+                TokenKind::RParen,
+                TokenKind::Newline,
+                TokenKind::LBrace,
+                TokenKind::RBrace,
+            ],
+            Brackets::Bracket => &[
+                TokenKind::Comma,
+                TokenKind::RBracket,
+                TokenKind::Newline,
+                TokenKind::LBrace,
+                TokenKind::RBrace,
+            ],
+            Brackets::Pipe => &[
+                TokenKind::Comma,
+                TokenKind::Pipe,
+                TokenKind::Newline,
+                TokenKind::LBrace,
+                TokenKind::RBrace,
+            ],
+            Brackets::Brace => &[TokenKind::Comma, TokenKind::RBrace, TokenKind::Newline],
+        }
+    }
+
+    /// Can the list pick up again from the token recovery landed on?
+    ///
+    /// Its own punctuation, yes. A newline only inside braces, where it is
+    /// layout between entries; everywhere else a newline is the end of the
+    /// construct, and so is anything else in the follow set.
+    fn resumes_at(self, kind: &TokenKind) -> bool {
+        *kind == TokenKind::Comma
+            || *kind == self.close()
+            || (self.skips_newlines() && *kind == TokenKind::Newline)
+    }
+}
+
+/// What ends one element of a list and starts the next.
+#[derive(Clone, Copy)]
+enum Sep {
+    /// A `,`.
+    Comma,
+    /// A `,` or a newline — `units` bodies and `match` arms read better as
+    /// a table, one entry per line.
+    CommaOrNewline,
+}
+
+impl Sep {
+    /// The separator as it reads in `expected …, found …`.
+    fn describe(self) -> &'static str {
+        match self {
+            Sep::Comma => "`,`",
+            Sep::CommaOrNewline => "`,`, a newline",
+        }
+    }
+}
+
 impl Parser {
     // ------------------------------------------------------------ cursor
 
@@ -243,6 +357,122 @@ impl Parser {
         }
     }
 
+    // --------------------------------------------------- delimited lists
+
+    /// Skip tokens until one of `stops` (or EOF). Does not consume the stop.
+    fn recover_to(&mut self, stops: &[TokenKind]) {
+        while !self.at_eof() && !stops.iter().any(|s| self.at(s)) {
+            self.bump();
+        }
+    }
+
+    /// Resync to the next method signature in a `trait` or `impl` body.
+    fn sync_to_method(&mut self) {
+        self.recover_to(&[TokenKind::KwFn, TokenKind::RBrace]);
+    }
+
+    /// Resync to the end of the current statement.
+    fn sync_to_stmt_end(&mut self) {
+        self.recover_to(&[TokenKind::Newline, TokenKind::Semi, TokenKind::RBrace]);
+    }
+
+    /// Consume the separator between two elements. Reports nothing: a
+    /// missing separator is [`Self::list`]'s to describe, because only it
+    /// knows what would have closed the list instead.
+    fn eat_sep(&mut self, brackets: Brackets, sep: Sep) -> bool {
+        if self.eat(&TokenKind::Comma) {
+            return true;
+        }
+        match sep {
+            // A newline ends an entry as well as a `,` does.
+            Sep::CommaOrNewline if self.at(&TokenKind::Newline) => {
+                self.skip_newlines();
+                true
+            }
+            // Inside braces a newline *before* the `,` is only layout.
+            Sep::Comma if brackets.skips_newlines() => {
+                self.skip_newlines();
+                self.eat(&TokenKind::Comma)
+            }
+            _ => false,
+        }
+    }
+
+    /// Parse a `close`-terminated, `sep`-separated list of elements. The
+    /// opening bracket is already consumed — call sites reach it too many
+    /// ways (`expect` with a bespoke message, a bare `eat`, a `?`) for one
+    /// signature to cover — so `open` is its span, which is where an
+    /// unclosed list is reported: the reader needs the bracket that was
+    /// never closed, not the end of the file where that became apparent.
+    /// `f` parses one element and returns `None` when it could not, which
+    /// resyncs to [`Brackets::follow`] and carries on.
+    ///
+    /// `what` names the list in diagnostics ("argument list", "map
+    /// literal"); the punctuation around it is derived, so no call site
+    /// spells out `,` or the closing bracket.
+    ///
+    /// Owning all of a list's punctuation is what makes this one
+    /// convention rather than sixteen: every `expect` at a separator or a
+    /// closing bracket happens here, so no call site has to choose between
+    /// propagating the `Option` it returns, ignoring it, and expecting then
+    /// recovering then eating — the three that were in use.
+    ///
+    /// Trailing separators are accepted everywhere, and the loop cannot
+    /// spin: an iteration that consumed nothing ends the list. Not every
+    /// hand-rolled loop had that property. `struct S { : bool, }` parked
+    /// the old struct-field loop on the `,` — `recover_to` stops without
+    /// consuming, and the `continue` re-entered on the same token — and it
+    /// pushed a fresh diagnostic per turn until the process was OOM-killed.
+    fn list<T>(
+        &mut self,
+        open: Span,
+        brackets: Brackets,
+        sep: Sep,
+        what: &str,
+        mut f: impl FnMut(&mut Self) -> Option<T>,
+    ) -> Vec<T> {
+        let close = brackets.close();
+        let mut out = Vec::new();
+        loop {
+            if brackets.skips_newlines() {
+                self.skip_newlines();
+            }
+            if self.eat(&close) {
+                return out;
+            }
+            if self.at_eof() {
+                let msg = format!("unclosed {what}: missing {}", close.describe());
+                self.error("E0100", open, msg);
+                return out;
+            }
+            let start = self.pos;
+            match f(self) {
+                Some(item) => out.push(item),
+                None => self.recover_to(brackets.follow()),
+            }
+            if self.eat_sep(brackets, sep) {
+                continue;
+            }
+            // The close is left for the top of the loop, which is what
+            // makes a trailing separator legal without a second check.
+            if self.at(&close) {
+                continue;
+            }
+            let msg = format!("{} or {} in {what}", sep.describe(), close.describe());
+            self.expect(&close, &msg);
+            self.recover_to(brackets.follow());
+            if self.eat(&TokenKind::Comma) {
+                continue;
+            }
+            // Nothing to resume from — the construct ended, or recovery
+            // could not move at all. Either way the list is over; carrying
+            // on would report the same token forever.
+            if self.pos == start || !brackets.resumes_at(self.kind()) {
+                return out;
+            }
+        }
+    }
+
     // ------------------------------------------------------------- items
 
     fn source_file(&mut self) -> SourceFile {
@@ -390,19 +620,12 @@ impl Parser {
                 );
             }
             if self.eat(&TokenKind::LParen) {
-                loop {
-                    if self.eat(&TokenKind::RParen) {
-                        break;
-                    }
-                    match self.expect_ident("trait name in derive list") {
-                        Some(t) => derives.push(t),
-                        None => break,
-                    }
-                    if !self.eat(&TokenKind::Comma) {
-                        self.expect(&TokenKind::RParen, "`)` to close the derive list");
-                        break;
-                    }
-                }
+                let open = self.prev_span();
+                derives.extend(
+                    self.list(open, Brackets::Paren, Sep::Comma, "derive list", |p| {
+                        p.expect_ident("trait name in derive list")
+                    }),
+                );
             }
             self.expect(&TokenKind::RBracket, "`]` to close the attribute");
             self.skip_newlines();
@@ -490,8 +713,8 @@ impl Parser {
         } else {
             Vec::new()
         };
-        self.expect(&TokenKind::LParen, "`(` to start the parameter list")?;
-        let params = self.params(allow_self);
+        let open = self.expect(&TokenKind::LParen, "`(` to start the parameter list")?;
+        let params = self.params(open, allow_self);
         let mut ret = None;
         if self.eat(&TokenKind::Arrow) {
             ret = Some(self.type_expr());
@@ -579,81 +802,61 @@ impl Parser {
         })
     }
 
-    fn params(&mut self, allow_self: bool) -> Vec<Param> {
-        let mut params = Vec::new();
+    /// `open`: the span of the `(`, for an unclosed parameter list.
+    fn params(&mut self, open: Span, allow_self: bool) -> Vec<Param> {
         let mut first = true;
-        loop {
-            if self.eat(&TokenKind::RParen) {
-                break;
-            }
-            if !first && !self.eat(&TokenKind::Comma) {
-                self.expect(&TokenKind::RParen, "`,` or `)` in parameter list");
-                self.recover_to(&[TokenKind::RParen, TokenKind::LBrace, TokenKind::Newline]);
-                self.eat(&TokenKind::RParen);
-                break;
-            }
-            if self.eat(&TokenKind::RParen) {
-                break; // trailing comma
-            }
-            if self.at(&TokenKind::KwSelf) {
-                let span = self.bump().span;
-                if !allow_self {
-                    self.error_help(
-                        "E0104",
-                        span,
-                        "`self` parameter outside an `impl` or `trait` block",
-                        "`self` is only valid as the first parameter of a method",
-                    );
-                } else if !first {
-                    self.error("E0104", span, "`self` must be the first parameter");
-                }
-                params.push(Param {
-                    name: Ident {
-                        name: "self".into(),
-                        span,
-                    },
-                    ty: None,
-                    is_self: true,
-                    span,
-                });
-                first = false;
-                continue;
-            }
-            let name = match self.expect_ident("parameter name") {
-                Some(n) => n,
-                None => {
-                    self.recover_to(&[
-                        TokenKind::Comma,
-                        TokenKind::RParen,
-                        TokenKind::LBrace,
-                        TokenKind::Newline,
-                    ]);
-                    first = false;
-                    continue;
-                }
-            };
-            let ty = if self.eat(&TokenKind::Colon) {
-                Some(self.type_expr())
-            } else {
-                let span = name.span;
+        self.list(open, Brackets::Paren, Sep::Comma, "parameter list", |p| {
+            let is_first = std::mem::replace(&mut first, false);
+            p.param(is_first, allow_self)
+        })
+    }
+
+    /// One parameter: `name: type`, or a bare `self` heading a method.
+    /// `first`: this is the parameter list's first element, the only
+    /// position `self` may occupy.
+    fn param(&mut self, first: bool, allow_self: bool) -> Option<Param> {
+        if self.at(&TokenKind::KwSelf) {
+            let span = self.bump().span;
+            if !allow_self {
                 self.error_help(
-                    "E0105",
+                    "E0104",
                     span,
-                    format!("parameter `{}` is missing a type annotation", name.name),
-                    "annotations are required on function parameters: `name: type` (PRD §3.3)",
+                    "`self` parameter outside an `impl` or `trait` block",
+                    "`self` is only valid as the first parameter of a method",
                 );
-                None
-            };
-            let span = name.span.to(self.prev_span());
-            params.push(Param {
-                name,
-                ty,
-                is_self: false,
+            } else if !first {
+                self.error("E0104", span, "`self` must be the first parameter");
+            }
+            return Some(Param {
+                name: Ident {
+                    name: "self".into(),
+                    span,
+                },
+                ty: None,
+                is_self: true,
                 span,
             });
-            first = false;
         }
-        params
+        let name = self.expect_ident("parameter name")?;
+        let ty = if self.eat(&TokenKind::Colon) {
+            Some(self.type_expr())
+        } else {
+            let span = name.span;
+            self.error_help(
+                "E0105",
+                span,
+                format!("parameter `{}` is missing a type annotation", name.name),
+                "annotations are required on function parameters: `name: type` (PRD §3.3)",
+            );
+            None
+        };
+        let span = name.span.to(self.prev_span());
+        Some(Param {
+            name,
+            ty,
+            is_self: false,
+            span,
+        })
     }
 
     fn struct_decl(
@@ -664,40 +867,14 @@ impl Parser {
     ) -> Option<StructDecl> {
         let kw = self.bump().span;
         let name = self.expect_ident("struct name")?;
-        self.expect(&TokenKind::LBrace, "`{` to start the field list")?;
-        let mut fields = Vec::new();
-        loop {
-            self.skip_newlines();
-            if self.eat(&TokenKind::RBrace) {
-                break;
-            }
-            if self.at_eof() {
-                let span = self.span();
-                self.error("E0100", span, "unclosed struct declaration");
-                break;
-            }
-            let fname = match self.expect_ident("field name") {
-                Some(n) => n,
-                None => {
-                    self.recover_to(&[TokenKind::Comma, TokenKind::Newline, TokenKind::RBrace]);
-                    continue;
-                }
-            };
-            self.expect(&TokenKind::Colon, "`:` after field name");
-            let ty = self.type_expr();
-            let span = fname.span.to(ty.span);
-            fields.push(FieldDecl {
-                name: fname,
-                ty,
-                span,
-            });
-            self.skip_newlines();
-            if !self.eat(&TokenKind::Comma) && !self.at(&TokenKind::RBrace) {
-                self.expect(&TokenKind::RBrace, "`,` or `}` after field");
-                self.recover_to(&[TokenKind::Comma, TokenKind::Newline, TokenKind::RBrace]);
-                self.eat(&TokenKind::Comma);
-            }
-        }
+        let open = self.expect(&TokenKind::LBrace, "`{` to start the field list")?;
+        let fields = self.list(
+            open,
+            Brackets::Brace,
+            Sep::Comma,
+            "struct declaration",
+            Self::field_decl,
+        );
         let span = kw.to(self.prev_span());
         Some(StructDecl {
             name,
@@ -707,6 +884,18 @@ impl Parser {
             doc,
             span,
         })
+    }
+
+    /// One `name: type` field. Shared by `struct` declarations and enum
+    /// struct-variants, which is the point: they carried separate loops
+    /// for the same grammar, and the copies had drifted — the struct's
+    /// resynced on a malformed field, the variant's abandoned the list.
+    fn field_decl(&mut self) -> Option<FieldDecl> {
+        let name = self.expect_ident("field name")?;
+        self.expect(&TokenKind::Colon, "`:` after field name");
+        let ty = self.type_expr();
+        let span = name.span.to(ty.span);
+        Some(FieldDecl { name, ty, span })
     }
 
     /// `units Duration: int { ns = 1, ms = 1_000 * us }` — entries may be
@@ -719,43 +908,20 @@ impl Parser {
             "`:` and a backing type (`int` or `float`)",
         );
         let base = self.type_expr();
-        self.expect(&TokenKind::LBrace, "`{` to start the unit list")?;
-        let mut units = Vec::new();
-        loop {
-            self.skip_newlines();
-            if self.eat(&TokenKind::RBrace) {
-                break;
-            }
-            if self.at_eof() {
-                let span = self.span();
-                self.error("E0100", span, "unclosed `units` declaration");
-                break;
-            }
-            let uname = match self.expect_ident("unit name") {
-                Some(n) => n,
-                None => {
-                    self.recover_to(&[TokenKind::Comma, TokenKind::Newline, TokenKind::RBrace]);
-                    continue;
-                }
-            };
-            self.expect(&TokenKind::Eq, "`=` and a conversion factor");
-            let factor = self.expr();
-            let span = uname.span.to(factor.span);
-            units.push(UnitEntry {
-                name: uname,
-                factor,
-                span,
-            });
-            // A newline ends an entry just as well as a comma.
-            if !self.eat(&TokenKind::Comma)
-                && !self.at(&TokenKind::Newline)
-                && !self.at(&TokenKind::RBrace)
-            {
-                self.expect(&TokenKind::RBrace, "`,`, a newline or `}` after a unit");
-                self.recover_to(&[TokenKind::Comma, TokenKind::Newline, TokenKind::RBrace]);
-                self.eat(&TokenKind::Comma);
-            }
-        }
+        let open = self.expect(&TokenKind::LBrace, "`{` to start the unit list")?;
+        let units = self.list(
+            open,
+            Brackets::Brace,
+            Sep::CommaOrNewline,
+            "`units` declaration",
+            |p| {
+                let name = p.expect_ident("unit name")?;
+                p.expect(&TokenKind::Eq, "`=` and a conversion factor");
+                let factor = p.expr();
+                let span = name.span.to(factor.span);
+                Some(UnitEntry { name, factor, span })
+            },
+        );
         let span = kw.to(self.prev_span());
         Some(UnitsDecl {
             name,
@@ -770,89 +936,33 @@ impl Parser {
     fn enum_decl(&mut self, derives: Vec<Ident>, doc: Option<String>) -> Option<EnumDecl> {
         let kw = self.bump().span;
         let name = self.expect_ident("enum name")?;
-        self.expect(&TokenKind::LBrace, "`{` to start the variant list")?;
-        let mut variants = Vec::new();
-        loop {
-            self.skip_newlines();
-            if self.eat(&TokenKind::RBrace) {
-                break;
-            }
-            if self.at_eof() {
-                let span = self.span();
-                self.error("E0100", span, "unclosed enum declaration");
-                break;
-            }
-            let vname = match self.expect_ident("variant name") {
-                Some(n) => n,
-                None => {
-                    self.recover_to(&[TokenKind::Comma, TokenKind::Newline, TokenKind::RBrace]);
-                    continue;
-                }
-            };
-            let body = if self.eat(&TokenKind::LParen) {
-                // tuple variant
-                let mut tys = Vec::new();
-                loop {
-                    if self.eat(&TokenKind::RParen) {
-                        break;
-                    }
-                    tys.push(self.type_expr());
-                    if !self.eat(&TokenKind::Comma) {
-                        self.expect(&TokenKind::RParen, "`,` or `)` in variant payload");
-                        break;
-                    }
-                }
-                VariantBody::Tuple(tys)
-            } else if self.eat(&TokenKind::LBrace) {
-                // struct variant
-                let mut fields = Vec::new();
-                loop {
-                    self.skip_newlines();
-                    if self.eat(&TokenKind::RBrace) {
-                        break;
-                    }
-                    let fname = match self.expect_ident("field name") {
-                        Some(n) => n,
-                        None => {
-                            self.recover_to(&[
-                                TokenKind::Comma,
-                                TokenKind::Newline,
-                                TokenKind::RBrace,
-                            ]);
-                            continue;
-                        }
-                    };
-                    self.expect(&TokenKind::Colon, "`:` after field name");
-                    let ty = self.type_expr();
-                    let span = fname.span.to(ty.span);
-                    fields.push(FieldDecl {
-                        name: fname,
-                        ty,
-                        span,
-                    });
-                    self.skip_newlines();
-                    if !self.eat(&TokenKind::Comma) && !self.at(&TokenKind::RBrace) {
-                        self.expect(&TokenKind::RBrace, "`,` or `}` after field");
-                        break;
-                    }
-                }
-                VariantBody::Struct(fields)
+        let open = self.expect(&TokenKind::LBrace, "`{` to start the variant list")?;
+        let variants = self.list(open, Brackets::Brace, Sep::Comma, "enum declaration", |p| {
+            let name = p.expect_ident("variant name")?;
+            let body = if p.eat(&TokenKind::LParen) {
+                let open = p.prev_span();
+                VariantBody::Tuple(p.list(
+                    open,
+                    Brackets::Paren,
+                    Sep::Comma,
+                    "variant payload",
+                    |p| Some(p.type_expr()),
+                ))
+            } else if p.eat(&TokenKind::LBrace) {
+                let open = p.prev_span();
+                VariantBody::Struct(p.list(
+                    open,
+                    Brackets::Brace,
+                    Sep::Comma,
+                    "variant field list",
+                    Self::field_decl,
+                ))
             } else {
                 VariantBody::Unit
             };
-            let span = vname.span.to(self.prev_span());
-            variants.push(VariantDecl {
-                name: vname,
-                body,
-                span,
-            });
-            self.skip_newlines();
-            if !self.eat(&TokenKind::Comma) && !self.at(&TokenKind::RBrace) {
-                self.expect(&TokenKind::RBrace, "`,` or `}` after variant");
-                self.recover_to(&[TokenKind::Comma, TokenKind::Newline, TokenKind::RBrace]);
-                self.eat(&TokenKind::Comma);
-            }
-        }
+            let span = name.span.to(p.prev_span());
+            Some(VariantDecl { name, body, span })
+        });
         let span = kw.to(self.prev_span());
         Some(EnumDecl {
             name,
@@ -886,7 +996,7 @@ impl Parser {
                     span,
                     format!("expected `fn` method signature in trait body, found {found}"),
                 );
-                self.recover_to(&[TokenKind::KwFn, TokenKind::RBrace]);
+                self.sync_to_method();
                 continue;
             }
             let kw_fn = self.bump().span;
@@ -894,8 +1004,10 @@ impl Parser {
                 Some(n) => n,
                 None => continue,
             };
-            self.expect(&TokenKind::LParen, "`(` to start the parameter list");
-            let mut params = self.params(true);
+            let open = self
+                .expect(&TokenKind::LParen, "`(` to start the parameter list")
+                .unwrap_or(mname.span);
+            let mut params = self.params(open, true);
             if params.first().is_none_or(|p| !p.is_self) {
                 self.error_help(
                     "E0106",
@@ -969,13 +1081,13 @@ impl Parser {
                     span,
                     format!("expected `fn` in impl body, found {found}"),
                 );
-                self.recover_to(&[TokenKind::KwFn, TokenKind::RBrace]);
+                self.sync_to_method();
                 continue;
             }
             if let Some(f) = self.fn_decl(true, doc) {
                 fns.push(f);
             } else {
-                self.recover_to(&[TokenKind::KwFn, TokenKind::RBrace]);
+                self.sync_to_method();
             }
         }
         let span = kw.to(self.prev_span());
@@ -985,13 +1097,6 @@ impl Parser {
             fns,
             span,
         })
-    }
-
-    /// Skip tokens until one of `stops` (or EOF). Does not consume the stop.
-    fn recover_to(&mut self, stops: &[TokenKind]) {
-        while !self.at_eof() && !stops.iter().any(|s| self.at(s)) {
-            self.bump();
-        }
     }
 
     // ------------------------------------------------------------- types
@@ -1026,18 +1131,12 @@ impl Parser {
             }
             TokenKind::KwFn => {
                 self.bump();
-                self.expect(&TokenKind::LParen, "`(` in function type");
-                let mut params = Vec::new();
-                loop {
-                    if self.eat(&TokenKind::RParen) {
-                        break;
-                    }
-                    params.push(self.type_expr());
-                    if !self.eat(&TokenKind::Comma) {
-                        self.expect(&TokenKind::RParen, "`,` or `)` in function type");
-                        break;
-                    }
-                }
+                let open = self
+                    .expect(&TokenKind::LParen, "`(` in function type")
+                    .unwrap_or(start);
+                let params = self.list(open, Brackets::Paren, Sep::Comma, "function type", |p| {
+                    Some(p.type_expr())
+                });
                 let ret = if self.eat(&TokenKind::Arrow) {
                     Some(Box::new(self.type_expr()))
                 } else {
@@ -1067,17 +1166,11 @@ impl Parser {
                     span: self.bump().span,
                 };
                 if self.eat(&TokenKind::LBracket) {
-                    let mut args = Vec::new();
-                    loop {
-                        if self.eat(&TokenKind::RBracket) {
-                            break;
-                        }
-                        args.push(self.type_expr());
-                        if !self.eat(&TokenKind::Comma) {
-                            self.expect(&TokenKind::RBracket, "`,` or `]` in type arguments");
-                            break;
-                        }
-                    }
+                    let open = self.prev_span();
+                    let args =
+                        self.list(open, Brackets::Bracket, Sep::Comma, "type arguments", |p| {
+                            Some(p.type_expr())
+                        });
                     TypeExpr {
                         kind: TypeExprKind::App(ident, args),
                         span: start.to(self.prev_span()),
@@ -1138,7 +1231,7 @@ impl Parser {
         let expr = self.expr();
         if matches!(expr.kind, ExprKind::Error) {
             // Recovery: resync to a statement boundary.
-            self.recover_to(&[TokenKind::Newline, TokenKind::Semi, TokenKind::RBrace]);
+            self.sync_to_stmt_end();
         }
         let terminated = self.terminate_stmt();
         Stmt::Expr { expr, terminated }
@@ -1167,7 +1260,7 @@ impl Parser {
                     format!("expected end of statement, found {found}"),
                     "statements end at a newline; use `;` to put several on one line",
                 );
-                self.recover_to(&[TokenKind::Newline, TokenKind::Semi, TokenKind::RBrace]);
+                self.sync_to_stmt_end();
                 self.eat(&TokenKind::Newline);
                 false
             }
@@ -1264,7 +1357,7 @@ impl Parser {
     /// A scoped call rather than eight hand-balanced save/restore pairs:
     /// a missed restore silently disabled struct literals for an entire
     /// subtree, with no diagnostic.
-    fn with_struct_lits(&mut self, allowed: bool, f: impl FnOnce(&mut Self) -> Expr) -> Expr {
+    fn with_struct_lits<T>(&mut self, allowed: bool, f: impl FnOnce(&mut Self) -> T) -> T {
         let saved = std::mem::replace(&mut self.no_struct_lit, !allowed);
         let out = f(self);
         self.no_struct_lit = saved;
@@ -1288,37 +1381,21 @@ impl Parser {
     /// them (only `Eq`, `Ord`, `Clone` in this release).
     fn type_param_list(&mut self) -> Vec<TypeParam> {
         let open = self.bump().span; // `[`
-        let mut out = Vec::new();
-        loop {
-            self.skip_newlines();
-            if self.eat(&TokenKind::RBracket) {
-                break;
-            }
-            let Some(name) = self.expect_ident("type parameter name") else {
-                self.recover_to_close_bracket();
-                break;
-            };
-            let bound = if self.eat(&TokenKind::Colon) {
-                self.expect_ident("bound name after `:` (e.g. `T: Ord`)")
-            } else {
-                None
-            };
-            out.push(TypeParam { name, bound });
-            self.skip_newlines();
-            if !self.eat(&TokenKind::Comma) {
-                if !self.eat(&TokenKind::RBracket) {
-                    let found = self.kind().describe();
-                    let span = self.span();
-                    self.error(
-                        "E0100",
-                        span,
-                        format!("expected `]` to close the type parameter list, found {found}"),
-                    );
-                    self.recover_to_close_bracket();
-                }
-                break;
-            }
-        }
+        let out = self.list(
+            open,
+            Brackets::Bracket,
+            Sep::Comma,
+            "type parameter list",
+            |p| {
+                let name = p.expect_ident("type parameter name")?;
+                let bound = if p.eat(&TokenKind::Colon) {
+                    p.expect_ident("bound name after `:` (e.g. `T: Ord`)")
+                } else {
+                    None
+                };
+                Some(TypeParam { name, bound })
+            },
+        );
         if out.is_empty() {
             self.error_help(
                 "E0255",
@@ -1328,23 +1405,6 @@ impl Parser {
             );
         }
         out
-    }
-
-    /// Skip tokens until just past a `]` (or a newline/EOF) — recovery
-    /// for malformed type-parameter lists.
-    fn recover_to_close_bracket(&mut self) {
-        loop {
-            match self.kind() {
-                TokenKind::RBracket => {
-                    self.bump();
-                    break;
-                }
-                TokenKind::Newline | TokenKind::Eof | TokenKind::LBrace => break,
-                _ => {
-                    self.bump();
-                }
-            }
-        }
     }
 
     /// Parse one interpolation hole's pre-lexed tokens (absolute spans,
@@ -1543,8 +1603,8 @@ impl Parser {
             }
             match self.kind() {
                 TokenKind::LParen => {
-                    self.bump();
-                    let args = self.call_args();
+                    let open = self.bump().span;
+                    let args = self.call_args(open);
                     let span = expr.span.to(self.prev_span());
                     expr = self.mk(
                         ExprKind::Call {
@@ -1581,7 +1641,8 @@ impl Parser {
                         }
                     };
                     if self.eat(&TokenKind::LParen) {
-                        let args = self.call_args();
+                        let open = self.prev_span();
+                        let args = self.call_args(open);
                         let span = expr.span.to(self.prev_span());
                         expr = self.mk(
                             ExprKind::MethodCall {
@@ -1637,26 +1698,12 @@ impl Parser {
         expr
     }
 
-    fn call_args(&mut self) -> Vec<Expr> {
-        let mut args = Vec::new();
-        loop {
-            if self.eat(&TokenKind::RParen) {
-                break;
-            }
-            if self.at_eof() {
-                let span = self.span();
-                self.error("E0100", span, "unclosed call: missing `)`");
-                break;
-            }
+    /// `open`: the span of the `(`, for an unclosed argument list.
+    fn call_args(&mut self, open: Span) -> Vec<Expr> {
+        self.list(open, Brackets::Paren, Sep::Comma, "argument list", |p| {
             // Struct literals are fine inside call parens.
-            let arg = self.with_struct_lits(true, |p| p.expr());
-            args.push(arg);
-            if !self.eat(&TokenKind::Comma) {
-                self.expect(&TokenKind::RParen, "`,` or `)` in arguments");
-                break;
-            }
-        }
-        args
+            Some(p.with_struct_lits(true, |p| p.expr()))
+        })
     }
 
     fn primary_expr(&mut self) -> Expr {
@@ -1804,55 +1851,22 @@ impl Parser {
 
     fn list_lit_expr(&mut self) -> Expr {
         let start = self.bump().span; // `[`
-        let mut items = Vec::new();
-        loop {
-            if self.eat(&TokenKind::RBracket) {
-                break;
-            }
-            if self.at_eof() {
-                let span = self.span();
-                self.error("E0100", span, "unclosed list literal: missing `]`");
-                break;
-            }
-            let item = self.with_struct_lits(true, |p| p.expr());
-            items.push(item);
-            if !self.eat(&TokenKind::Comma) {
-                self.expect(&TokenKind::RBracket, "`,` or `]` in list literal");
-                break;
-            }
-        }
+        let items = self.list(start, Brackets::Bracket, Sep::Comma, "list literal", |p| {
+            Some(p.with_struct_lits(true, |p| p.expr()))
+        });
         let span = start.to(self.prev_span());
         self.mk(ExprKind::ListLit(items), span)
     }
 
     fn map_lit_expr(&mut self) -> Expr {
         let start = self.bump().span; // `#{`
-        let mut entries = Vec::new();
-        loop {
-            self.skip_newlines();
-            if self.eat(&TokenKind::RBrace) {
-                break;
-            }
-            if self.at_eof() {
-                let span = self.span();
-                self.error("E0100", span, "unclosed map literal: missing `}`");
-                break;
-            }
-            let (key, value) = {
-                let saved = std::mem::replace(&mut self.no_struct_lit, false);
-                let key = self.expr();
-                self.expect(&TokenKind::Colon, "`:` between map key and value");
-                let value = self.expr();
-                self.no_struct_lit = saved;
-                (key, value)
-            };
-            entries.push((key, value));
-            self.skip_newlines();
-            if !self.eat(&TokenKind::Comma) && !self.at(&TokenKind::RBrace) {
-                self.expect(&TokenKind::RBrace, "`,` or `}` in map literal");
-                break;
-            }
-        }
+        let entries = self.list(start, Brackets::Brace, Sep::Comma, "map literal", |p| {
+            p.with_struct_lits(true, |p| {
+                let key = p.expr();
+                p.expect(&TokenKind::Colon, "`:` between map key and value");
+                Some((key, p.expr()))
+            })
+        });
         let span = start.to(self.prev_span());
         self.mk(ExprKind::MapLit(entries), span)
     }
@@ -1938,42 +1952,22 @@ impl Parser {
         // Struct literal? Only when `{` follows and we're not in a
         // condition/scrutinee header position.
         if self.at(&TokenKind::LBrace) && !self.no_struct_lit {
-            self.bump();
-            let mut fields = Vec::new();
-            loop {
-                self.skip_newlines();
-                if self.eat(&TokenKind::RBrace) {
-                    break;
-                }
-                if self.at_eof() {
-                    self.error("E0100", start, "unclosed struct literal: missing `}`");
-                    break;
-                }
-                let fname = match self.expect_ident("field name") {
-                    Some(n) => n,
-                    None => {
-                        self.recover_to(&[TokenKind::Comma, TokenKind::Newline, TokenKind::RBrace]);
-                        continue;
-                    }
-                };
-                let value = if self.eat(&TokenKind::Colon) {
-                    self.expr()
+            let open = self.bump().span;
+            let fields = self.list(open, Brackets::Brace, Sep::Comma, "struct literal", |p| {
+                let name = p.expect_ident("field name")?;
+                let value = if p.eat(&TokenKind::Colon) {
+                    p.expr()
                 } else {
                     // Field shorthand: `Point { x, y }`.
-                    let id = self.id();
+                    let id = p.id();
                     Expr {
-                        kind: ExprKind::Path(vec![fname.clone()]),
-                        span: fname.span,
+                        kind: ExprKind::Path(vec![name.clone()]),
+                        span: name.span,
                         id,
                     }
                 };
-                fields.push((fname, value));
-                self.skip_newlines();
-                if !self.eat(&TokenKind::Comma) && !self.at(&TokenKind::RBrace) {
-                    self.expect(&TokenKind::RBrace, "`,` or `}` in struct literal");
-                    break;
-                }
-            }
+                Some((name, value))
+            });
             let span = start.to(self.prev_span());
             return self.mk(
                 ExprKind::StructLit {
@@ -2058,50 +2052,35 @@ impl Parser {
         let start = self.bump().span; // `match`
         let scrutinee = self.expr_no_struct_lit();
         self.skip_newlines();
-        self.expect(&TokenKind::LBrace, "`{` to start the match arms");
-        let mut arms = Vec::new();
-        loop {
-            self.skip_newlines();
-            if self.eat(&TokenKind::RBrace) {
-                break;
-            }
-            if self.at_eof() {
-                self.error("E0100", start, "unclosed match expression: missing `}`");
-                break;
-            }
-            let arm_start = self.span();
-            let pat = self.pattern();
-            let guard = if self.eat(&TokenKind::KwIf) {
-                Some(self.expr_no_struct_lit())
-            } else {
-                None
-            };
-            self.expect(&TokenKind::FatArrow, "`=>` after the match pattern");
-            self.skip_newlines();
-            let body = self.expr();
-            let span = arm_start.to(body.span);
-            arms.push(MatchArm {
-                pat,
-                guard,
-                body,
-                span,
-            });
-            // Arms are separated by `,` and/or newline.
-            let separated =
-                self.eat(&TokenKind::Comma) || matches!(self.kind(), TokenKind::Newline);
-            self.skip_newlines();
-            if !separated && !self.at(&TokenKind::RBrace) {
-                let found = self.kind().describe();
-                let span = self.span();
-                self.error(
-                    "E0100",
+        let open = self
+            .expect(&TokenKind::LBrace, "`{` to start the match arms")
+            .unwrap_or(start);
+        // Arms are separated by `,` and/or a newline.
+        let arms = self.list(
+            open,
+            Brackets::Brace,
+            Sep::CommaOrNewline,
+            "match expression",
+            |p| {
+                let arm_start = p.span();
+                let pat = p.pattern();
+                let guard = if p.eat(&TokenKind::KwIf) {
+                    Some(p.expr_no_struct_lit())
+                } else {
+                    None
+                };
+                p.expect(&TokenKind::FatArrow, "`=>` after the match pattern");
+                p.skip_newlines();
+                let body = p.expr();
+                let span = arm_start.to(body.span);
+                Some(MatchArm {
+                    pat,
+                    guard,
+                    body,
                     span,
-                    format!("expected `,` or `}}` after match arm, found {found}"),
-                );
-                self.recover_to(&[TokenKind::Comma, TokenKind::Newline, TokenKind::RBrace]);
-                self.eat(&TokenKind::Comma);
-            }
-        }
+                })
+            },
+        );
         let span = start.to(self.prev_span());
         self.mk(
             ExprKind::Match {
@@ -2118,33 +2097,22 @@ impl Parser {
         if self.eat(&TokenKind::OrOr) {
             // `||` — empty parameter list.
         } else {
-            self.bump(); // `|`
-            loop {
-                if self.eat(&TokenKind::Pipe) {
-                    break;
-                }
-                let name = match self.expect_ident("closure parameter") {
-                    Some(n) => n,
-                    None => {
-                        self.recover_to(&[TokenKind::Pipe, TokenKind::Comma, TokenKind::Newline]);
-                        if !self.eat(&TokenKind::Comma) {
-                            self.eat(&TokenKind::Pipe);
-                            break;
-                        }
-                        continue;
-                    }
-                };
-                let ty = if self.eat(&TokenKind::Colon) {
-                    Some(self.type_expr())
-                } else {
-                    None
-                };
-                params.push((name, ty));
-                if !self.eat(&TokenKind::Comma) {
-                    self.expect(&TokenKind::Pipe, "`,` or `|` in closure parameters");
-                    break;
-                }
-            }
+            let open = self.bump().span; // `|`
+            params = self.list(
+                open,
+                Brackets::Pipe,
+                Sep::Comma,
+                "closure parameters",
+                |p| {
+                    let name = p.expect_ident("closure parameter")?;
+                    let ty = if p.eat(&TokenKind::Colon) {
+                        Some(p.type_expr())
+                    } else {
+                        None
+                    };
+                    Some((name, ty))
+                },
+            );
         }
         let ret = if self.eat(&TokenKind::Arrow) {
             Some(self.type_expr())
@@ -2304,24 +2272,17 @@ impl Parser {
                 }
                 if self.eat(&TokenKind::LParen) {
                     // tuple variant pattern
-                    let mut pats = Vec::new();
-                    loop {
-                        if self.eat(&TokenKind::RParen) {
-                            break;
-                        }
-                        pats.push(self.pattern());
-                        if !self.eat(&TokenKind::Comma) {
-                            self.expect(&TokenKind::RParen, "`,` or `)` in pattern");
-                            break;
-                        }
-                    }
+                    let open = self.prev_span();
+                    let pats = self.list(open, Brackets::Paren, Sep::Comma, "pattern", |p| {
+                        Some(p.pattern())
+                    });
                     PatternKind::Variant {
                         path: segments,
                         args: VariantPatArgs::Tuple(pats),
                     }
                 } else if self.at(&TokenKind::LBrace) {
-                    self.bump();
-                    let (fields, has_rest) = self.struct_pattern_fields();
+                    let open = self.bump().span;
+                    let (fields, has_rest) = self.struct_pattern_fields(open);
                     // `Name { ... }` — struct or struct-variant pattern;
                     // the checker disambiguates by what `Name` resolves to.
                     if segments.len() >= 2 {
@@ -2369,53 +2330,34 @@ impl Parser {
         }
     }
 
-    fn struct_pattern_fields(&mut self) -> (Vec<(Ident, Pattern)>, bool) {
-        let mut fields = Vec::new();
+    /// `open`: the span of the `{`, for an unclosed struct pattern.
+    fn struct_pattern_fields(&mut self, open: Span) -> (Vec<(Ident, Pattern)>, bool) {
         let mut has_rest = false;
-        loop {
-            self.skip_newlines();
-            if self.eat(&TokenKind::RBrace) {
-                break;
-            }
-            if self.at_eof() {
-                let span = self.span();
-                self.error("E0100", span, "unclosed struct pattern: missing `}`");
-                break;
-            }
-            if self.eat(&TokenKind::DotDot) {
+        let fields = self.list(open, Brackets::Brace, Sep::Comma, "struct pattern", |p| {
+            // `..` stands for every remaining field, so nothing may follow
+            // it. Returning `None` hands the rest of the list back to the
+            // combinator, which closes it on the `}` we left in place.
+            if p.eat(&TokenKind::DotDot) {
                 has_rest = true;
-                self.skip_newlines();
-                self.expect(&TokenKind::RBrace, "`}` after `..` in pattern");
-                break;
-            }
-            let fname = match self.expect_ident("field name in pattern") {
-                Some(n) => n,
-                None => {
-                    self.recover_to(&[TokenKind::Comma, TokenKind::RBrace, TokenKind::Newline]);
-                    if !self.eat(&TokenKind::Comma) {
-                        self.eat(&TokenKind::RBrace);
-                        break;
-                    }
-                    continue;
+                p.skip_newlines();
+                if !p.at(&TokenKind::RBrace) {
+                    p.expect(&TokenKind::RBrace, "`}` after `..` in pattern");
                 }
-            };
-            let pat = if self.eat(&TokenKind::Colon) {
-                self.pattern()
+                return None;
+            }
+            let name = p.expect_ident("field name in pattern")?;
+            let pat = if p.eat(&TokenKind::Colon) {
+                p.pattern()
             } else {
                 // Shorthand `Point { x }` desugars to `x: x` (a binding).
                 Pattern {
-                    kind: PatternKind::Binding(fname.clone()),
-                    span: fname.span,
-                    id: self.id(),
+                    kind: PatternKind::Binding(name.clone()),
+                    span: name.span,
+                    id: p.id(),
                 }
             };
-            fields.push((fname, pat));
-            self.skip_newlines();
-            if !self.eat(&TokenKind::Comma) && !self.at(&TokenKind::RBrace) {
-                self.expect(&TokenKind::RBrace, "`,` or `}` in struct pattern");
-                break;
-            }
-        }
+            Some((name, pat))
+        });
         (fields, has_rest)
     }
 }
