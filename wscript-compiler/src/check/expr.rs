@@ -8,6 +8,7 @@ use crate::ast::*;
 
 use super::methods::{self, SchemeConstraint};
 use super::ops;
+use super::resolve;
 use super::{
     BinOpKind, CallKind, Checker, ConvKind, ForKind, IndexKind, Lowering, MethodRes, PathRes,
     PreludeFn, StructLitRes, TryKind, UnOpKind,
@@ -1645,7 +1646,8 @@ impl<'a> Checker<'a> {
                 }
                 let t = self.check_expr(&args[0], None);
                 let rt = self.resolve(&t);
-                if !self.is_reference_type(&rt) || matches!(rt, Type::Option(_) | Type::Result(..))
+                if !resolve::is_reference_type(&rt)
+                    || matches!(rt, Type::Option(_) | Type::Result(..))
                 {
                     let ts = self.ty_str(&rt);
                     self.error_help(

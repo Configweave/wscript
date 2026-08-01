@@ -25,6 +25,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros"] }
 
 [dev-dependencies]
 # The fuel snapshot reads bytecode to prove the corpus covers every path
-# fuel is charged at.
+# fuel is charged at; the .wscripti tests compare `Const`s and run a unit
+# compiled against an interface registry the umbrella never built.
 wscript-core.workspace = true
 wscript-vm.workspace = true

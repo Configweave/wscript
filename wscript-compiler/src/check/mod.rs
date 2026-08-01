@@ -2033,10 +2033,6 @@ impl<'a> Checker<'a> {
         resolve::resolve_type(self, t)
     }
 
-    pub(crate) fn is_reference_type(&self, t: &Type) -> bool {
-        resolve::is_reference_type(t)
-    }
-
     // ----------------------------------------------------------- vtables
 
     /// Get (or build) the vtable for coercing `concrete` to `dyn trait_id`.

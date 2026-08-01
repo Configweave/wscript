@@ -1,6 +1,13 @@
-//! Keep `wscript-std/wscripti/std.wscripti` in sync with the actual registrations
-//! (PRD §9.1: wscript-std ships generated interface files), and prove the
-//! interface parses with the same parser as scripts.
+//! The `.wscripti` format end to end: emit a registry, read it back, and
+//! insist nothing was lost on the way.
+//!
+//! Keeps `wscript-std/wscripti/std.wscripti` in sync with the actual
+//! registrations (PRD §9.1: wscript-std ships generated interface files),
+//! proves the interface parses with the same parser as scripts, and pins
+//! what an interface may and may not declare. It lives in `wscript-cli`
+//! because that is the crate that can see the stdlib and the umbrella
+//! `Context` at once — the code under test is `wscript-compiler`'s
+//! `wscripti` module.
 //!
 //! Regenerate with: `WSCRIPT_REGEN_WSCRIPTI=1 cargo test -p wscript-cli --test wscripti_gen`
 
@@ -109,6 +116,8 @@ fn const_zoo() -> wscript::Module {
     m.const_("TICK", '\n');
     m.const_("QUOTE", '\'');
     m.const_("EMOJI", '\u{1F600}');
+    m.const_("OPEN", '{');
+    m.const_("CLOSE", '}');
     m.const_("GREETING", "hi \"there\"\n\tbye\\");
     m.const_("TEMPLATE", "score: {x} and {{literal}}");
     m.const_("EMPTY", "");
@@ -175,6 +184,47 @@ fn const_values_round_trip() {
     assert_eq!(wscript::Context::from_registry(reg).interface_text(), text);
 }
 
+/// The text round trip, swept rather than sampled.
+///
+/// `const_zoo` is a hand-picked list, and hand-picked lists are exactly
+/// what missed `'{'` — a brace doubles inside a string but a char literal
+/// holds one character, so `'{{'` did not lex. Every code point that could
+/// need escaping is cheap to enumerate, so enumerate them: each one as a
+/// `char` constant and again inside a `string`.
+#[test]
+fn every_escapable_character_round_trips() {
+    let interesting: Vec<char> = (0u32..=0x2FF)
+        .chain([0x2028, 0x1F600, 0xFEFF, 0x10FFFF])
+        .filter_map(char::from_u32)
+        .collect();
+
+    let mut m = wscript::Module::new("chars");
+    for (i, c) in interesting.iter().enumerate() {
+        m.const_(format!("C{i}"), *c);
+        // Padded, so a mis-escape that swallows a neighbour shows up.
+        m.const_(format!("S{i}"), format!("<{c}{c}>"));
+    }
+    let text = wscript::Context::new().module(m).interface_text();
+
+    let mut reg = wscript::Registry::new();
+    let (diags, _index) = wscript_compiler::wscripti::load(&text, &mut reg);
+    assert!(diags.is_empty(), "{diags:?}\n--- text ---\n{text}");
+
+    let consts = &reg.module("chars").expect("chars module").consts;
+    assert_eq!(consts.len(), interesting.len() * 2);
+    for (i, c) in interesting.iter().enumerate() {
+        let (_, _, loaded) = &consts[i * 2];
+        assert_eq!(*loaded, Const::Char(*c), "char U+{:04X}", *c as u32);
+        let (_, _, loaded) = &consts[i * 2 + 1];
+        assert_eq!(
+            *loaded,
+            Const::Str(format!("<{c}{c}>").into()),
+            "string containing U+{:04X}",
+            *c as u32
+        );
+    }
+}
+
 /// `Const`'s `PartialEq` is no use for floats here: NaN is never equal to
 /// itself, and the round trip must still be judged to have preserved it.
 fn same_const(a: &Const, b: &Const) -> bool {
@@ -234,6 +284,13 @@ fn interfaces_cannot_declare_types_a_script_could_not_write() {
         ("mod m {\n    fn f(a0: List[int, int])\n}\n", "E0210"),
         ("mod m {\n    fn f(a0: List)\n}\n", "E0210"),
         ("mod m {\n    fn f(a0: Nope)\n}\n", "E0212"),
+        // Host traits to dispatch through are v2, and sharing the resolver
+        // must not have quietly admitted them. Every trait an interface
+        // registry can see is a builtin operator trait, so this is the
+        // resolver's own rejection; `Loader::resolve_type` backstops the
+        // case where that stops being true.
+        ("mod m {\n    fn f(a0: dyn Display)\n}\n", "E0211"),
+        ("mod m {\n    fn f(a0: List[dyn Nope])\n}\n", "E0212"),
     ] {
         let mut reg = wscript::Registry::new();
         let (diags, _index) = wscript_compiler::wscripti::load(src, &mut reg);

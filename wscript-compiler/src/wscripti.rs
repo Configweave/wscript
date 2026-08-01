@@ -6,7 +6,10 @@
 //! [`load`] reads one back in, and the format only has one definition for
 //! as long as they can see each other: while they sat in different crates
 //! the emitter wrote const values into a comment and the loader invented a
-//! zero, so `wscript check` const-folded 0 where `wscript run` folded 16.
+//! zero, so an interface silently lost every value the host registered —
+//! a script reading `MAX_PANES` folded 0 against the interface and 16
+//! against the live registration. (ADR-0002 keeps the two registries
+//! disjoint; what an interface *does* declare must still be the truth.)
 //!
 //! Types are lowered by the checker's own resolver
 //! ([`crate::check::resolve`]), so an interface cannot declare a type no
@@ -201,17 +204,19 @@ fn const_expr(c: &Const) -> String {
         // a `.` or an exponent, so it lexes back as a float and not an int.
         Const::Float(f) => format!("{f:?}"),
         Const::Bool(b) => b.to_string(),
-        Const::Char(c) => format!("'{}'", escape(*c)),
-        Const::Str(s) => format!("\"{}\"", s.chars().map(escape).collect::<String>()),
+        Const::Char(c) => format!("'{}'", c.escape_debug()),
+        Const::Str(s) => format!("\"{}\"", s.chars().map(escape_in_str).collect::<String>()),
         Const::Unit => "()".into(),
     }
 }
 
-/// One character inside a wscript literal. Rust's `escape_debug` covers
-/// the backslash escapes the lexer understands; braces are the addition,
-/// because in a string they open an interpolation hole and the doubled
-/// form is how the lexer is told to read a literal one.
-fn escape(c: char) -> String {
+/// One character of a string literal. Rust's `escape_debug` covers the
+/// backslash escapes the lexer understands; braces are the addition,
+/// because in a *string* they open an interpolation hole and the doubled
+/// form is how the lexer is told to read a literal one. A char literal
+/// holds exactly one character, so the same doubling there would produce
+/// `'{{'`, which does not lex.
+fn escape_in_str(c: char) -> String {
     match c {
         '{' => "{{".into(),
         '}' => "}}".into(),
@@ -306,7 +311,7 @@ impl<'a> Loader<'a> {
     }
 
     fn name_taken(&self, name: &str) -> bool {
-        self.reg.defs.defs.iter().any(|d| def_name(d) == name)
+        self.reg.defs.id_of(name).is_some()
     }
 
     fn load_type(&mut self, item: &Item) {
@@ -514,17 +519,11 @@ impl<'a> Loader<'a> {
         }
     }
 
+    /// The struct or enum called `name` — the only kinds an `impl` block
+    /// in an interface can attach methods to.
     fn find_type(&self, name: &str) -> Option<DefId> {
-        self.reg
-            .defs
-            .defs
-            .iter()
-            .position(|d| match d {
-                DefKind::Struct(s) => s.name == name,
-                DefKind::Enum(e) => e.name == name,
-                DefKind::Trait(_) | DefKind::Unit(_) => false,
-            })
-            .map(|i| DefId(i as u32))
+        let id = self.type_named(name)?;
+        matches!(self.reg.defs.get(id), DefKind::Struct(_) | DefKind::Enum(_)).then_some(id)
     }
 
     fn fn_sig(&mut self, f: &FnDecl) -> FnSig {
@@ -547,8 +546,25 @@ impl<'a> Loader<'a> {
 
     /// The checker's own `TypeExpr → Type` lowering, so a declaration an
     /// interface makes is one a script could have made.
+    ///
+    /// Well-formed is not the same as registrable, and `dyn` is where the
+    /// two part: it is a perfectly good script type, but a host trait to
+    /// dispatch through is v2 (PRD §6.2). No interface reaches this today
+    /// — an interface file cannot declare a trait, and every trait a host
+    /// registry can see is a builtin *operator* trait, which the resolver
+    /// rejects for `dyn` itself. It is here because the alternative to a
+    /// diagnostic is a `Type::Dyn` sitting silently in a host signature,
+    /// and the loader is where "may not be registered" is decided.
     fn resolve_type(&mut self, t: &TypeExpr) -> Type {
-        resolve::resolve_type(self, t)
+        let ty = resolve::resolve_type(self, t);
+        if has_dyn(&ty) {
+            self.unregistrable(
+                t.span,
+                "`dyn` types do not appear in interface files (host traits are v2)",
+            );
+            return Type::Error;
+        }
+        ty
     }
 
     /// The value of an interface constant. A constant is the one thing in
@@ -564,7 +580,7 @@ impl<'a> Loader<'a> {
                 "an interface constant is folded into scripts that read it, so it \
                  must say what it is: `const NAME: int = 16`",
             );
-            return zero(ty);
+            return rejected_placeholder(ty);
         };
         match self.eval_const(value, ty) {
             Some(folded) => folded,
@@ -578,7 +594,7 @@ impl<'a> Loader<'a> {
                      for the numbers with no literal spelling — a constant \
                      expression over numeric literals and `+ - * /`",
                 );
-                zero(ty)
+                rejected_placeholder(ty)
             }
         }
     }
@@ -604,10 +620,22 @@ impl<'a> Loader<'a> {
     }
 }
 
-/// The value a constant stands in with once its own has been rejected —
-/// chosen only so the rest of the file keeps checking. The diagnostic that
-/// precedes it is what the caller acts on.
-fn zero(ty: &Type) -> Const {
+/// `dyn` anywhere in a type, however deeply nested — `List[dyn Display]`
+/// smuggles one in just as surely as a bare `dyn Display` does.
+fn has_dyn(t: &Type) -> bool {
+    match t {
+        Type::Dyn(_) => true,
+        Type::List(e) | Type::Option(e) | Type::Weak(e) => has_dyn(e),
+        Type::Map(k, v) | Type::Result(k, v) => has_dyn(k) || has_dyn(v),
+        Type::Fn(sig) => sig.params.iter().any(has_dyn) || has_dyn(&sig.ret),
+        _ => false,
+    }
+}
+
+/// What a rejected constant is registered as, so the rest of the file
+/// keeps checking against something of the right type. It is not a value
+/// anyone should read: the diagnostic that precedes it is the outcome.
+fn rejected_placeholder(ty: &Type) -> Const {
     match ty {
         Type::Int => Const::Int(0),
         Type::Float => Const::Float(0.0),
@@ -672,12 +700,7 @@ fn eval_num(e: &Expr) -> Option<Num> {
 
 impl TypeScope for Loader<'_> {
     fn type_named(&self, name: &str) -> Option<DefId> {
-        self.reg
-            .defs
-            .defs
-            .iter()
-            .position(|d| def_name(d) == name)
-            .map(|i| DefId(i as u32))
+        self.reg.defs.id_of(name)
     }
 
     fn defs(&self) -> &DefTable {
@@ -686,15 +709,6 @@ impl TypeScope for Loader<'_> {
 
     fn report(&mut self, d: Diagnostic) {
         self.diags.push(d);
-    }
-}
-
-fn def_name(d: &DefKind) -> &str {
-    match d {
-        DefKind::Struct(s) => &s.name,
-        DefKind::Enum(e) => &e.name,
-        DefKind::Trait(t) => &t.name,
-        DefKind::Unit(u) => &u.name,
     }
 }
 
