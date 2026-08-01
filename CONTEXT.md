@@ -30,6 +30,24 @@ positions.
 **Stages** — lex → parse → check → emit → run. `check` and `emit` are separate
 crates from the VM; `wscript` (the umbrella) is the embedding API.
 
+**Delimited list** — the parser's one shape for `open`, `sep`-separated
+elements, `close`: parameter and argument lists, `struct`/`enum` bodies, list
+and map literals, closure parameters, patterns. `Parser::list` owns the whole
+of it — the separator, trailing separators, newline handling and recovery — so
+a call site supplies only its **brackets**, its separator, and what to call the
+list in a diagnostic.
+
+**Brackets** — the pair around a **delimited list** (`()`, `[]`, `{}`, `||`).
+Everything else is derived from it: the closing token, whether newlines inside
+have to be skipped (the lexer suppresses them inside `(` and `[`, but not `{`
+or `#{`), and the **follow set**. _Avoid_: restating any of those at a call
+site — that drift is what the combinator exists to prevent.
+
+**Follow set** — the tokens a malformed list element resyncs to; one per
+**brackets** shape. Outside braces it also carries `{` and `}`, which bound the
+block *around* the list: recovery that runs past a block's closing `}` silently
+drops every declaration after it.
+
 **Analysis** — the product of running the pipeline up to and including `check`,
 without `emit`. What the LSP and `wscript check` consume.
 
