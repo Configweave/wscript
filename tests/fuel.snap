@@ -66,6 +66,8 @@ m5_regex 92 ok
 m5_regex_fault 3 fault
 m5_time 29 ok
 m5_toml_xml 114 ok
+multifile_derive_span_err - compile-error
+multifile_shared_names 21 ok
 std_combinators_err - compile-error
 std_list_combinators 357 ok
 std_map_combinators 90 ok
