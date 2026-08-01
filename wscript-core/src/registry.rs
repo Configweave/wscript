@@ -31,13 +31,62 @@ pub struct HostMethod {
     pub sig: FnSig,
     pub host_idx: u32,
     pub doc: Option<String>,
+    /// Declared parameter names, receiver excluded — see [`ModuleFn::params`].
+    pub params: Vec<String>,
+}
+
+/// A function registered under a module.
+///
+/// Parameter names live here rather than in [`FnSig`] because `FnSig` is
+/// part of type identity (it derives `Eq`/`Hash` and is embedded in
+/// `Type::Fn`): `fn(int) -> int` must not become a different type for
+/// being written with a different parameter name. Names are documentation
+/// — the interface emitter and the LSP show them, the checker ignores them.
+#[derive(Debug, Clone)]
+pub struct ModuleFn {
+    pub name: String,
+    pub sig: FnSig,
+    /// Index into [`Registry::host_fns`].
+    pub host_idx: u32,
+    pub doc: Option<String>,
+    /// Declared parameter names, positionally matching `sig.params`.
+    /// Empty when the host declared none — consumers then fall back to
+    /// positional placeholders rather than inventing a name.
+    pub params: Vec<String>,
+}
+
+impl ModuleFn {
+    /// Declared parameter names, or `None` when the host declared none.
+    pub fn param_names(&self) -> Option<&[String]> {
+        declared(&self.params, &self.sig)
+    }
+}
+
+impl HostMethod {
+    /// Declared parameter names (receiver excluded), or `None`.
+    pub fn param_names(&self) -> Option<&[String]> {
+        declared(&self.params, &self.sig)
+    }
+}
+
+/// The placeholder standing in for parameter `i` where the host declared
+/// no name. Deliberately synthetic: `a0` reads as "nothing was declared",
+/// where a plausible-looking invented name would read as fact.
+pub fn positional_param_name(i: usize) -> String {
+    format!("a{i}")
+}
+
+/// Names are only usable if there is one per parameter; a mismatch is a
+/// host registration bug (asserted in `Module::merge_into`) and degrades
+/// here to "undeclared" rather than to a misaligned parameter list.
+fn declared<'a>(params: &'a [String], sig: &FnSig) -> Option<&'a [String]> {
+    (!params.is_empty() && params.len() == sig.params.len()).then_some(params)
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ModuleDef {
     pub name: String,
-    /// name → (signature, host fn index, doc)
-    pub fns: Vec<(String, FnSig, u32, Option<String>)>,
+    pub fns: Vec<ModuleFn>,
     pub consts: Vec<(String, Type, Const)>,
     /// Types registered under this module (also importable via `use`).
     pub types: Vec<DefId>,

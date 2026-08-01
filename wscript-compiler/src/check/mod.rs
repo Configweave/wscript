@@ -831,11 +831,9 @@ impl<'a> Checker<'a> {
                 Some(item_name) => match mref {
                     ModuleRef::Host(mod_idx) => {
                         let module = &self.reg.modules[mod_idx];
-                        if let Some((_, _, idx, _)) =
-                            module.fns.iter().find(|(n, ..)| *n == item_name.name)
-                        {
+                        if let Some(f) = module.fns.iter().find(|f| f.name == item_name.name) {
                             self.imports[self.cur_file]
-                                .insert(item_name.name.clone(), Imported::HostFn(*idx));
+                                .insert(item_name.name.clone(), Imported::HostFn(f.host_idx));
                         } else if let Some((_, ty, c)) =
                             module.consts.iter().find(|(n, ..)| *n == item_name.name)
                         {

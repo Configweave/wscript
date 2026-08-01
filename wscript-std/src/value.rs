@@ -37,15 +37,21 @@ pub fn value() -> Module {
     let mut m = Module::new("value");
     m.doc("The shared dynamic Value type used by json/toml/xml");
     m.ty::<DynValue>()
-        .method("get", |v: &DynValue, key: &str| -> Option<DynValue> {
-            v.get(key).cloned()
-        })
-        .method("at", |v: &DynValue, idx: i64| -> Option<DynValue> {
-            match v {
-                DynValue::List(items) if idx >= 0 => items.get(idx as usize).cloned(),
-                _ => None,
-            }
-        })
+        .method_named(
+            "get",
+            ["key"],
+            |v: &DynValue, key: &str| -> Option<DynValue> { v.get(key).cloned() },
+        )
+        .method_named(
+            "at",
+            ["idx"],
+            |v: &DynValue, idx: i64| -> Option<DynValue> {
+                match v {
+                    DynValue::List(items) if idx >= 0 => items.get(idx as usize).cloned(),
+                    _ => None,
+                }
+            },
+        )
         .method("keys", |v: &DynValue| -> Vec<String> {
             match v {
                 DynValue::Map(m) => {

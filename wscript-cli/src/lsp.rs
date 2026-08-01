@@ -269,6 +269,37 @@ fn node_at(index: &[(wscript::Span, ast::NodeId)], offset: usize) -> Option<ast:
         .map(|(_, id)| *id)
 }
 
+/// The node at `offset` and the enclosing nodes that start where it does,
+/// innermost first.
+///
+/// A call's resolution hangs off the call expression, not off its callee,
+/// so pointing at `atan2` in `math::atan2(1.0, 2.0)` lands on the callee
+/// path and finds nothing. The call starts at the same offset as its
+/// callee, so widening along a shared start reaches it — while an
+/// argument, which starts elsewhere, still resolves to itself.
+///
+/// A chain (`json::parse(s).unwrap().get(k)`) shares its start with every
+/// link, so the list can hold several resolvable nodes: take the first,
+/// which is the innermost, and therefore the one the cursor is on.
+fn nodes_starting_at(index: &[(wscript::Span, ast::NodeId)], offset: usize) -> Vec<ast::NodeId> {
+    let Some(inner) = node_at(index, offset) else {
+        return Vec::new();
+    };
+    let Some(lo) = index
+        .iter()
+        .find(|(_, id)| *id == inner)
+        .map(|(span, _)| span.lo)
+    else {
+        return Vec::new();
+    };
+    let mut nodes: Vec<&(wscript::Span, ast::NodeId)> = index
+        .iter()
+        .filter(|(span, _)| span.lo == lo && offset < span.hi as usize)
+        .collect();
+    nodes.sort_by_key(|(span, _)| span.hi - span.lo);
+    nodes.iter().map(|(_, id)| *id).collect()
+}
+
 /// Expression ending exactly at `offset` (for `.` completions).
 fn node_ending_at(index: &[(wscript::Span, ast::NodeId)], offset: usize) -> Option<ast::NodeId> {
     index
@@ -456,25 +487,15 @@ impl LanguageServer for Backend {
             }
         }
         // Host call info: signature + docs (PRD §9 feature 2).
-        if let Some(wscript_compiler::check::CallKind::Host(idx)) = analysis.check.call(node)
-            && let Some((module, name, sig, doc)) = host_fn_info(registry, *idx)
-        {
+        if let Some(info) = host_target(registry, &analysis, &nodes_starting_at(&index, offset)) {
             lines.push(format!(
-                "`{module}::{name}{}`",
-                render_sig(&sig, &analysis.check.defs)
+                "`{}{}{}{}`",
+                info.owner,
+                info.separator(),
+                info.name,
+                render_sig_named(&info.sig, info.params.as_deref(), &analysis.check.defs)
             ));
-            if let Some(doc) = doc {
-                lines.push(doc);
-            }
-        }
-        if let Some(wscript_compiler::check::MethodRes::Host(idx)) = analysis.check.method(node)
-            && let Some((ty_name, name, sig, doc)) = host_method_info(registry, *idx)
-        {
-            lines.push(format!(
-                "`{ty_name}.{name}{}`",
-                render_sig(&sig, &analysis.check.defs)
-            ));
-            if let Some(doc) = doc {
+            if let Some(doc) = info.doc {
                 lines.push(doc);
             }
         }
@@ -518,22 +539,14 @@ impl LanguageServer for Backend {
             })));
         }
         // Host symbols jump to the .wscripti entry (PRD §9 feature 3).
-        let target = match (analysis.check.call(node), analysis.check.method(node)) {
-            (Some(wscript_compiler::check::CallKind::Host(idx)), _) => host_fn_info(registry, *idx)
-                .and_then(|(m, n, ..)| {
-                    lookup_wscripti(&wscripti, |i| {
-                        i.module_items.get(&(m.clone(), n.clone())).copied()
-                    })
-                }),
-            (_, Some(wscript_compiler::check::MethodRes::Host(idx))) => {
-                host_method_info(registry, *idx).and_then(|(t, n, ..)| {
-                    lookup_wscripti(&wscripti, |i| {
-                        i.methods.get(&(t.clone(), n.clone())).copied()
-                    })
+        let target =
+            host_target(registry, &analysis, &nodes_starting_at(&index, offset)).and_then(|info| {
+                let key = (info.owner.clone(), info.name.clone());
+                lookup_wscripti(&wscripti, |i| match info.kind {
+                    HostKind::Fn => i.module_items.get(&key).copied(),
+                    HostKind::Method => i.methods.get(&key).copied(),
                 })
-            }
-            _ => None,
-        };
+            });
         if let Some((path, span)) = target
             && let Ok(file_text) = std::fs::read_to_string(&path)
             && let Some(file_uri) = Uri::from_file_path(&path)
@@ -578,15 +591,16 @@ impl LanguageServer for Backend {
             let seg = trailing_ident(rest);
             let analysis = session.analyze(&entry_path(&uri), &text);
             if let Some(module) = registry.modules.iter().find(|m| m.name == seg) {
-                for (name, sig, _, doc) in &module.fns {
+                for f in &module.fns {
                     push(
                         &mut items,
-                        name,
+                        &f.name,
                         CompletionItemKind::FUNCTION,
                         Some(format!(
                             "{}{}",
-                            render_sig(sig, &analysis.check.defs),
-                            doc.as_deref()
+                            render_sig_named(&f.sig, f.param_names(), &analysis.check.defs),
+                            f.doc
+                                .as_deref()
                                 .map(|d| format!(" — {d}"))
                                 .unwrap_or_default()
                         )),
@@ -663,7 +677,11 @@ impl LanguageServer for Backend {
                                 &mut items,
                                 &m.name,
                                 CompletionItemKind::METHOD,
-                                Some(render_sig(&m.sig, &analysis.check.defs)),
+                                Some(render_sig_named(
+                                    &m.sig,
+                                    m.param_names(),
+                                    &analysis.check.defs,
+                                )),
                             );
                         }
                     }
@@ -818,7 +836,26 @@ fn trailing_ident(text: &str) -> &str {
 }
 
 fn render_sig(sig: &wscript::FnSig, defs: &wscript::DefTable) -> String {
-    let params: Vec<String> = sig.params.iter().map(|p| p.display(defs)).collect();
+    render_sig_named(sig, None, defs)
+}
+
+/// A signature for display. Declared parameter names are shown
+/// (`(y: float, x: float)` — the point of declaring them); where the host
+/// declared none the types stand alone rather than gaining an invented name.
+fn render_sig_named(
+    sig: &wscript::FnSig,
+    names: Option<&[String]>,
+    defs: &wscript::DefTable,
+) -> String {
+    let params: Vec<String> = sig
+        .params
+        .iter()
+        .enumerate()
+        .map(|(i, p)| match names.and_then(|names| names.get(i)) {
+            Some(name) => format!("{name}: {}", p.display(defs)),
+            None => p.display(defs),
+        })
+        .collect();
     if sig.ret == wscript::Type::Unit {
         format!("({})", params.join(", "))
     } else {
@@ -826,13 +863,65 @@ fn render_sig(sig: &wscript::FnSig, defs: &wscript::DefTable) -> String {
     }
 }
 
-type HostInfo = (String, String, wscript::FnSig, Option<String>);
+/// What the editor can say about one host registration.
+struct HostInfo {
+    kind: HostKind,
+    /// Module for a function, type for a method.
+    owner: String,
+    name: String,
+    sig: wscript::FnSig,
+    /// Declared parameter names; `None` when the host declared none.
+    params: Option<Vec<String>>,
+    doc: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+enum HostKind {
+    Fn,
+    Method,
+}
+
+impl HostInfo {
+    /// How the owner and the name are written together: `math::atan2`
+    /// for a module function, `Value.get` for a method.
+    fn separator(&self) -> &'static str {
+        match self.kind {
+            HostKind::Fn => "::",
+            HostKind::Method => ".",
+        }
+    }
+}
+
+/// The host registration `nodes` refers to, if any — the first (innermost)
+/// node that resolves to one. Both features want the same answer, and both
+/// want exactly one: a chain offers several nodes, only one of which the
+/// cursor is on.
+fn host_target(
+    reg: &wscript::Registry,
+    analysis: &wscript::Analysis,
+    nodes: &[ast::NodeId],
+) -> Option<HostInfo> {
+    nodes.iter().find_map(
+        |node| match (analysis.check.call(*node), analysis.check.method(*node)) {
+            (Some(wscript_compiler::check::CallKind::Host(idx)), _) => host_fn_info(reg, *idx),
+            (_, Some(wscript_compiler::check::MethodRes::Host(idx))) => host_method_info(reg, *idx),
+            _ => None,
+        },
+    )
+}
 
 fn host_fn_info(reg: &wscript::Registry, idx: u32) -> Option<HostInfo> {
     for module in &reg.modules {
-        for (name, sig, i, doc) in &module.fns {
-            if *i == idx {
-                return Some((module.name.clone(), name.clone(), sig.clone(), doc.clone()));
+        for f in &module.fns {
+            if f.host_idx == idx {
+                return Some(HostInfo {
+                    kind: HostKind::Fn,
+                    owner: module.name.clone(),
+                    name: f.name.clone(),
+                    sig: f.sig.clone(),
+                    params: f.param_names().map(<[String]>::to_vec),
+                    doc: f.doc.clone(),
+                });
             }
         }
     }
@@ -843,12 +932,14 @@ fn host_method_info(reg: &wscript::Registry, idx: u32) -> Option<HostInfo> {
     for (def, methods) in &reg.methods {
         for m in methods {
             if m.host_idx == idx {
-                return Some((
-                    reg.defs.name_of(*def).to_string(),
-                    m.name.clone(),
-                    m.sig.clone(),
-                    m.doc.clone(),
-                ));
+                return Some(HostInfo {
+                    kind: HostKind::Method,
+                    owner: reg.defs.name_of(*def).to_string(),
+                    name: m.name.clone(),
+                    sig: m.sig.clone(),
+                    params: m.param_names().map(<[String]>::to_vec),
+                    doc: m.doc.clone(),
+                });
             }
         }
     }

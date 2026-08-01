@@ -6,7 +6,7 @@
 use std::fmt::Write;
 
 use wscript_core::defs::{DefId, DefKind, FIRST_FREE_DEF, VariantKind};
-use wscript_core::registry::Registry;
+use wscript_core::registry::{Registry, positional_param_name};
 use wscript_core::types::{FnSig, Type};
 
 pub fn render(reg: &Registry) -> String {
@@ -51,7 +51,7 @@ pub fn render(reg: &Registry) -> String {
                             out,
                             "    fn {}({}){}",
                             m.name,
-                            sig_params(&m.sig, reg, true),
+                            sig_params(&m.sig, m.param_names(), reg, true),
                             ret_suffix(&m.sig.ret, reg)
                         );
                     }
@@ -94,7 +94,7 @@ pub fn render(reg: &Registry) -> String {
                             out,
                             "    fn {}({}){}",
                             m.name,
-                            sig_params(&m.sig, reg, true),
+                            sig_params(&m.sig, m.param_names(), reg, true),
                             ret_suffix(&m.sig.ret, reg)
                         );
                     }
@@ -124,17 +124,18 @@ pub fn render(reg: &Registry) -> String {
             };
             let _ = writeln!(out, "    const {name}: {}{shown}", ty.display(&reg.defs));
         }
-        for (name, sig, _, doc) in &module.fns {
-            if let Some(doc) = doc {
+        for f in &module.fns {
+            if let Some(doc) = &f.doc {
                 for line in doc.lines() {
                     let _ = writeln!(out, "    /// {line}");
                 }
             }
             let _ = writeln!(
                 out,
-                "    fn {name}({}){}",
-                sig_params(sig, reg, false),
-                ret_suffix(&sig.ret, reg)
+                "    fn {}({}){}",
+                f.name,
+                sig_params(&f.sig, f.param_names(), reg, false),
+                ret_suffix(&f.sig.ret, reg)
             );
         }
         let _ = writeln!(out, "}}");
@@ -142,13 +143,21 @@ pub fn render(reg: &Registry) -> String {
     out
 }
 
-fn sig_params(sig: &FnSig, reg: &Registry, method: bool) -> String {
+/// Render a parameter list. Declared names are emitted as written; where
+/// the host declared none the positional placeholder stands in, because
+/// the grammar requires a name and inventing a plausible one would hide
+/// that nothing was ever declared.
+fn sig_params(sig: &FnSig, names: Option<&[String]>, reg: &Registry, method: bool) -> String {
     let mut parts: Vec<String> = Vec::new();
     if method {
         parts.push("self".into());
     }
     for (i, p) in sig.params.iter().enumerate() {
-        parts.push(format!("a{i}: {}", p.display(&reg.defs)));
+        let name = names
+            .and_then(|names| names.get(i))
+            .cloned()
+            .unwrap_or_else(|| positional_param_name(i));
+        parts.push(format!("{name}: {}", p.display(&reg.defs)));
     }
     parts.join(", ")
 }

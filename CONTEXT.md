@@ -145,6 +145,12 @@ embedder and reachable from script as `name::thing`.
 consumed by the checker (signature), the emitter (call target) and the VM
 (dispatch) with no per-function code in any of them.
 
+**Declared parameter name** — the name a host gives a registered parameter
+(`fn_named`, `method_named`). Documentation, not type structure: it lives beside
+the `FnSig` in the registry entry, never inside it, because `FnSig` is part of
+type identity. Where nothing was declared the parameter is **positional** and
+shows as the placeholder `a0`, `a1`, … — never an invented name.
+
 **Opaque type** — a host Rust type exposed to script as a nominal type with
 methods but no visible fields.
 

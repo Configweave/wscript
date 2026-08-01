@@ -29,11 +29,11 @@ The umbrella crate re-exports `Context`, `Module`, `Vm`, `ScriptFn`, `Shared`, a
 use wscript::{Context, Module, Vm};
 
 let mut m = Module::new("term");
-m.fn_("print_at", |x: i64, y: i64, s: &str| { /* ... */ });
+m.fn_named("print_at", ["x", "y", "text"], |x: i64, y: i64, text: &str| { /* ... */ });
 m.const_("MAX_PANES", 16i64);
 ```
 
-Any closure whose params are `FromValue + ScriptType` and return is `IntoValue + ScriptType` registers directly (up to 4 params). A host `Err` arrives in the script as `Result::Err`, so `?` composes across the boundary.
+Any closure whose params are `FromValue + ScriptType` and return is `IntoValue + ScriptType` registers directly (up to 4 params). A host `Err` arrives in the script as `Result::Err`, so `?` composes across the boundary. Use `fn_named` (and `method_named`) wherever argument order can be confused — plain `fn_` leaves the interface and editor hovers positional.
 
 ### Step 3: Build a Context and compile
 

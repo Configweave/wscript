@@ -42,15 +42,17 @@ pub fn math() -> Module {
 
     // float ops
     m.fn_("abs", |x: f64| x.abs());
-    m.fn_("min", |a: f64, b: f64| a.min(b));
-    m.fn_("max", |a: f64, b: f64| a.max(b));
-    m.fn_("clamp", |x: f64, lo: f64, hi: f64| x.clamp(lo, hi));
+    m.fn_named("min", ["a", "b"], |a: f64, b: f64| a.min(b));
+    m.fn_named("max", ["a", "b"], |a: f64, b: f64| a.max(b));
+    m.fn_named("clamp", ["x", "lo", "hi"], |x: f64, lo: f64, hi: f64| {
+        x.clamp(lo, hi)
+    });
     m.fn_("floor", |x: f64| x.floor());
     m.fn_("ceil", |x: f64| x.ceil());
     m.fn_("round", |x: f64| x.round());
     m.fn_("trunc", |x: f64| x.trunc());
     m.fn_("sqrt", |x: f64| x.sqrt());
-    m.fn_("pow", |x: f64, y: f64| x.powf(y));
+    m.fn_named("pow", ["x", "y"], |x: f64, y: f64| x.powf(y));
     m.fn_("exp", |x: f64| x.exp());
     m.fn_("ln", |x: f64| x.ln());
     m.fn_("log2", |x: f64| x.log2());
@@ -61,21 +63,25 @@ pub fn math() -> Module {
     m.fn_("asin", |x: f64| x.asin());
     m.fn_("acos", |x: f64| x.acos());
     m.fn_("atan", |x: f64| x.atan());
-    m.fn_("atan2", |y: f64, x: f64| y.atan2(x));
+    m.fn_named("atan2", ["y", "x"], |y: f64, x: f64| y.atan2(x));
     m.fn_("sinh", |x: f64| x.sinh());
     m.fn_("cosh", |x: f64| x.cosh());
     m.fn_("tanh", |x: f64| x.tanh());
     m.fn_("asinh", |x: f64| x.asinh());
     m.fn_("acosh", |x: f64| x.acosh());
     m.fn_("atanh", |x: f64| x.atanh());
-    m.fn_("lerp", |a: f64, b: f64, t: f64| a + (b - a) * t);
+    m.fn_named("lerp", ["a", "b", "t"], |a: f64, b: f64, t: f64| {
+        a + (b - a) * t
+    });
     m.fn_("signum", |x: f64| x.signum());
 
     // int ops
     m.fn_("iabs", |x: i64| x.wrapping_abs());
-    m.fn_("imin", |a: i64, b: i64| a.min(b));
-    m.fn_("imax", |a: i64, b: i64| a.max(b));
-    m.fn_("iclamp", |x: i64, lo: i64, hi: i64| x.clamp(lo, hi.max(lo)));
+    m.fn_named("imin", ["a", "b"], |a: i64, b: i64| a.min(b));
+    m.fn_named("imax", ["a", "b"], |a: i64, b: i64| a.max(b));
+    m.fn_named("iclamp", ["x", "lo", "hi"], |x: i64, lo: i64, hi: i64| {
+        x.clamp(lo, hi.max(lo))
+    });
     m.fn_("isignum", |x: i64| x.signum());
 
     // consts
@@ -89,7 +95,7 @@ pub fn math() -> Module {
     m.doc_next("Uniform float in [0, 1)");
     m.fn_("rand", || (next_u64() >> 11) as f64 / (1u64 << 53) as f64);
     m.doc_next("Uniform int in [a, b) — empty ranges return a");
-    m.fn_("rand_range", |a: i64, b: i64| {
+    m.fn_named("rand_range", ["a", "b"], |a: i64, b: i64| {
         if b <= a {
             a
         } else {

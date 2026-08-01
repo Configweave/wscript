@@ -26,8 +26,9 @@ pub fn process_with_args(script_args: Vec<String>) -> Module {
     m.ty::<Output>();
 
     m.doc_next("Run a command to completion; Err on spawn failure");
-    m.fn_(
+    m.fn_named(
         "run",
+        ["cmd", "args"],
         |cmd: &str, args: Vec<String>| -> Result<Output, String> {
             let out = std::process::Command::new(cmd)
                 .args(&args)
@@ -43,7 +44,7 @@ pub fn process_with_args(script_args: Vec<String>) -> Module {
     m.fn_("env", |key: &str| -> Option<String> {
         std::env::var(key).ok()
     });
-    m.fn_("set_env", |key: &str, value: &str| {
+    m.fn_named("set_env", ["key", "value"], |key: &str, value: &str| {
         // SAFETY contract documented: single-threaded VM (PRD §4.3); the
         // host remains responsible for not racing the environment.
         unsafe { std::env::set_var(key, value) }

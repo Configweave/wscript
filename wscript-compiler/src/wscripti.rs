@@ -13,7 +13,9 @@ use wscript_core::bytecode::Const;
 use wscript_core::defs::{DefId, DefKind, EnumDef, StructDef, VariantDef, VariantKind};
 use wscript_core::diag::Diagnostic;
 use wscript_core::host::{HostCallable, HostCtx, HostError};
-use wscript_core::registry::{HostFnEntry, HostMethod, ModuleDef, Registry};
+use wscript_core::registry::{
+    HostFnEntry, HostMethod, ModuleDef, ModuleFn, Registry, positional_param_name,
+};
 use wscript_core::span::Span;
 use wscript_core::types::{FnSig, Type};
 use wscript_core::value::Value;
@@ -225,7 +227,13 @@ impl<'a> Loader<'a> {
                             name: format!("{}::{}", m.name.name, f.name.name),
                         }),
                     });
-                    def.fns.push((f.name.name.clone(), sig, idx, f.doc.clone()));
+                    def.fns.push(ModuleFn {
+                        name: f.name.name.clone(),
+                        sig,
+                        host_idx: idx,
+                        doc: f.doc.clone(),
+                        params: param_names(f),
+                    });
                 }
                 Item::Const(c) => {
                     self.index
@@ -307,6 +315,7 @@ impl<'a> Loader<'a> {
                     sig,
                     host_idx: idx,
                     doc: f.doc.clone(),
+                    params: param_names(f),
                 });
         }
     }
@@ -396,6 +405,31 @@ impl<'a> Loader<'a> {
             }
         }
     }
+}
+
+/// Parameter names declared by an interface `fn`, receiver excluded.
+///
+/// The interface grammar requires a name for every parameter, so the
+/// emitter writes positional placeholders (`a0`, `a1`, …) wherever the host
+/// declared none. Loading those back as declared names would launder a
+/// placeholder into a fact, so a parameter list that is entirely
+/// placeholders loads as undeclared — exactly what it was before it was
+/// written out.
+fn param_names(f: &FnDecl) -> Vec<String> {
+    let names: Vec<String> = f
+        .params
+        .iter()
+        .filter(|p| !p.is_self)
+        .map(|p| p.name.name.clone())
+        .collect();
+    if names
+        .iter()
+        .enumerate()
+        .all(|(i, n)| *n == positional_param_name(i))
+    {
+        return Vec::new();
+    }
+    names
 }
 
 fn item_span(item: &Item) -> Span {
