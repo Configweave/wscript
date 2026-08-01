@@ -13,9 +13,7 @@ use wscript_core::bytecode::Const;
 use wscript_core::defs::{DefId, DefKind, EnumDef, StructDef, VariantDef, VariantKind};
 use wscript_core::diag::Diagnostic;
 use wscript_core::host::{HostCallable, HostCtx, HostError};
-use wscript_core::registry::{
-    HostFnEntry, HostMethod, ModuleDef, ModuleFn, Registry, positional_param_name,
-};
+use wscript_core::registry::{HostFnDecl, HostFnEntry, ModuleDef, Registry, positional_param_name};
 use wscript_core::span::Span;
 use wscript_core::types::{FnSig, Type};
 use wscript_core::value::Value;
@@ -227,7 +225,7 @@ impl<'a> Loader<'a> {
                             name: format!("{}::{}", m.name.name, f.name.name),
                         }),
                     });
-                    def.fns.push(ModuleFn {
+                    def.fns.push(HostFnDecl {
                         name: f.name.name.clone(),
                         sig,
                         host_idx: idx,
@@ -310,7 +308,7 @@ impl<'a> Loader<'a> {
                 .methods
                 .entry(def_id)
                 .or_default()
-                .push(HostMethod {
+                .push(HostFnDecl {
                     name: f.name.name.clone(),
                     sig,
                     host_idx: idx,

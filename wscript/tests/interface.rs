@@ -51,36 +51,23 @@ fn undeclared_parameters_stay_positional() {
     );
 }
 
-#[test]
-fn names_survive_a_load_round_trip() {
-    // Emit → load → emit is the path a `.wscripti` in `wscript.toml`
-    // takes, and it must not lose or launder names.
-    let text = interface();
-    let mut reg = wscript::Registry::new();
-    let (diags, _index) = wscript_compiler::wscripti::load(&text, &mut reg);
-    assert!(diags.is_empty(), "{diags:?}");
-
-    let module = reg.module("geometry").expect("geometry module");
-    let atan2 = module.fns.iter().find(|f| f.name == "atan2").unwrap();
-    assert_eq!(
-        atan2.param_names(),
-        Some(&["y".to_string(), "x".into()][..])
-    );
-    let sqrt = module.fns.iter().find(|f| f.name == "sqrt").unwrap();
-    assert_eq!(
-        sqrt.param_names(),
-        None,
-        "a positional placeholder must not load back as a declared name"
-    );
-
-    assert_eq!(Context::from_registry(reg).interface_text(), text);
-}
+// The emit → load → emit round trip these names take is asserted in
+// `wscript-cli/tests/wscripti_gen.rs`, over the whole standard library.
 
 #[test]
-#[cfg(debug_assertions)] // the arity check is a `debug_assert!`
 #[should_panic(expected = "declares 3 parameter name(s) but takes 2")]
 fn declaring_the_wrong_number_of_names_is_a_registration_error() {
     let mut m = Module::new("broken");
     m.fn_named("hypot", ["x", "y", "z"], |x: f64, y: f64| x.hypot(y));
+    let _ = Context::new().module(m);
+}
+
+#[test]
+#[should_panic(expected = "declares 0 parameter name(s) but takes 2")]
+fn declaring_no_names_at_all_is_the_same_error() {
+    // The mismatch that could otherwise pass for "this host declared
+    // nothing" and silently degrade to positional placeholders.
+    let mut m = Module::new("broken");
+    m.fn_named("hypot", Vec::<&str>::new(), |x: f64, y: f64| x.hypot(y));
     let _ = Context::new().module(m);
 }

@@ -23,19 +23,12 @@ impl std::fmt::Debug for HostFnEntry {
     }
 }
 
-/// A method on a host-registered type (`m.ty::<Pane>().method(...)`).
-/// The receiver is not part of `sig`.
-#[derive(Debug, Clone)]
-pub struct HostMethod {
-    pub name: String,
-    pub sig: FnSig,
-    pub host_idx: u32,
-    pub doc: Option<String>,
-    /// Declared parameter names, receiver excluded — see [`ModuleFn::params`].
-    pub params: Vec<String>,
-}
-
-/// A function registered under a module.
+/// A host function as *declared*: what the checker, the interface emitter
+/// and the editor need to talk about it. Module functions
+/// (`m.fn_(...)`, in [`ModuleDef::fns`]) and methods on a registered type
+/// (`m.ty::<Pane>().method(...)`, in [`Registry::methods`]) declare the
+/// same things, so they share this type; a method's receiver is not part
+/// of `sig` and not one of the `params`.
 ///
 /// Parameter names live here rather than in [`FnSig`] because `FnSig` is
 /// part of type identity (it derives `Eq`/`Hash` and is embedded in
@@ -43,10 +36,10 @@ pub struct HostMethod {
 /// being written with a different parameter name. Names are documentation
 /// — the interface emitter and the LSP show them, the checker ignores them.
 #[derive(Debug, Clone)]
-pub struct ModuleFn {
+pub struct HostFnDecl {
     pub name: String,
     pub sig: FnSig,
-    /// Index into [`Registry::host_fns`].
+    /// Index into [`Registry::host_fns`], which holds the implementation.
     pub host_idx: u32,
     pub doc: Option<String>,
     /// Declared parameter names, positionally matching `sig.params`.
@@ -55,17 +48,14 @@ pub struct ModuleFn {
     pub params: Vec<String>,
 }
 
-impl ModuleFn {
+impl HostFnDecl {
     /// Declared parameter names, or `None` when the host declared none.
     pub fn param_names(&self) -> Option<&[String]> {
-        declared(&self.params, &self.sig)
-    }
-}
-
-impl HostMethod {
-    /// Declared parameter names (receiver excluded), or `None`.
-    pub fn param_names(&self) -> Option<&[String]> {
-        declared(&self.params, &self.sig)
+        // `params` is either empty or one name per parameter: registration
+        // asserts it (`Module::merge_into`) and the `.wscripti` loader
+        // reads both from the same declaration. So the only case here is
+        // "nothing was declared".
+        (!self.params.is_empty()).then_some(&self.params[..])
     }
 }
 
@@ -76,17 +66,10 @@ pub fn positional_param_name(i: usize) -> String {
     format!("a{i}")
 }
 
-/// Names are only usable if there is one per parameter; a mismatch is a
-/// host registration bug (asserted in `Module::merge_into`) and degrades
-/// here to "undeclared" rather than to a misaligned parameter list.
-fn declared<'a>(params: &'a [String], sig: &FnSig) -> Option<&'a [String]> {
-    (!params.is_empty() && params.len() == sig.params.len()).then_some(params)
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct ModuleDef {
     pub name: String,
-    pub fns: Vec<ModuleFn>,
+    pub fns: Vec<HostFnDecl>,
     pub consts: Vec<(String, Type, Const)>,
     /// Types registered under this module (also importable via `use`).
     pub types: Vec<DefId>,
@@ -103,7 +86,7 @@ pub struct Registry {
     pub modules: Vec<ModuleDef>,
     pub host_fns: Vec<HostFnEntry>,
     /// Methods of host-registered (usually opaque) types.
-    pub methods: HashMap<DefId, Vec<HostMethod>>,
+    pub methods: HashMap<DefId, Vec<HostFnDecl>>,
 }
 
 impl Registry {

@@ -102,7 +102,18 @@ fn span_to_range(text: &str, span: wscript::Span) -> Range {
 
 // ------------------------------------------------------ AST span index
 
-/// Collect (span, node id) for every expression, for position lookups.
+/// Expressions by position, for hover, goto-definition and completion.
+struct ExprIndex {
+    /// (span, node id) for every expression, parents before children.
+    spans: Vec<(wscript::Span, ast::NodeId)>,
+    /// The call an expression is the callee of. A call's resolution hangs
+    /// off the call, not off its callee, so pointing at `atan2` in
+    /// `math::atan2(1.0, 2.0)` lands on the callee path and would
+    /// otherwise find nothing.
+    call_of_callee: HashMap<ast::NodeId, ast::NodeId>,
+}
+
+/// Collect the expression index, for position lookups.
 ///
 /// Explicit worklist, not recursion: operator/postfix chains give the AST
 /// unbounded depth even when the parser's nesting limit holds, and this
@@ -116,12 +127,15 @@ fn span_to_range(text: &str, span: wscript::Span) -> Range {
 /// documents that failed to check — so a deep-but-parseable AST would
 /// reach it. The exhaustive match below keeps the compile-time guarantee
 /// that `Visit` provides; only the traversal strategy differs.
-fn expr_index(file: &ast::SourceFile) -> Vec<(wscript::Span, ast::NodeId)> {
+fn expr_index(file: &ast::SourceFile) -> ExprIndex {
     enum Work<'a> {
         E(&'a ast::Expr),
         B(&'a ast::Block),
     }
-    let mut out = Vec::new();
+    let mut out = ExprIndex {
+        spans: Vec::new(),
+        call_of_callee: HashMap::new(),
+    };
     let mut stack: Vec<Work> = Vec::new();
     for item in &file.items {
         match item {
@@ -149,7 +163,7 @@ fn expr_index(file: &ast::SourceFile) -> Vec<(wscript::Span, ast::NodeId)> {
                 continue;
             }
         };
-        out.push((e.span, e.id));
+        out.spans.push((e.span, e.id));
         use ast::ExprKind::*;
         match &e.kind {
             Unary { expr, .. } | Try(expr) => stack.push(Work::E(expr)),
@@ -169,6 +183,7 @@ fn expr_index(file: &ast::SourceFile) -> Vec<(wscript::Span, ast::NodeId)> {
                 stack.push(Work::E(value));
             }
             Call { callee, args } => {
+                out.call_of_callee.insert(callee.id, e.id);
                 stack.push(Work::E(callee));
                 stack.extend(args.iter().map(Work::E));
             }
@@ -257,57 +272,44 @@ fn expr_index(file: &ast::SourceFile) -> Vec<(wscript::Span, ast::NodeId)> {
     out
 }
 
-/// Smallest expression containing `offset`. Children are walked after
-/// their parents, so on span ties the reversed scan prefers the innermost
-/// node (error-recovery wrappers share their child's span).
-fn node_at(index: &[(wscript::Span, ast::NodeId)], offset: usize) -> Option<ast::NodeId> {
-    index
-        .iter()
-        .rev()
-        .filter(|(span, _)| span.lo as usize <= offset && offset < span.hi as usize)
-        .min_by_key(|(span, _)| span.hi - span.lo)
-        .map(|(_, id)| *id)
-}
+impl ExprIndex {
+    /// Smallest expression containing `offset`. Children are walked after
+    /// their parents, so on span ties the reversed scan prefers the
+    /// innermost node (error-recovery wrappers share their child's span).
+    fn node_at(&self, offset: usize) -> Option<ast::NodeId> {
+        self.spans
+            .iter()
+            .rev()
+            .filter(|(span, _)| span.lo as usize <= offset && offset < span.hi as usize)
+            .min_by_key(|(span, _)| span.hi - span.lo)
+            .map(|(_, id)| *id)
+    }
 
-/// The node at `offset` and the enclosing nodes that start where it does,
-/// innermost first.
-///
-/// A call's resolution hangs off the call expression, not off its callee,
-/// so pointing at `atan2` in `math::atan2(1.0, 2.0)` lands on the callee
-/// path and finds nothing. The call starts at the same offset as its
-/// callee, so widening along a shared start reaches it — while an
-/// argument, which starts elsewhere, still resolves to itself.
-///
-/// A chain (`json::parse(s).unwrap().get(k)`) shares its start with every
-/// link, so the list can hold several resolvable nodes: take the first,
-/// which is the innermost, and therefore the one the cursor is on.
-fn nodes_starting_at(index: &[(wscript::Span, ast::NodeId)], offset: usize) -> Vec<ast::NodeId> {
-    let Some(inner) = node_at(index, offset) else {
-        return Vec::new();
-    };
-    let Some(lo) = index
-        .iter()
-        .find(|(_, id)| *id == inner)
-        .map(|(span, _)| span.lo)
-    else {
-        return Vec::new();
-    };
-    let mut nodes: Vec<&(wscript::Span, ast::NodeId)> = index
-        .iter()
-        .filter(|(span, _)| span.lo == lo && offset < span.hi as usize)
-        .collect();
-    nodes.sort_by_key(|(span, _)| span.hi - span.lo);
-    nodes.iter().map(|(_, id)| *id).collect()
-}
+    /// Expression ending exactly at `offset` (for `.` completions).
+    fn node_ending_at(&self, offset: usize) -> Option<ast::NodeId> {
+        self.spans
+            .iter()
+            .rev()
+            .filter(|(span, _)| span.hi as usize == offset)
+            .min_by_key(|(span, _)| span.hi - span.lo)
+            .map(|(_, id)| *id)
+    }
 
-/// Expression ending exactly at `offset` (for `.` completions).
-fn node_ending_at(index: &[(wscript::Span, ast::NodeId)], offset: usize) -> Option<ast::NodeId> {
-    index
-        .iter()
-        .rev()
-        .filter(|(span, _)| span.hi as usize == offset)
-        .min_by_key(|(span, _)| span.hi - span.lo)
-        .map(|(_, id)| *id)
+    /// The nodes a cursor at `offset` can carry a host registration: the
+    /// expression itself, and — because a call's resolution hangs off the
+    /// call rather than its callee — the call it is the callee of.
+    ///
+    /// Nothing wider: an enclosing call reached any other way is one the
+    /// cursor is not on. `v` in `v.get(k)` is the method call's receiver,
+    /// and hovering it should say what `v` is, not what `get` takes.
+    fn host_nodes_at(&self, offset: usize) -> Vec<ast::NodeId> {
+        let Some(node) = self.node_at(offset) else {
+            return Vec::new();
+        };
+        let mut nodes = vec![node];
+        nodes.extend(self.call_of_callee.get(&node).copied());
+        nodes
+    }
 }
 
 // ---------------------------------------------------- builtin methods
@@ -460,7 +462,7 @@ impl LanguageServer for Backend {
         let analysis = session.analyze(&entry_path(&uri), &text);
         let index = expr_index(&analysis.parse.file);
         let offset = position_to_offset(&text, pos);
-        let Some(node) = node_at(&index, offset) else {
+        let Some(node) = index.node_at(offset) else {
             return Ok(None);
         };
         let mut lines = Vec::new();
@@ -487,12 +489,10 @@ impl LanguageServer for Backend {
             }
         }
         // Host call info: signature + docs (PRD §9 feature 2).
-        if let Some(info) = host_target(registry, &analysis, &nodes_starting_at(&index, offset)) {
+        if let Some(info) = host_target(registry, &analysis, &index.host_nodes_at(offset)) {
             lines.push(format!(
-                "`{}{}{}{}`",
-                info.owner,
-                info.separator(),
-                info.name,
+                "`{}{}`",
+                info.qualified_name(),
                 render_sig_named(&info.sig, info.params.as_deref(), &analysis.check.defs)
             ));
             if let Some(doc) = info.doc {
@@ -528,7 +528,7 @@ impl LanguageServer for Backend {
         let analysis = session.analyze(&entry_path(&uri), &text);
         let index = expr_index(&analysis.parse.file);
         let offset = position_to_offset(&text, pos);
-        let Some(node) = node_at(&index, offset) else {
+        let Some(node) = index.node_at(offset) else {
             return Ok(None);
         };
         // Script-local symbols.
@@ -539,14 +539,8 @@ impl LanguageServer for Backend {
             })));
         }
         // Host symbols jump to the .wscripti entry (PRD §9 feature 3).
-        let target =
-            host_target(registry, &analysis, &nodes_starting_at(&index, offset)).and_then(|info| {
-                let key = (info.owner.clone(), info.name.clone());
-                lookup_wscripti(&wscripti, |i| match info.kind {
-                    HostKind::Fn => i.module_items.get(&key).copied(),
-                    HostKind::Method => i.methods.get(&key).copied(),
-                })
-            });
+        let target = host_target(registry, &analysis, &index.host_nodes_at(offset))
+            .and_then(|info| lookup_wscripti(&wscripti, |i| info.wscripti_span(i)));
         if let Some((path, span)) = target
             && let Ok(file_text) = std::fs::read_to_string(&path)
             && let Some(file_uri) = Uri::from_file_path(&path)
@@ -629,7 +623,7 @@ impl LanguageServer for Backend {
             // Methods after `.` — type the receiver via analysis.
             let analysis = session.analyze(&entry_path(&uri), &text);
             let index = expr_index(&analysis.parse.file);
-            let recv = node_ending_at(&index, rest.trim_end().len());
+            let recv = index.node_ending_at(rest.trim_end().len());
             let ty = recv.and_then(|n| analysis.check.types.get(&n)).cloned();
             match ty {
                 Some(wscript::Type::Str) => {
@@ -881,21 +875,46 @@ enum HostKind {
     Method,
 }
 
+/// What follows from which kind of registration this is: how owner and
+/// name are written together, and which of the interface's two indexes
+/// records it. One `match` produces both, so they cannot disagree about
+/// what a kind means.
+struct Addressing {
+    separator: &'static str,
+    wscripti_index: fn(&WscriptiIndex) -> &HashMap<(String, String), wscript::Span>,
+}
+
 impl HostInfo {
-    /// How the owner and the name are written together: `math::atan2`
-    /// for a module function, `Value.get` for a method.
-    fn separator(&self) -> &'static str {
+    fn addressing(&self) -> Addressing {
         match self.kind {
-            HostKind::Fn => "::",
-            HostKind::Method => ".",
+            HostKind::Fn => Addressing {
+                separator: "::",
+                wscripti_index: |i| &i.module_items,
+            },
+            HostKind::Method => Addressing {
+                separator: ".",
+                wscripti_index: |i| &i.methods,
+            },
         }
+    }
+
+    /// `math::atan2` for a module function, `Value.get` for a method.
+    fn qualified_name(&self) -> String {
+        format!("{}{}{}", self.owner, self.addressing().separator, self.name)
+    }
+
+    /// Where the `.wscripti` interface declares this registration.
+    fn wscripti_span(&self, index: &WscriptiIndex) -> Option<wscript::Span> {
+        (self.addressing().wscripti_index)(index)
+            .get(&(self.owner.clone(), self.name.clone()))
+            .copied()
     }
 }
 
-/// The host registration `nodes` refers to, if any — the first (innermost)
-/// node that resolves to one. Both features want the same answer, and both
-/// want exactly one: a chain offers several nodes, only one of which the
-/// cursor is on.
+/// The host registration `nodes` refers to, if any — the first that
+/// resolves to one, `nodes` being ordered innermost first (see
+/// [`ExprIndex::host_nodes_at`]). Hover and goto-definition want the same
+/// answer, and both want exactly one.
 fn host_target(
     reg: &wscript::Registry,
     analysis: &wscript::Analysis,

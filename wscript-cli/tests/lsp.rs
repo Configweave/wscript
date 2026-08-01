@@ -199,6 +199,22 @@ fn lsp_hover_shows_declared_host_parameter_names() {
         "method hover should name the parameters: {hover}"
     );
 
+    // On the receiver `v` — line 3, character 14. A receiver is not the
+    // call, so hovering it says what `v` is and nothing about `get`.
+    let id = lsp.request(
+        "textDocument/hover",
+        r#"{"textDocument":{"uri":"file:///method.wscript"},"position":{"line":3,"character":14}}"#,
+    );
+    let hover = lsp.read_until(&format!("\"id\":{id}"));
+    assert!(
+        hover.contains("Value"),
+        "the receiver's own type is what hover has to say: {hover}"
+    );
+    assert!(
+        !hover.contains("Value.get"),
+        "hovering the receiver should not report the method called on it: {hover}"
+    );
+
     lsp.request("shutdown", "null");
     lsp.notify("exit", "null");
 }
