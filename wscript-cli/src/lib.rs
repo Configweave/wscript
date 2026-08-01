@@ -11,35 +11,18 @@ pub mod manifest;
 pub mod repl;
 
 use std::io::Write;
+use std::path::Path;
 use std::process::ExitCode;
 
 use diag_render::Renderer;
-use wscript::{Context, Error, PrintHook, Value, Vm, VmConfig};
-
-/// The CLI enables the full stdlib by default (PRD §7/§8).
-pub fn default_context(script_args: Vec<String>) -> Context {
-    let mut ctx = Context::new();
-    for module in wscript_std::all_modules(script_args) {
-        ctx = ctx.module(module);
-    }
-    ctx
-}
+use manifest::{Mode, project_for};
+use wscript::{PrintHook, RunOutcome, VmConfig};
 
 pub fn read_source(path: &str) -> Result<String, ExitCode> {
     std::fs::read_to_string(path).map_err(|e| {
         eprintln!("error: cannot read `{path}`: {e}");
         ExitCode::FAILURE
     })
-}
-
-/// Script imports resolve next to the entry file, then under the
-/// manifest's `src_roots`.
-pub fn file_resolver(script_path: &str) -> wscript::FsResolver {
-    let mut resolver = wscript::FsResolver::new();
-    if let Some(m) = manifest::find(std::path::Path::new(script_path)) {
-        resolver.roots = m.src_roots;
-    }
-    resolver
 }
 
 /// How a script run ended.
@@ -77,41 +60,37 @@ pub fn run_script(
         let _ = writeln!(err, "error: cannot read `{path}`");
         return Outcome::Failed;
     };
-    let ctx = default_context(script_args);
-    let resolver = file_resolver(path);
-    let compiled = match ctx.compile_entry(path, &source, &resolver) {
+    let session = project_for(Path::new(path), Mode::Run { script_args }).session;
+    let compiled = match session.compile(path, &source) {
         Ok(c) => c,
         Err(failure) => {
             err.render_multi(&failure.sources, &failure.source_map, &failure.diags);
             return Outcome::CompileFailed;
         }
     };
-    let (unit, warnings, sources) = (compiled.unit, compiled.warnings, compiled.sources);
-    err.render_multi(&sources, &unit.source_map, &warnings);
-    if !unit.exports.contains_key("main") {
-        let _ = writeln!(err, "error: `{path}` has no `fn main()`");
-        return Outcome::NoMain;
-    }
-    let mut vm = Vm::with_config(
-        &ctx,
+    // Warnings before execution, so they precede the script's own output.
+    err.render_multi(
+        &compiled.sources,
+        &compiled.unit.source_map,
+        &compiled.warnings,
+    );
+    match session.run(
+        &compiled,
         VmConfig {
             out,
             ..VmConfig::default()
         },
-    );
-    match vm.call_values(&unit, "main", vec![]) {
-        // Exit code from main's return: int, or unit → 0 (PRD §8).
-        Ok(Value::Int(code)) => Outcome::Exited((code & 0xff) as u8),
-        Ok(_) => Outcome::Exited(0),
-        // process::exit — a requested exit, not an error to render.
-        Err(Error::Runtime(e)) if e.exit_code.is_some() => {
-            Outcome::Exited((e.exit_code.unwrap() & 0xff) as u8)
+    ) {
+        RunOutcome::Exited(code) => Outcome::Exited(code),
+        RunOutcome::NoMain => {
+            let _ = writeln!(err, "error: `{path}` has no `fn main()`");
+            Outcome::NoMain
         }
-        Err(Error::Runtime(e)) => {
-            err.render_runtime_multi(&sources, &unit.source_map, &e);
+        RunOutcome::Faulted(e) => {
+            err.render_runtime_multi(&compiled.sources, &compiled.unit.source_map, &e);
             Outcome::Faulted
         }
-        Err(e) => {
+        RunOutcome::Failed(e) => {
             let _ = writeln!(err, "error: {e}");
             Outcome::Failed
         }
@@ -131,22 +110,11 @@ pub fn cmd_check(path: &str) -> ExitCode {
         Ok(s) => s,
         Err(c) => return c,
     };
-    // `wscript check` honors wscript.toml's .wscripti interfaces (PRD §8/§9.1).
-    // A manifest describes the *complete* host context the script runs
-    // under, so when one is present the CLI's default stdlib stays out of
-    // the registry — otherwise a same-named CLI module would shadow the
-    // embedder's interface and mis-check real scripts. See ADR-0002.
-    let ctx = match manifest::find(std::path::Path::new(path)) {
-        Some(m) => {
-            let mut reg = wscript::Registry::new();
-            manifest::load_interfaces(&m, &mut reg);
-            wscript::Context::from_registry(reg)
-        }
-        None => default_context(Vec::new()),
-    };
-    let resolver = file_resolver(path);
+    // `wscript check` honors wscript.toml's .wscripti interfaces — that
+    // is what `Mode::Check` means (PRD §8/§9.1, ADR-0002).
+    let session = project_for(Path::new(path), Mode::Check).session;
     let mut err = Renderer::stderr();
-    match ctx.compile_entry(path, &source, &resolver) {
+    match session.compile(path, &source) {
         Ok(c) => {
             err.render_multi(&c.sources, &c.unit.source_map, &c.warnings);
             ExitCode::SUCCESS
@@ -183,8 +151,15 @@ pub fn run(args: &[String]) -> ExitCode {
             };
             cmd_check(file)
         }
-        Some("repl") => repl::run(default_context(Vec::new())),
-        Some("lsp") => lsp::run(default_context(Vec::new())),
+        // The repl and the lsp have no entry file, so their project is
+        // whatever manifest sits above the working directory.
+        Some("repl") => repl::run(project_for(
+            Path::new("."),
+            Mode::Run {
+                script_args: iter.cloned().collect(),
+            },
+        )),
+        Some("lsp") => lsp::run(project_for(Path::new("."), Mode::Check)),
         Some("--version") | Some("-V") => {
             println!("wscript {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS

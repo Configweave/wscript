@@ -178,6 +178,51 @@ fn lsp_method_completions() {
     lsp.notify("exit", "null");
 }
 
+/// The editor must resolve the same imports `wscript check` does.
+///
+/// Opened against the fixture project's `wscript.toml`, `main.wscript`
+/// imports a script from `src_roots` and calls a host function declared
+/// in an `.wscripti`. Before #13 the server loaded the interfaces but
+/// built its import resolver with no source roots, so this document lit
+/// up with `E0200 unknown module `helper`` in the editor while
+/// `wscript check` on the very same file exited 0.
+#[test]
+fn lsp_honors_the_manifest_src_roots() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project");
+    let entry = root.join("main.wscript");
+    let text = std::fs::read_to_string(&entry).expect("fixture readable");
+    let root_uri = format!("file://{}", root.display());
+    let entry_uri = format!("file://{}", entry.display());
+
+    let mut lsp = Lsp::start();
+    let id = lsp.request(
+        "initialize",
+        &format!(r#"{{"capabilities":{{}},"rootUri":"{root_uri}"}}"#),
+    );
+    lsp.read_until(&format!("\"id\":{id}"));
+    lsp.notify("initialized", "{}");
+
+    lsp.notify(
+        "textDocument/didOpen",
+        &format!(
+            r#"{{"textDocument":{{"uri":"{entry_uri}","languageId":"wscript","version":1,"text":{}}}}}"#,
+            serde_jsonish(&text)
+        ),
+    );
+    let diags = lsp.read_until("publishDiagnostics");
+    assert!(
+        !diags.contains("E0200"),
+        "`use helper` must resolve through the manifest's src_roots: {diags}"
+    );
+    assert!(
+        diags.contains(r#""diagnostics":[]"#),
+        "the fixture is clean in the editor, as it is in `wscript check`: {diags}"
+    );
+
+    lsp.request("shutdown", "null");
+    lsp.notify("exit", "null");
+}
+
 /// Minimal JSON string encoder for the test documents.
 fn serde_jsonish(s: &str) -> String {
     let mut out = String::from("\"");

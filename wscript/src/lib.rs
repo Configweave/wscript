@@ -17,13 +17,17 @@
 //! ```
 
 mod interface;
+mod session;
 
 use std::cell::{Ref, RefMut};
 use std::fmt;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-pub use wscript_compiler::{CompileFailure, ImportSpec, ResolvedSource, SourceResolver};
+pub use session::{RunOutcome, Session, SessionBuilder};
+pub use wscript_compiler::{
+    Analysis, CompileFailure, Compiled, ImportSpec, NoImports, ResolvedSource, SourceResolver,
+};
 pub use wscript_core::bytecode::CompiledUnit;
 pub use wscript_core::defs::DefTable;
 pub use wscript_core::diag::{Diagnostic, Severity, default_help as diag_default_help};

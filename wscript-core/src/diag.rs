@@ -51,6 +51,18 @@ impl Diagnostic {
         self.labels.push((span, message.into()));
         self
     }
+
+    /// The help a renderer should show: this diagnostic's own, else the
+    /// fallback for its code.
+    ///
+    /// Every renderer wants the same rule, so it lives with the
+    /// diagnostic rather than being restated by each of them — the
+    /// terminal renderer and the language server had written it out
+    /// separately, which is one edit away from an editor that stops
+    /// explaining errors the CLI still explains.
+    pub fn help_text(&self) -> Option<&str> {
+        self.help.as_deref().or_else(|| default_help(self.code))
+    }
 }
 
 /// Fallback help text per diagnostic code, used by renderers when a

@@ -83,12 +83,141 @@ fn check_resolves_against_the_interface() {
     );
 }
 
+// ------------------------------------------------------------- projects
+
+use manifest::{Mode, project_for};
+
+fn analyze(mode: Mode) -> wscript::Analysis {
+    let path = fixture("main.wscript");
+    let source = std::fs::read_to_string(&path).expect("fixture readable");
+    project_for(&path, mode)
+        .session
+        .analyze(&path.to_string_lossy(), &source)
+}
+
+fn errors(a: &wscript::Analysis) -> Vec<String> {
+    a.parse
+        .diags
+        .iter()
+        .chain(a.check.diags.iter())
+        .filter(|d| d.severity == wscript::Severity::Error)
+        .map(|d| format!("[{}] {}", d.code, d.message))
+        .collect()
+}
+
 /// `src_roots` is what makes `use helper` resolve from a sibling
-/// directory. The LSP was constructing a resolver without it, so the
-/// editor reported E0200 on imports the CLI resolved (fixed in #13).
+/// directory, and it must come out of the manifest in *both* modes. The
+/// language server used to build its resolver separately, with no roots,
+/// so the editor reported E0200 on imports `wscript check` resolved
+/// happily — the bug #13 exists to kill.
 #[test]
-fn file_resolver_picks_up_src_roots() {
-    let resolver = wscript_cli::file_resolver(&fixture("main.wscript").to_string_lossy());
-    assert_eq!(resolver.roots.len(), 1);
-    assert!(resolver.roots[0].ends_with("scripts"));
+fn both_modes_resolve_src_roots_imports() {
+    for mode in [
+        Mode::Check,
+        Mode::Run {
+            script_args: vec![],
+        },
+    ] {
+        let a = analyze(mode);
+        // `use host` is a check-mode-only module (it comes from the
+        // .wscripti), so run mode legitimately cannot find it — but
+        // `helper` is a script file, and both modes must reach it.
+        assert!(
+            !errors(&a).iter().any(|e| e.contains("`helper`")),
+            "`use helper` must resolve through src_roots: {:?}",
+            errors(&a)
+        );
+        assert_eq!(a.sources.len(), 2, "entry plus scripts/helper.wscript");
+        assert!(a.sources[1].0.ends_with("helper.wscript"));
+    }
+}
+
+/// The editor and the CLI must reach the same conclusion about the same
+/// file. They start from different places — the language server builds
+/// its project from the workspace *root* at `initialize`, `wscript check`
+/// from the *entry file* — and that is precisely where they used to
+/// diverge, because only one of them carried `src_roots` forward.
+#[test]
+fn the_editor_and_the_cli_agree() {
+    let entry = fixture("main.wscript");
+    let entry_str = entry.to_string_lossy().into_owned();
+    let source = std::fs::read_to_string(&entry).expect("fixture readable");
+
+    let editor = project_for(&fixture(""), Mode::Check).session;
+    let cli = project_for(&entry, Mode::Check).session;
+
+    let a = editor.analyze(&entry_str, &source);
+    let b = cli.analyze(&entry_str, &source);
+
+    let files = |x: &wscript::Analysis| -> Vec<String> {
+        x.sources.iter().map(|(p, _)| p.clone()).collect()
+    };
+    assert_eq!(files(&a), files(&b), "same import set");
+    assert_eq!(errors(&a), errors(&b), "same diagnostics");
+    assert!(errors(&a).is_empty(), "and no errors: {:?}", errors(&a));
+}
+
+/// The entry file typechecks completely in check mode: imports from
+/// `src_roots`, host calls from the `.wscripti`.
+#[test]
+fn check_mode_typechecks_the_fixture() {
+    assert!(errors(&analyze(Mode::Check)).is_empty());
+}
+
+/// ADR-0002: with a manifest present, `Mode::Check`'s registry holds the
+/// declared interfaces and nothing else, so a same-named CLI module
+/// cannot shadow the embedder's.
+#[test]
+fn check_mode_registry_is_the_declared_host_only() {
+    let project = project_for(&fixture("main.wscript"), Mode::Check);
+    let names: Vec<&str> = project
+        .session
+        .registry()
+        .modules
+        .iter()
+        .map(|m| m.name.as_str())
+        .collect();
+    assert_eq!(names, ["host"], "only the .wscripti module is registered");
+    assert_eq!(project.interfaces.len(), 1, "indexed for goto-definition");
+}
+
+/// Run mode is the other half of ADR-0002: the stdlib *is* the host, and
+/// the interfaces are not consulted at all.
+#[test]
+fn run_mode_registry_is_the_stdlib() {
+    let project = project_for(
+        &fixture("main.wscript"),
+        Mode::Run {
+            script_args: vec![],
+        },
+    );
+    let names: Vec<&str> = project
+        .session
+        .registry()
+        .modules
+        .iter()
+        .map(|m| m.name.as_str())
+        .collect();
+    assert!(names.contains(&"fs"), "stdlib registered: {names:?}");
+    assert!(
+        !names.contains(&"host"),
+        "the .wscripti host is not a run-time module: {names:?}"
+    );
+    assert!(project.interfaces.is_empty());
+}
+
+/// Outside a project both modes fall back to the stdlib — a bare
+/// `wscript run foo.wscript` still works.
+#[test]
+fn without_a_manifest_check_falls_back_to_the_stdlib() {
+    let project = project_for(Path::new("/nonexistent/foo.wscript"), Mode::Check);
+    assert!(
+        project
+            .session
+            .registry()
+            .modules
+            .iter()
+            .any(|m| m.name == "fs")
+    );
+    assert!(project.interfaces.is_empty());
 }

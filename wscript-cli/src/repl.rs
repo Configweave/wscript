@@ -16,12 +16,17 @@ use std::process::ExitCode;
 
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
-use wscript::{Context, DefTable, Value};
+use wscript::{DefTable, Session, Value};
 use wscript_compiler::ast::{Item, Stmt};
 
 use crate::diag_render;
+use crate::manifest::Project;
 
-pub fn run(ctx: Context) -> ExitCode {
+/// The entry path a repl line is compiled under. Imports resolve relative
+/// to it, so `use "./helpers.wscript"` means what it does in a shell.
+const ENTRY: &str = "<repl>";
+
+pub fn run(project: Project) -> ExitCode {
     println!(
         "wscript {} — type expressions or declarations; :help for commands",
         env!("CARGO_PKG_VERSION")
@@ -34,9 +39,9 @@ pub fn run(ctx: Context) -> ExitCode {
     if let Some(path) = &history {
         let _ = editor.load_history(path); // absent on first run — fine
     }
-    let defs = ctx.registry().defs.clone();
+    let defs = project.session.registry().defs.clone();
     let mut repl = Repl {
-        ctx,
+        session: project.session,
         items: String::new(),
         bindings: Vec::new(),
         defs,
@@ -163,7 +168,7 @@ fn open_delims(src: &str) -> i32 {
 }
 
 struct Repl {
-    ctx: Context,
+    session: Session,
     items: String,
     bindings: Vec<(String, String, Value)>,
     /// Def table from the most recent successful compile — script-declared
@@ -207,12 +212,18 @@ impl Repl {
             format!("{}\n{input}", self.items)
         };
         let probe = format!("{candidate}\nfn __probe() {{}}\n");
-        match self.ctx.compile_verbose(&probe) {
-            Ok((_, warnings)) => {
-                diag_render::Renderer::stderr().render("<repl>", &probe, &warnings);
+        match self.session.compile(ENTRY, &probe) {
+            Ok(c) => {
+                diag_render::Renderer::stderr().render_multi(
+                    &c.sources,
+                    &c.unit.source_map,
+                    &c.warnings,
+                );
                 self.items = candidate;
             }
-            Err(diags) => diag_render::Renderer::stderr().render("<repl>", &probe, &diags),
+            Err(f) => {
+                diag_render::Renderer::stderr().render_multi(&f.sources, &f.source_map, &f.diags)
+            }
         }
     }
 
@@ -235,7 +246,7 @@ impl Repl {
             self.items,
             self.params()
         );
-        let analysis = wscript_compiler::analyze(&src1, self.ctx.registry());
+        let analysis = self.session.analyze(ENTRY, &src1);
         let errors: Vec<wscript::Diagnostic> = {
             let mut all = analysis.parse.diags.clone();
             all.extend(analysis.check.diags.clone());
@@ -245,7 +256,11 @@ impl Repl {
             .iter()
             .any(|d| d.severity == wscript::Severity::Error)
         {
-            diag_render::Renderer::stderr().render("<repl>", &src1, &errors);
+            diag_render::Renderer::stderr().render_multi(
+                &analysis.sources,
+                &analysis.source_map,
+                &errors,
+            );
             return;
         }
 
@@ -322,19 +337,23 @@ impl Repl {
     }
 
     fn execute(&mut self, src: &str, _expect: Option<&str>) -> Option<Value> {
-        let unit = match self.ctx.compile_verbose(src) {
-            Ok((unit, warnings)) => {
-                diag_render::Renderer::stderr().render("<repl>", src, &warnings);
-                self.defs = unit.defs.clone();
-                unit
+        let compiled = match self.session.compile(ENTRY, src) {
+            Ok(c) => {
+                diag_render::Renderer::stderr().render_multi(
+                    &c.sources,
+                    &c.unit.source_map,
+                    &c.warnings,
+                );
+                self.defs = c.unit.defs.clone();
+                c
             }
-            Err(diags) => {
-                diag_render::Renderer::stderr().render("<repl>", src, &diags);
+            Err(f) => {
+                diag_render::Renderer::stderr().render_multi(&f.sources, &f.source_map, &f.diags);
                 return None;
             }
         };
-        let mut vm = wscript::Vm::new(&self.ctx);
-        match vm.call_values(&unit, "__line", self.args()) {
+        let mut vm = wscript::Vm::new(self.session.context());
+        match vm.call_values(&compiled.unit, "__line", self.args()) {
             Ok(value) => Some(value),
             // process::exit in the REPL: report, keep the session alive.
             Err(wscript::Error::Runtime(e)) if e.exit_code.is_some() => {
@@ -342,7 +361,11 @@ impl Repl {
                 None
             }
             Err(wscript::Error::Runtime(e)) => {
-                diag_render::Renderer::stderr().render_runtime("<repl>", src, &e);
+                diag_render::Renderer::stderr().render_runtime_multi(
+                    &compiled.sources,
+                    &compiled.unit.source_map,
+                    &e,
+                );
                 None
             }
             Err(e) => {

@@ -69,11 +69,19 @@ const BENCHES: &[Bench] = &[
 ];
 
 fn run_wscript(src: &str, expected: i64) -> Duration {
-    let ctx = wscript::Context::new();
-    let unit = ctx.compile(src).expect("wscript compile");
-    let mut vm = wscript::Vm::new(&ctx);
+    // No host registrations and no imports: this measures the language,
+    // not the embedding. Going through a `Session` anyway keeps the
+    // benchmark on the same entry point every other tool uses.
+    let session = wscript::Session::builder().build();
+    let compiled = match session.compile("bench.wscript", src) {
+        Ok(c) => c,
+        Err(f) => panic!("wscript compile: {:?}", f.diags),
+    };
+    let mut vm = wscript::Vm::new(session.context());
     time_best(|| {
-        let n: i64 = vm.call_unit(&unit, "main", ()).expect("wscript run");
+        let n: i64 = vm
+            .call_unit(&compiled.unit, "main", ())
+            .expect("wscript run");
         assert_eq!(n, expected, "wscript result");
     })
 }

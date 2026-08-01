@@ -80,11 +80,7 @@ impl<'w> Renderer<'w> {
                         .with_color(Color::Blue),
                 );
             }
-            if let Some(help) = d
-                .help
-                .clone()
-                .or_else(|| wscript::diag_default_help(d.code).map(String::from))
-            {
+            if let Some(help) = d.help_text() {
                 report = report.with_help(help);
             }
             let _ = report

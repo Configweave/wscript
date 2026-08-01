@@ -9,12 +9,13 @@ use std::sync::Mutex;
 use tower_lsp_server::jsonrpc::Result as LspResult;
 use tower_lsp_server::ls_types::*;
 use tower_lsp_server::{Client, LanguageServer, LspService, Server};
+use wscript::Session;
 use wscript_compiler::ast;
 use wscript_compiler::wscripti::WscriptiIndex;
 
-use crate::manifest;
+use crate::manifest::{Mode, Project, project_for};
 
-pub fn run(ctx: wscript::Context) -> std::process::ExitCode {
+pub fn run(project: Project) -> std::process::ExitCode {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     runtime.block_on(async {
         let stdin = tokio::io::stdin();
@@ -22,9 +23,7 @@ pub fn run(ctx: wscript::Context) -> std::process::ExitCode {
         let (service, socket) = LspService::new(|client| Backend {
             client,
             state: Mutex::new(State {
-                base: ctx,
-                registry: None,
-                wscripti_indexes: Vec::new(),
+                project,
                 docs: HashMap::new(),
             }),
         });
@@ -34,19 +33,19 @@ pub fn run(ctx: wscript::Context) -> std::process::ExitCode {
 }
 
 struct State {
-    /// stdlib-only context (fallback when no wscript.toml is found).
-    base: wscript::Context,
-    /// Registry incl. wscript.toml interfaces (built at initialize).
-    registry: Option<wscript::Registry>,
-    wscripti_indexes: Vec<(PathBuf, WscriptiIndex)>,
+    /// The project the editor has open. Built from the working directory
+    /// at startup, then rebuilt from the workspace root at `initialize` —
+    /// the same `Mode::Check` project `wscript check` compiles with, so
+    /// the two cannot resolve different imports.
+    project: Project,
     docs: HashMap<Uri, String>,
 }
 
 impl State {
-    fn registry(&self) -> wscript::Registry {
-        self.registry
-            .clone()
-            .unwrap_or_else(|| self.base.registry().clone())
+    /// The session to compile with. Cloned rather than borrowed so
+    /// analysis runs off the state lock.
+    fn session(&self) -> Session {
+        self.project.session.clone()
     }
 }
 
@@ -112,8 +111,8 @@ fn span_to_range(text: &str, span: wscript::Span) -> Range {
 /// tie-break below relies on that).
 ///
 /// This deliberately does *not* use `ast::Visit`, which is recursive.
-/// `analyze_doc` runs the pipeline on a 32 MiB scoped thread, but this
-/// index is built afterwards on tokio's 2 MiB stack, and it runs on
+/// `Session::analyze` runs the pipeline on a 32 MiB scoped thread, but
+/// this index is built afterwards on tokio's 2 MiB stack, and it runs on
 /// documents that failed to check — so a deep-but-parseable AST would
 /// reach it. The exhaustive match below keeps the compile-time guarantee
 /// that `Visit` provides; only the traversal strategy differs.
@@ -350,18 +349,16 @@ impl LanguageServer for Backend {
             .as_ref()
             .and_then(|u| u.to_file_path())
             .map(|p| p.into_owned());
-        if let Some(root) = root
-            && let Some(m) = manifest::find(&root)
-        {
+        if let Some(root) = root {
+            // Exactly what `wscript check` builds for a file under this
+            // root: the declared interfaces as the host (ADR-0002) *and*
+            // the manifest's `src_roots`. Getting the second half from
+            // the same call is the point — the server used to load the
+            // interfaces here and then resolve imports with no roots at
+            // all, so the editor reported E0200 on `use` statements the
+            // CLI resolved happily.
             let mut state = self.state.lock().unwrap();
-            // A manifest describes the complete host context (see
-            // cmd_check): use exactly the declared interfaces rather
-            // than overlaying them on the CLI stdlib, which would
-            // shadow same-named embedder modules.
-            let mut reg = wscript::Registry::new();
-            let indexes = manifest::load_interfaces(&m, &mut reg);
-            state.registry = Some(reg);
-            state.wscripti_indexes = indexes;
+            state.project = project_for(&root, Mode::Check);
         }
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
@@ -421,14 +418,15 @@ impl LanguageServer for Backend {
     async fn hover(&self, params: HoverParams) -> LspResult<Option<Hover>> {
         let uri = params.text_document_position_params.text_document.uri;
         let pos = params.text_document_position_params.position;
-        let (text, registry) = {
+        let (text, session) = {
             let state = self.state.lock().unwrap();
             let Some(text) = state.docs.get(&uri).cloned() else {
                 return Ok(None);
             };
-            (text, state.registry())
+            (text, state.session())
         };
-        let analysis = analyze_doc(&uri, &text, &registry);
+        let registry = session.registry();
+        let analysis = session.analyze(&entry_path(&uri), &text);
         let index = expr_index(&analysis.parse.file);
         let offset = position_to_offset(&text, pos);
         let Some(node) = node_at(&index, offset) else {
@@ -459,7 +457,7 @@ impl LanguageServer for Backend {
         }
         // Host call info: signature + docs (PRD §9 feature 2).
         if let Some(wscript_compiler::check::CallKind::Host(idx)) = analysis.check.call(node)
-            && let Some((module, name, sig, doc)) = host_fn_info(&registry, *idx)
+            && let Some((module, name, sig, doc)) = host_fn_info(registry, *idx)
         {
             lines.push(format!(
                 "`{module}::{name}{}`",
@@ -470,7 +468,7 @@ impl LanguageServer for Backend {
             }
         }
         if let Some(wscript_compiler::check::MethodRes::Host(idx)) = analysis.check.method(node)
-            && let Some((ty_name, name, sig, doc)) = host_method_info(&registry, *idx)
+            && let Some((ty_name, name, sig, doc)) = host_method_info(registry, *idx)
         {
             lines.push(format!(
                 "`{ty_name}.{name}{}`",
@@ -498,14 +496,15 @@ impl LanguageServer for Backend {
     ) -> LspResult<Option<GotoDefinitionResponse>> {
         let uri = params.text_document_position_params.text_document.uri;
         let pos = params.text_document_position_params.position;
-        let (text, registry, wscripti) = {
+        let (text, session, wscripti) = {
             let state = self.state.lock().unwrap();
             let Some(text) = state.docs.get(&uri).cloned() else {
                 return Ok(None);
             };
-            (text, state.registry(), state.wscripti_indexes.clone())
+            (text, state.session(), state.project.interfaces.clone())
         };
-        let analysis = analyze_doc(&uri, &text, &registry);
+        let registry = session.registry();
+        let analysis = session.analyze(&entry_path(&uri), &text);
         let index = expr_index(&analysis.parse.file);
         let offset = position_to_offset(&text, pos);
         let Some(node) = node_at(&index, offset) else {
@@ -520,15 +519,14 @@ impl LanguageServer for Backend {
         }
         // Host symbols jump to the .wscripti entry (PRD §9 feature 3).
         let target = match (analysis.check.call(node), analysis.check.method(node)) {
-            (Some(wscript_compiler::check::CallKind::Host(idx)), _) => {
-                host_fn_info(&registry, *idx).and_then(|(m, n, ..)| {
+            (Some(wscript_compiler::check::CallKind::Host(idx)), _) => host_fn_info(registry, *idx)
+                .and_then(|(m, n, ..)| {
                     lookup_wscripti(&wscripti, |i| {
                         i.module_items.get(&(m.clone(), n.clone())).copied()
                     })
-                })
-            }
+                }),
             (_, Some(wscript_compiler::check::MethodRes::Host(idx))) => {
-                host_method_info(&registry, *idx).and_then(|(t, n, ..)| {
+                host_method_info(registry, *idx).and_then(|(t, n, ..)| {
                     lookup_wscripti(&wscripti, |i| {
                         i.methods.get(&(t.clone(), n.clone())).copied()
                     })
@@ -551,13 +549,14 @@ impl LanguageServer for Backend {
     async fn completion(&self, params: CompletionParams) -> LspResult<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let pos = params.text_document_position.position;
-        let (text, registry) = {
+        let (text, session) = {
             let state = self.state.lock().unwrap();
             let Some(text) = state.docs.get(&uri).cloned() else {
                 return Ok(None);
             };
-            (text, state.registry())
+            (text, state.session())
         };
+        let registry = session.registry();
         let offset = position_to_offset(&text, pos);
         let before = &text[..offset.min(text.len())];
 
@@ -577,7 +576,7 @@ impl LanguageServer for Backend {
         if let Some(rest) = before.strip_suffix("::") {
             // Module members or enum variants after `::` (PRD §9 feature 4).
             let seg = trailing_ident(rest);
-            let analysis = analyze_doc(&uri, &text, &registry);
+            let analysis = session.analyze(&entry_path(&uri), &text);
             if let Some(module) = registry.modules.iter().find(|m| m.name == seg) {
                 for (name, sig, _, doc) in &module.fns {
                     push(
@@ -614,7 +613,7 @@ impl LanguageServer for Backend {
             }
         } else if let Some(rest) = before.strip_suffix(".") {
             // Methods after `.` — type the receiver via analysis.
-            let analysis = analyze_doc(&uri, &text, &registry);
+            let analysis = session.analyze(&entry_path(&uri), &text);
             let index = expr_index(&analysis.parse.file);
             let recv = node_ending_at(&index, rest.trim_end().len());
             let ty = recv.and_then(|n| analysis.check.types.get(&n)).cloned();
@@ -716,7 +715,7 @@ impl LanguageServer for Backend {
             for p in PRELUDE {
                 push(&mut items, p, CompletionItemKind::FUNCTION, None);
             }
-            let analysis = analyze_doc(&uri, &text, &registry);
+            let analysis = session.analyze(&entry_path(&uri), &text);
             for (name, (_, sig)) in &analysis.check.exports {
                 push(
                     &mut items,
@@ -765,20 +764,16 @@ impl LanguageServer for Backend {
 
 impl Backend {
     async fn publish_diagnostics(&self, uri: Uri, text: String) {
-        let registry = {
+        let session = {
             let state = self.state.lock().unwrap();
-            state.registry()
+            state.session()
         };
-        // Resolve script imports from the file's own directory so
-        // multi-file scripts don't light up with false unknown-module
-        // errors; diagnostics landing in IMPORTED files are dropped here
-        // (they surface when that file is open/analyzed as the entry).
-        let entry_path = uri
-            .to_file_path()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "script".to_string());
-        let resolver = wscript::FsResolver::new();
-        let analysis = wscript_compiler::analyze_entry(&entry_path, &text, &resolver, &registry);
+        // Imports resolve through the project's session, so a multi-file
+        // script doesn't light up with false unknown-module errors.
+        // Diagnostics landing in IMPORTED files are dropped here — they
+        // belong to that file's own `textDocument/publishDiagnostics`,
+        // which the editor gets when that file is opened.
+        let analysis = session.analyze(&entry_path(&uri), &text);
         let entry_len = text.len() as u32;
         let mut all = analysis.parse.diags;
         all.extend(analysis.check.diags);
@@ -793,11 +788,7 @@ impl Backend {
                 }),
                 code: Some(NumberOrString::String(d.code.to_string())),
                 source: Some("wscript".into()),
-                message: match d
-                    .help
-                    .clone()
-                    .or_else(|| wscript::diag_default_help(d.code).map(String::from))
-                {
+                message: match d.help_text() {
                     Some(help) => format!("{}\nhelp: {help}", d.message),
                     None => d.message.clone(),
                 },
@@ -808,14 +799,13 @@ impl Backend {
     }
 }
 
-/// Analyze an open document with script imports resolved relative to
-/// its own path (multi-file support in every LSP feature).
-fn analyze_doc(uri: &Uri, text: &str, registry: &wscript::Registry) -> wscript_compiler::Analysis {
-    let entry_path = uri
-        .to_file_path()
+/// The entry path an open document is analyzed under. Imports resolve
+/// relative to it, which is what gives every LSP feature multi-file
+/// support; an unsaved or non-file URI falls back to a placeholder.
+fn entry_path(uri: &Uri) -> String {
+    uri.to_file_path()
         .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "script".to_string());
-    wscript_compiler::analyze_entry(&entry_path, text, &wscript::FsResolver::new(), registry)
+        .unwrap_or_else(|| "script".to_string())
 }
 
 fn trailing_ident(text: &str) -> &str {

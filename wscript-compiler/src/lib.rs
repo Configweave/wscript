@@ -28,6 +28,7 @@ pub struct Compiled {
 
 /// A failed compilation, with everything a renderer needs to point
 /// diagnostics at the right file of a multi-file program.
+#[derive(Debug)]
 pub struct CompileFailure {
     pub diags: Vec<Diagnostic>,
     pub sources: Vec<(String, String)>,
@@ -303,6 +304,11 @@ pub struct Analysis {
     /// File layout of the analysis (entry first). Single-file analyses
     /// have one entry at base 0.
     pub source_map: SourceMap,
+    /// Every analyzed file's (display path, source text) in span-address
+    /// order, matching `source_map` — what a renderer needs to point a
+    /// diagnostic at the imported file it actually came from, instead of
+    /// dropping it for landing outside the entry.
+    pub sources: Vec<(String, String)>,
 }
 
 pub fn analyze(source: &str, registry: &Registry) -> Analysis {
@@ -372,11 +378,16 @@ pub fn analyze_entry(
                 })
                 .collect(),
         };
+        let sources = files
+            .iter()
+            .map(|f| (f.display.clone(), f.src.clone()))
+            .collect();
         let parse = files.swap_remove(0).parse;
         Analysis {
             parse,
             check,
             source_map,
+            sources,
         }
     })
 }

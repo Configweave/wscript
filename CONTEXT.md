@@ -151,6 +151,16 @@ methods but no visible fields.
 **Context** — the embedder's handle to a configured registry, from which
 compilations and VMs are made.
 
+**Session** — a registry **and** the resolver its imports go through, wired once
+and kept together. Answers "how is this project compiled?" where a `Context`
+answers only "what has the host registered?". Cheap to clone; `analyze`,
+`compile` and `run` hang off it. Every tool — `run`, `check`, the REPL, the LSP,
+the benchmarks — builds one instead of reassembling the pipeline.
+
+**Resolver** (`SourceResolver`) — how a `use` is turned into source text.
+`FsResolver` searches the importing file's directory then the **source roots**;
+`NoImports` refuses everything; a host may supply its own.
+
 ---
 
 ## Tooling
@@ -159,6 +169,16 @@ compilations and VMs are made.
 resolution, and interface files to typecheck against.
 
 **Source roots** — directories an import is resolved against.
+
+**Project** — what the CLI derives from a path on disk: the **session** to
+compile with, plus the `.wscripti` indexes for goto-definition. Built by
+`project_for(entry, mode)`, the one place that turns a file into a configured
+compiler.
+
+**Mode** — which host a project is compiled against. `Run`: the CLI's stdlib,
+plus the script's arguments. `Check`: the manifest's declared interfaces instead
+of the stdlib (ADR-0002). Source roots come from the manifest in both — that is
+not a mode difference, which is why the LSP can no longer drop them.
 
 **Script suite** — the behaviour tests in `tests/scripts/*.wscript`, asserted by
 `// expect:` (stdout), `// exit:` (exit code) and `// error:` (rendered stderr)
@@ -185,7 +205,3 @@ quantity base, trait impl, bounds ([#9](https://github.com/Configweave/wscript/i
 **Env** — the checker's scope, frame, loop and type-parameter state, entered
 through scoped methods rather than paired push/pop
 ([#8](https://github.com/Configweave/wscript/issues/8)).
-
-**Session** — registry, resolver and diagnostic sink wired once, shared by `run`,
-`check`, the REPL, the LSP and benchmarks
-([#13](https://github.com/Configweave/wscript/issues/13)).

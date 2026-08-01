@@ -6,9 +6,9 @@
 
 ## Context
 
-`wscript run` builds its registry from the CLI's bundled stdlib
-(`wscript-cli/src/main.rs:55-61`). `wscript check` does not, **when a
-`wscript.toml` is found** (`main.rs:132-139`):
+`wscript run` builds its registry from the CLI's bundled stdlib. `wscript check`
+does not, **when a `wscript.toml` is found** — at the time this was written both
+commands re-derived that rule inline, roughly:
 
 ```rust
 let ctx = match manifest::find(std::path::Path::new(path)) {
@@ -59,8 +59,12 @@ commands for a silent, hard-to-diagnose wrong answer inside one of them.
   interface in `wscript.toml`, not to change the registry rule.
 - The LSP must use `Mode::Check`, so an editor agrees with `wscript check` rather
   than with `wscript run`.
-- The modes are a seam worth testing directly. As of this ADR **no `wscript.toml`
-  exists anywhere in the repo**, so neither mode is exercised; a fixture is in
-  scope for [#13](https://github.com/Configweave/wscript/issues/13).
+- The modes are a seam worth testing directly. Implemented in
+  [#13](https://github.com/Configweave/wscript/issues/13) as
+  `wscript_cli::manifest::Mode` / `project_for`, and pinned by
+  `wscript-cli/tests/manifest.rs` against the fixture project under
+  `wscript-cli/tests/fixtures/project/`:
+  `check_mode_registry_is_the_declared_host_only` and
+  `run_mode_registry_is_the_stdlib` assert the two registries stay disjoint.
 - Anyone tempted to simplify this — including a future architecture review —
   should read this file first.
