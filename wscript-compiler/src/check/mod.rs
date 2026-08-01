@@ -6,6 +6,7 @@
 
 mod env;
 mod expr;
+mod index;
 mod infer;
 mod methods;
 mod ops;
@@ -28,7 +29,9 @@ use crate::ast::*;
 use env::{Env, FnFrame};
 use infer::Infer;
 
+pub use index::{Completion, CompletionKind, Editor, Index, Symbol, render_sig};
 pub use infer::subst_params;
+pub use methods::builtin_methods;
 
 pub type LocalId = u32;
 
@@ -64,6 +67,41 @@ pub enum PreludeFn {
     Weak,
     Int,
     Float,
+}
+
+impl PreludeFn {
+    /// Every prelude function. `ALL` and [`PreludeFn::name`] are what an
+    /// editor enumerates; the checker resolves names through the same
+    /// pair, so a new prelude function reaches both at once.
+    pub const ALL: &'static [PreludeFn] = &[
+        PreludeFn::Print,
+        PreludeFn::Println,
+        PreludeFn::Str,
+        PreludeFn::Fmt,
+        PreludeFn::Same,
+        PreludeFn::Weak,
+        PreludeFn::Int,
+        PreludeFn::Float,
+    ];
+
+    /// How the function is spelled in a script.
+    pub fn name(self) -> &'static str {
+        match self {
+            PreludeFn::Print => "print",
+            PreludeFn::Println => "println",
+            PreludeFn::Str => "str",
+            PreludeFn::Fmt => "fmt",
+            PreludeFn::Same => "same",
+            PreludeFn::Weak => "weak",
+            PreludeFn::Int => "int",
+            PreludeFn::Float => "float",
+        }
+    }
+
+    /// The prelude function `name` spells, if it spells one.
+    pub fn from_name(name: &str) -> Option<PreludeFn> {
+        PreludeFn::ALL.iter().copied().find(|p| p.name() == name)
+    }
 }
 
 /// What a call expression lowers to.
@@ -206,8 +244,9 @@ pub struct ClosureRes {
     pub proto: u32,
 }
 
-/// Where a function's AST lives (the emitter walks it by this reference).
-#[derive(Debug, Clone, Copy)]
+/// Where a function's AST lives (the emitter walks it by this reference,
+/// and the editor's index names a declared function by it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FnSource {
     /// `files[file].items[item]` is an `Item::Fn`.
     Top { file: usize, item: usize },
@@ -900,7 +939,7 @@ impl<'a> Checker<'a> {
                 None
             } else {
                 self.reg
-                    .modules
+                    .modules()
                     .iter()
                     .position(|m| m.name == u.module.name)
             };
@@ -915,7 +954,7 @@ impl<'a> Checker<'a> {
                             continue;
                         }
                         let known: Vec<&str> =
-                            self.reg.modules.iter().map(|m| m.name.as_str()).collect();
+                            self.reg.modules().iter().map(|m| m.name.as_str()).collect();
                         let span = u.module.span;
                         let name = u.module.name.clone();
                         self.error_help(
@@ -944,7 +983,7 @@ impl<'a> Checker<'a> {
                 }
                 Some(item_name) => match mref {
                     ModuleRef::Host(mod_idx) => {
-                        let module = &self.reg.modules[mod_idx];
+                        let module = &self.reg.modules()[mod_idx];
                         if let Some(f) = module.fns.iter().find(|f| f.name == item_name.name) {
                             self.imports[self.cur_file]
                                 .insert(item_name.name.clone(), Imported::HostFn(f.host_idx));
@@ -2386,7 +2425,7 @@ impl<'a> Checker<'a> {
     }
 
     pub(crate) fn module_is_registered(&self, name: &str) -> bool {
-        self.reg.modules.iter().any(|m| m.name == name)
+        self.reg.modules().iter().any(|m| m.name == name)
     }
 
     #[allow(clippy::type_complexity)]
@@ -2398,20 +2437,6 @@ impl<'a> Checker<'a> {
                 // Resolved lazily (validated in validate_script_imports).
                 ImportedRef::ScriptFn(self.fn_names[*file].get(name).copied()?)
             }
-        })
-    }
-
-    pub(crate) fn prelude_fn(name: &str) -> Option<PreludeFn> {
-        Some(match name {
-            "print" => PreludeFn::Print,
-            "println" => PreludeFn::Println,
-            "str" => PreludeFn::Str,
-            "fmt" => PreludeFn::Fmt,
-            "same" => PreludeFn::Same,
-            "weak" => PreludeFn::Weak,
-            "int" => PreludeFn::Int,
-            "float" => PreludeFn::Float,
-            _ => return None,
         })
     }
 

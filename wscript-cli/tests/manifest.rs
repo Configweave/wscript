@@ -54,13 +54,13 @@ fn no_manifest_above_a_temp_dir() {
 fn interfaces_register_host_functions() {
     let m = manifest::find(&fixture("main.wscript")).expect("manifest found");
     let mut reg = wscript::Registry::new();
-    let before = reg.modules.len();
+    let before = reg.modules().len();
     let indexes = manifest::load_interfaces(&m, &mut reg);
 
     assert_eq!(indexes.len(), 1, "one interface loaded");
-    assert_eq!(reg.modules.len(), before + 1, "`host` module registered");
+    assert_eq!(reg.modules().len(), before + 1, "`host` module registered");
     let host = reg
-        .modules
+        .modules()
         .iter()
         .find(|m| m.name == "host")
         .expect("`host` module");
@@ -173,7 +173,7 @@ fn check_mode_registry_is_the_declared_host_only() {
     let names: Vec<&str> = project
         .session
         .registry()
-        .modules
+        .modules()
         .iter()
         .map(|m| m.name.as_str())
         .collect();
@@ -194,7 +194,7 @@ fn run_mode_registry_is_the_stdlib() {
     let names: Vec<&str> = project
         .session
         .registry()
-        .modules
+        .modules()
         .iter()
         .map(|m| m.name.as_str())
         .collect();
@@ -215,7 +215,7 @@ fn without_a_manifest_check_falls_back_to_the_stdlib() {
         project
             .session
             .registry()
-            .modules
+            .modules()
             .iter()
             .any(|m| m.name == "fs")
     );

@@ -454,7 +454,11 @@ impl Parser {
         let module = self.expect_ident("module name after `use`")?;
         let mut item = None;
         if self.eat(&TokenKind::ColonColon) {
-            item = Some(self.expect_ident("item name after `::`")?);
+            // A missing item name keeps the declaration as a bare `use
+            // module`: the error is already reported, and an editor
+            // completing `use math::` needs the module left in the tree to
+            // answer from (see `check::Index`).
+            item = self.expect_ident("item name after `::`");
         }
         let span = kw.to(self.prev_span());
         self.terminate_stmt();
@@ -1551,19 +1555,24 @@ impl Parser {
                     );
                 }
                 TokenKind::Dot => {
-                    self.bump();
+                    let dot = self.bump().span;
                     let name = match self.expect_ident("method or field name after `.`") {
                         Some(n) => n,
                         None => {
                             // Keep the receiver in the tree — the LSP needs
-                            // its type for `.` completions mid-typing.
-                            let span = expr.span;
+                            // its type for `.` completions mid-typing. The
+                            // empty name is given the (empty) span just
+                            // past the dot, because that is where the
+                            // member being completed would go, and that is
+                            // where the cursor is (see `check::Index`).
+                            let at = Span::new(dot.hi, dot.hi);
+                            let span = expr.span.to(dot);
                             expr = self.mk(
                                 ExprKind::Field {
                                     obj: Box::new(expr),
                                     name: Ident {
                                         name: String::new(),
-                                        span,
+                                        span: at,
                                     },
                                 },
                                 span,
