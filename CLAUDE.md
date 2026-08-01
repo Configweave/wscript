@@ -44,12 +44,23 @@ the skill (delete `.claude/skills/wscript` first — stale files aren't wiped).
 - `just ci::check` is the merge bar — format check, lint, tests, examples. It
   lives in `.just/ci/mod.just`; its recipes are in `.just/shared.just` so both
   the module and the root justfile can import them. `.github/workflows/ci.yml`
-  fans the same recipes out one per job, so the two cannot drift.
+  fans the same recipes out one check job per part, so the two cannot drift. Its
+  release jobs are the exception and inline their steps — they have no local
+  counterpart to drift from.
 - Regenerate the stdlib interface after changing registrations:
   `WSCRIPT_REGEN_WSCRIPTI=1 cargo test -p wscript-cli --test wscripti_gen`.
 - Regenerate the fuel table after adding a corpus script or changing what
   execution costs: `just fuel-regen`. Fuel is observable behaviour — a moved
   number in `tests/fuel.snap` is a behavioural diff to review, not noise.
+- Releases are trailer-gated CI, never a hand-made tag. An empty commit on
+  `main` carrying `pre-release: true` (or `release: true`) makes
+  `.github/workflows/ci.yml` compute the version from the conventional commits
+  since the last `v*` tag, build the `wscript` binaries and cut the GitHub
+  release; a push with neither trailer only runs the checks. That empty commit
+  is the **one** thing pushed straight to `main` — it carries no tree change, so
+  there is nothing for the board's stages to gate. Never add a `release:`
+  trailer on a repo's behalf — `/afk-release` cuts pre-releases, a human
+  promotes them.
 
 ## Agent skills
 

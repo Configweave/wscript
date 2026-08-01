@@ -27,6 +27,40 @@ workspace-build-release:
 [group('build')]
 build: workspace-build
 
+# -------------------------------------------------------------- release
+
+# Cutting a release is a trailer on an empty commit, not a recipe — see the
+# Releases section of README.md. Only the version stamp lives here, because only
+# the version stamp is repo-specific enough to get wrong quietly: the internal
+# crates pin each other by version as well as by path (`wscript-core = { path =
+# "wscript-core", version = "0.2.0" }`), so replacing only the
+# `[workspace.package]` version — the obvious edit, and the one the rest of the
+# fleet's release workflows make — leaves those requirements behind. A patch
+# bump still resolves under caret semantics, so it looks fine right up until the
+# first minor bump fails with "failed to select a version for the requirement".
+# Replace every copy, then have cargo re-resolve the workspace to prove the
+# manifest is coherent rather than merely edited.
+
+# Stamp VERSION through the workspace manifest — what CI does before a release build
+[group('build')]
+release-stamp version: require-cargo
+	#!/usr/bin/env bash
+	set -euo pipefail
+	old=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+	if [ -z "$old" ]; then
+		echo "release-stamp: no \`version = \"…\"\` in Cargo.toml — has the manifest moved?" >&2
+		exit 1
+	fi
+	# Escaped, so the dots in a version match dots and not any character.
+	old_re=${old//./\\.}
+	sed -i "s/version = \"$old_re\"/version = \"{{version}}\"/g" Cargo.toml
+	if grep -q "version = \"$old_re\"" Cargo.toml; then
+		echo "release-stamp: $old still present after stamping — the substitution missed something" >&2
+		exit 1
+	fi
+	cargo metadata --format-version 1 > /dev/null
+	echo "stamped {{version}} (was $old)"
+
 # ----------------------------------------------------------------- test
 
 # Regenerate wscript-std/wscripti/std.wscripti after changing stdlib registrations
