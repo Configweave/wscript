@@ -56,6 +56,13 @@ term context {
   audience   = :both
 }
 
+term session {
+  term       = "Session"
+  definition = "A `Context` plus the resolver its `use` imports go through, wired once and kept together. The path for embedding a *project*: `session.compile(path, source)` follows script-to-script imports against the configured source roots, where `ctx.compile(source)` compiles a single source. Cheap to clone."
+  aliases    = []
+  audience   = :both
+}
+
 term module {
   term       = "Module"
   definition = "A named bag of host functions, constants and types. Scripts opt in with `use name`. Registering a module is what grants its capability (nothing is ambient)."
