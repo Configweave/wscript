@@ -101,7 +101,7 @@ pub fn render(reg: &Registry) -> String {
         }
     }
 
-    for module in &reg.modules {
+    for module in reg.modules() {
         out.push('\n');
         if let Some(doc) = &module.doc {
             for line in doc.lines() {
@@ -138,9 +138,10 @@ pub fn render(reg: &Registry) -> String {
 
 /// Methods (PRD §6.2) render as an impl block of bodyless fns.
 fn render_methods(out: &mut String, reg: &Registry, id: DefId, ty_name: &str) {
-    let Some(methods) = reg.methods.get(&id) else {
+    let methods = reg.methods_of(id);
+    if methods.is_empty() {
         return;
-    };
+    }
     let _ = writeln!(out, "\nimpl {ty_name} {{");
     for m in methods {
         if let Some(doc) = &m.doc {
@@ -384,7 +385,7 @@ impl<'a> Loader<'a> {
     }
 
     fn load_module(&mut self, m: &ModDecl) {
-        if self.reg.modules.iter().any(|x| x.name == m.name.name) {
+        if self.reg.modules().iter().any(|x| x.name == m.name.name) {
             // Live registration wins; still index for goto-definition.
             for item in &m.items {
                 if let Item::Fn(f) = item {
@@ -455,7 +456,7 @@ impl<'a> Loader<'a> {
                 }
             }
         }
-        self.reg.modules.push(def);
+        self.reg.push_module(def);
     }
 
     fn load_impl(&mut self, im: &ImplDecl) {
@@ -470,12 +471,7 @@ impl<'a> Loader<'a> {
             );
             return;
         };
-        let already = self
-            .reg
-            .methods
-            .get(&def_id)
-            .map(|ms| !ms.is_empty())
-            .unwrap_or(false);
+        let already = !self.reg.methods_of(def_id).is_empty();
         for f in &im.fns {
             self.index
                 .methods
@@ -505,17 +501,16 @@ impl<'a> Loader<'a> {
                     name: format!("{}::{}", im.ty_name.name, f.name.name),
                 }),
             });
-            self.reg
-                .methods
-                .entry(def_id)
-                .or_default()
-                .push(HostFnDecl {
+            self.reg.push_method(
+                def_id,
+                HostFnDecl {
                     name: f.name.name.clone(),
                     sig,
                     host_idx: idx,
                     doc: f.doc.clone(),
                     params: param_names(f),
-                });
+                },
+            );
         }
     }
 

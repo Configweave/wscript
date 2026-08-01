@@ -600,31 +600,8 @@ impl<'s> Lexer<'s> {
         }
         let text = &self.src[start..self.pos];
         let kind = match text {
-            "let" => TokenKind::KwLet,
-            "fn" => TokenKind::KwFn,
-            "struct" => TokenKind::KwStruct,
-            "enum" => TokenKind::KwEnum,
-            "trait" => TokenKind::KwTrait,
-            "impl" => TokenKind::KwImpl,
-            "for" => TokenKind::KwFor,
-            "in" => TokenKind::KwIn,
-            "while" => TokenKind::KwWhile,
-            "loop" => TokenKind::KwLoop,
-            "if" => TokenKind::KwIf,
-            "else" => TokenKind::KwElse,
-            "match" => TokenKind::KwMatch,
-            "return" => TokenKind::KwReturn,
-            "break" => TokenKind::KwBreak,
-            "continue" => TokenKind::KwContinue,
-            "use" => TokenKind::KwUse,
-            "true" => TokenKind::KwTrue,
-            "false" => TokenKind::KwFalse,
-            "dyn" => TokenKind::KwDyn,
-            "mod" => TokenKind::KwMod,
-            "const" => TokenKind::KwConst,
-            "self" => TokenKind::KwSelf,
             "_" => TokenKind::Underscore,
-            _ => TokenKind::Ident(text.to_string()),
+            _ => TokenKind::keyword(text).unwrap_or_else(|| TokenKind::Ident(text.to_string())),
         };
         self.push(kind, start);
     }

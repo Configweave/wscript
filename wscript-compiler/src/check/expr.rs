@@ -621,7 +621,7 @@ impl<'a> Checker<'a> {
                     );
                     return Type::Option(Box::new(self.infer.fresh()));
                 }
-                if Self::prelude_fn(&single.name).is_some() {
+                if PreludeFn::from_name(&single.name).is_some() {
                     self.error_help(
                         "E0229",
                         e.span,
@@ -717,7 +717,7 @@ impl<'a> Checker<'a> {
         mod_idx: usize,
         name: &str,
     ) -> Option<Result<(FnSig, u32), (Type, wscript_core::bytecode::Const)>> {
-        let module = &self.reg.modules[mod_idx];
+        let module = &self.reg.modules()[mod_idx];
         if let Some(f) = module.fns.iter().find(|f| f.name == name) {
             return Some(Ok((f.sig.clone(), f.host_idx)));
         }
@@ -754,7 +754,7 @@ impl<'a> Checker<'a> {
                 ty
             }
             None => {
-                let module = self.reg.modules[mod_idx].name.clone();
+                let module = self.reg.modules()[mod_idx].name.clone();
                 let name = item.name.clone();
                 self.error_help(
                     "E0201",
@@ -1158,7 +1158,7 @@ impl<'a> Checker<'a> {
                     }
                     _ => {}
                 }
-                if let Some(p) = Self::prelude_fn(&single.name) {
+                if let Some(p) = PreludeFn::from_name(&single.name) {
                     let ret = self.check_prelude_call(e, p, args)?;
                     return Some((Lowering::Call(CallKind::Prelude(p)), ret));
                 }
@@ -1872,8 +1872,11 @@ impl<'a> Checker<'a> {
             return sig.ret;
         }
         // 2. Host-registered methods.
-        if let Some(ms) = self.reg.methods.get(&def)
-            && let Some(m) = ms.iter().find(|m| m.name == name.name)
+        if let Some(m) = self
+            .reg
+            .methods_of(def)
+            .iter()
+            .find(|m| m.name == name.name)
         {
             let sig = m.sig.clone();
             let idx = m.host_idx;

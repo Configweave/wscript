@@ -331,7 +331,7 @@ mod tests {
             .module(m)
             .registry(Registry::new())
             .build();
-        assert!(s.registry().modules.iter().all(|m| m.name != "mathx"));
+        assert!(s.registry().modules().iter().all(|m| m.name != "mathx"));
     }
 
     #[test]

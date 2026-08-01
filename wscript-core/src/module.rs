@@ -209,15 +209,18 @@ impl Module {
                 sig: sig.clone(),
                 imp: m.imp,
             });
-            reg.methods.entry(type_def).or_default().push(HostFnDecl {
-                name: m.name,
-                sig,
-                host_idx: idx,
-                doc: m.doc,
-                params,
-            });
+            reg.push_method(
+                type_def,
+                HostFnDecl {
+                    name: m.name,
+                    sig,
+                    host_idx: idx,
+                    doc: m.doc,
+                    params,
+                },
+            );
         }
-        reg.modules.push(def);
+        reg.push_module(def);
     }
 }
 

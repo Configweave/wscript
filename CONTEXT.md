@@ -33,6 +33,18 @@ crates from the VM; `wscript` (the umbrella) is the embedding API.
 **Analysis** — the product of running the pipeline up to and including `check`,
 without `emit`. What the LSP and `wscript check` consume.
 
+**Index** — the checker's product for the editor: which node sits at a source
+offset, and what could be written there. Partial where the lowerings are total —
+an editor asks about positions that need not resolve. Built alongside an
+**analysis**, on the pipeline's stack. _Avoid_: bare "index" — the **host
+index** and the `.wscripti` definition index (`WscriptiIndex`) are unrelated
+tables; say which.
+
+**Editor** — the view an editor's questions are asked of: an **index**, the
+check tables and the **registry** together, since no question needs fewer than
+all three (`Analysis::editor`). `symbol_at` and `completions_at` are what it
+answers.
+
 ---
 
 ## Compile-time model
@@ -191,6 +203,12 @@ diagnostic **code registry**, which is a different table entirely.
 **Module** — a namespace of host functions, consts and types, registered by the
 embedder and reachable from script as `name::thing`.
 
+**Host index** — the number a resolved host call carries: a position in the
+registry's `host_fns`, where the implementation lives. `Registry::host_ref`
+maps it back to the declaration that minted it — module or type, name,
+signature, docs — which is how an editor names a host symbol. _Avoid_: bare
+"index", which is the editor's **index**.
+
 **Host function** — a Rust function callable from script. Registered once;
 consumed by the checker (signature), the emitter (call target) and the VM
 (dispatch) with no per-function code in any of them.
@@ -241,16 +259,3 @@ not a mode difference, which is why the LSP can no longer drop them.
 directives inside the fixture. Every file directly in that directory is an
 **entry**; a file that exists only to be `use`d by one of them is a **module
 fixture** and lives in `tests/scripts/modules/`, where nothing runs it.
-
----
-
-## Planned terms
-
-Named by the deepening programme in
-[#3](https://github.com/Configweave/wscript/issues/3) and **not yet in the code**.
-Listed here so the tickets and the glossary agree.
-
-**Index** — the checker's product for the editor: `symbol_at`, `completions_at`,
-`span_of`, `methods_of`. Partial where the lowerings are total — an editor asks
-about positions that need not resolve. The last entry here; it retires this
-section when [#16](https://github.com/Configweave/wscript/issues/16) lands.

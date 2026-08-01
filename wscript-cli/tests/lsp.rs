@@ -6,6 +6,9 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
+use wscript::Type;
+use wscript_compiler::check::builtin_methods;
+
 struct Lsp {
     child: Child,
     stdin: ChildStdin,
@@ -289,6 +292,71 @@ fn lsp_method_completions() {
     lsp.notify("exit", "null");
 }
 
+/// Completion offers every builtin method the checker knows, not a copy
+/// of the list.
+///
+/// This is the regression the copy caused (issue #17): `d4b0214 feat: list
+/// and map combinators` added fourteen methods to `check/methods.rs` and
+/// never touched the editor's hardcoded tables, so `any`, `zip_with`,
+/// `Map::each` and friends typechecked but never completed. Asserting
+/// against `builtin_methods` rather than a literal list is the point —
+/// adding a method to the checker now either shows up here or fails this
+/// test; it cannot quietly go missing.
+#[test]
+fn lsp_completes_every_builtin_method_the_checker_knows() {
+    let mut lsp = Lsp::start();
+    let id = lsp.request("initialize", r#"{"capabilities":{}}"#);
+    lsp.read_until(&format!("\"id\":{id}"));
+    lsp.notify("initialized", "{}");
+
+    // (document, receiver type, cursor line/character just past the `.`)
+    let cases: [(&str, Type, u32, u32); 2] = [
+        (
+            "fn main() {\n    let xs = [1, 2, 3]\n    xs.\n}\n",
+            Type::List(Box::new(Type::Int)),
+            2,
+            7,
+        ),
+        (
+            "fn main() {\n    let m = #{\"a\": 1}\n    m.\n}\n",
+            Type::Map(Box::new(Type::Str), Box::new(Type::Int)),
+            2,
+            6,
+        ),
+    ];
+
+    for (i, (doc, recv, line, character)) in cases.into_iter().enumerate() {
+        let uri = format!("file:///builtin{i}.wscript");
+        lsp.notify(
+            "textDocument/didOpen",
+            &format!(
+                r#"{{"textDocument":{{"uri":"{uri}","languageId":"wscript","version":1,"text":{}}}}}"#,
+                serde_jsonish(doc)
+            ),
+        );
+        lsp.read_until("publishDiagnostics");
+
+        let id = lsp.request(
+            "textDocument/completion",
+            &format!(
+                r#"{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":{line},"character":{character}}}}}"#
+            ),
+        );
+        let completions = lsp.read_until(&format!("\"id\":{id}"));
+        let expected = builtin_methods(&recv);
+        assert!(!expected.is_empty(), "no builtin methods for {recv:?}");
+        for (name, _) in expected {
+            assert!(
+                completions.contains(&format!(r#""label":"{name}""#)),
+                "`{name}` is a builtin method of {recv:?} but was not offered: {completions}"
+            );
+        }
+    }
+
+    lsp.request("shutdown", "null");
+    lsp.notify("exit", "null");
+}
+
 /// The editor must resolve the same imports `wscript check` does.
 ///
 /// Opened against the fixture project's `wscript.toml`, `main.wscript`
@@ -332,6 +400,135 @@ fn lsp_honors_the_manifest_src_roots() {
 
     lsp.request("shutdown", "null");
     lsp.notify("exit", "null");
+}
+
+/// `module::` completes to that module's members, in an expression and in
+/// a `use` — the two places a qualified name is written.
+#[test]
+fn lsp_completes_module_members_after_colon_colon() {
+    let mut lsp = Lsp::start();
+    let id = lsp.request("initialize", r#"{"capabilities":{}}"#);
+    lsp.read_until(&format!("\"id\":{id}"));
+    lsp.notify("initialized", "{}");
+
+    // (document, cursor line/character just past the `::`)
+    let cases: [(&str, u32, u32); 2] = [
+        ("use math\nfn main() {\n    math::\n}\n", 2, 10),
+        ("use math::\n", 0, 10),
+    ];
+    for (i, (doc, line, character)) in cases.into_iter().enumerate() {
+        let uri = format!("file:///qualified{i}.wscript");
+        lsp.notify(
+            "textDocument/didOpen",
+            &format!(
+                r#"{{"textDocument":{{"uri":"{uri}","languageId":"wscript","version":1,"text":{}}}}}"#,
+                serde_jsonish(doc)
+            ),
+        );
+        lsp.read_until("publishDiagnostics");
+
+        let id = lsp.request(
+            "textDocument/completion",
+            &format!(
+                r#"{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":{line},"character":{character}}}}}"#
+            ),
+        );
+        let completions = lsp.read_until(&format!("\"id\":{id}"));
+        assert!(
+            completions.contains(r#""label":"atan2""#),
+            "`math::` should offer the module's functions: {completions}"
+        );
+        assert!(
+            !completions.contains(r#""label":"match""#),
+            "nothing unqualified belongs in a qualified position: {completions}"
+        );
+    }
+
+    lsp.request("shutdown", "null");
+    lsp.notify("exit", "null");
+}
+
+/// A host symbol declared only in a `.wscripti` still resolves: hover
+/// names it and goto-definition jumps to the interface (PRD §9 feature 3).
+///
+/// This is the second registration path — the interface loader, not
+/// `Module::merge_into` — reaching the registry's reverse index, which is
+/// what replaced the language server's linear scan over every module.
+#[test]
+fn lsp_resolves_a_host_symbol_declared_in_an_interface() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project");
+    let entry = root.join("main.wscript");
+    let text = std::fs::read_to_string(&entry).expect("fixture readable");
+    let root_uri = format!("file://{}", root.display());
+    let entry_uri = format!("file://{}", entry.display());
+
+    let mut lsp = Lsp::start();
+    let id = lsp.request(
+        "initialize",
+        &format!(r#"{{"capabilities":{{}},"rootUri":"{root_uri}"}}"#),
+    );
+    lsp.read_until(&format!("\"id\":{id}"));
+    lsp.notify("initialized", "{}");
+    lsp.notify(
+        "textDocument/didOpen",
+        &format!(
+            r#"{{"textDocument":{{"uri":"{entry_uri}","languageId":"wscript","version":1,"text":{}}}}}"#,
+            serde_jsonish(&text)
+        ),
+    );
+    lsp.read_until("publishDiagnostics");
+
+    // On `greet` in `println(host::greet("world"))` — line 4, character 20.
+    let position = r#""position":{"line":4,"character":20}"#;
+    let id = lsp.request(
+        "textDocument/hover",
+        &format!(r#"{{"textDocument":{{"uri":"{entry_uri}"}},{position}}}"#),
+    );
+    let hover = lsp.read_until(&format!("\"id\":{id}"));
+    assert!(
+        // `a0` in the interface is the placeholder for an undeclared
+        // name, so the type stands alone here (issue #22).
+        hover.contains("host::greet(string) -> string"),
+        "hover should name the interface declaration: {hover}"
+    );
+
+    let id = lsp.request(
+        "textDocument/definition",
+        &format!(r#"{{"textDocument":{{"uri":"{entry_uri}"}},{position}}}"#),
+    );
+    let def = lsp.read_until(&format!("\"id\":{id}"));
+    assert!(
+        def.contains("api.wscripti") && def.contains(r#""line":1"#),
+        "definition should land on the interface's `fn greet`: {def}"
+    );
+
+    lsp.request("shutdown", "null");
+    lsp.notify("exit", "null");
+}
+
+/// Every registration in the CLI's own registry — the whole stdlib, the
+/// biggest one that exists — is nameable from its host index.
+///
+/// `Registry::host_ref` is what replaced the language server's linear scan
+/// over every module, and an index no declaration claimed resolves to
+/// nothing, which reads in the editor as a host call with no hover at all.
+#[test]
+fn every_stdlib_registration_is_nameable_from_its_host_index() {
+    let session = wscript::Session::builder()
+        .modules(wscript_std::all_modules(Vec::new()))
+        .build();
+    let registry = session.registry();
+    assert!(
+        registry.undeclared_host_fns().is_empty(),
+        "registrations with no declaration: {:?}",
+        registry.undeclared_host_fns()
+    );
+    for idx in 0..registry.host_fns.len() as u32 {
+        let host = registry
+            .host_ref(idx)
+            .unwrap_or_else(|| panic!("host index {idx} names nothing"));
+        assert_eq!(host.decl.host_idx, idx, "{}", host.qualified_name());
+    }
 }
 
 /// Minimal JSON string encoder for the test documents.

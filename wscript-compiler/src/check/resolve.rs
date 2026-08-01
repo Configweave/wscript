@@ -65,66 +65,83 @@ pub(crate) fn is_reference_type(t: &Type) -> bool {
     )
 }
 
+/// The primitive a bare type name spells, if it spells one.
+///
+/// Separate from [`resolve_type`] because the editor's index has to answer
+/// the same question from a name with no `TypeExpr` and no scope to report
+/// into — and answering it with a second copy of this list is how the two
+/// definitions of a `.wscripti` type drifted in the first place.
+pub(crate) fn primitive_named(name: &str) -> Option<Type> {
+    Some(match name {
+        "int" => Type::Int,
+        "float" => Type::Float,
+        "bool" => Type::Bool,
+        "char" => Type::Char,
+        "unit" => Type::Unit,
+        "string" => Type::Str,
+        _ => return None,
+    })
+}
+
 pub(crate) fn resolve_type(scope: &mut impl TypeScope, t: &TypeExpr) -> Type {
     match &t.kind {
         TypeExprKind::Unit => Type::Unit,
         TypeExprKind::Error => Type::Error,
-        TypeExprKind::Name(ident) => match ident.name.as_str() {
-            "int" => Type::Int,
-            "float" => Type::Float,
-            "bool" => Type::Bool,
-            "char" => Type::Char,
-            "unit" => Type::Unit,
-            "string" => Type::Str,
-            "List" | "Map" | "Option" | "Result" | "weak" => {
-                let name = ident.name.clone();
-                let arity = match name.as_str() {
-                    "Map" | "Result" => 2,
-                    _ => 1,
-                };
-                error_help(
-                    scope,
-                    "E0210",
-                    t.span,
-                    format!("`{name}` requires type arguments"),
-                    format!(
-                        "write `{name}[{}]`",
-                        (0..arity).map(|_| "T").collect::<Vec<_>>().join(", ")
-                    ),
-                );
-                Type::Error
+        TypeExprKind::Name(ident) => {
+            if let Some(primitive) = primitive_named(&ident.name) {
+                return primitive;
             }
-            other => {
-                // In-scope generic type parameters resolve first
-                // (shadowing an existing type name is an error at the
-                // declaration, so no ambiguity survives here).
-                if let Some(i) = scope.type_param(other) {
-                    return Type::Param(i);
+            match ident.name.as_str() {
+                "List" | "Map" | "Option" | "Result" | "weak" => {
+                    let name = ident.name.clone();
+                    let arity = match name.as_str() {
+                        "Map" | "Result" => 2,
+                        _ => 1,
+                    };
+                    error_help(
+                        scope,
+                        "E0210",
+                        t.span,
+                        format!("`{name}` requires type arguments"),
+                        format!(
+                            "write `{name}[{}]`",
+                            (0..arity).map(|_| "T").collect::<Vec<_>>().join(", ")
+                        ),
+                    );
+                    Type::Error
                 }
-                match scope.type_named(other) {
-                    Some(id) if scope.defs().as_trait(id).is_some() => {
-                        error_help(
-                            scope,
-                            "E0211",
-                            ident.span,
-                            format!("trait `{other}` cannot be used as a type directly"),
-                            format!("use `dyn {other}` for a dynamically dispatched value"),
-                        );
-                        Type::Error
+                other => {
+                    // In-scope generic type parameters resolve first
+                    // (shadowing an existing type name is an error at the
+                    // declaration, so no ambiguity survives here).
+                    if let Some(i) = scope.type_param(other) {
+                        return Type::Param(i);
                     }
-                    Some(id) => Type::Named(id),
-                    None => {
-                        error(
-                            scope,
-                            "E0212",
-                            ident.span,
-                            format!("unknown type `{other}`"),
-                        );
-                        Type::Error
+                    match scope.type_named(other) {
+                        Some(id) if scope.defs().as_trait(id).is_some() => {
+                            error_help(
+                                scope,
+                                "E0211",
+                                ident.span,
+                                format!("trait `{other}` cannot be used as a type directly"),
+                                format!("use `dyn {other}` for a dynamically dispatched value"),
+                            );
+                            Type::Error
+                        }
+                        Some(id) => Type::Named(id),
+                        None => {
+                            error(
+                                scope,
+                                "E0212",
+                                ident.span,
+                                format!("unknown type `{other}`"),
+                            );
+                            Type::Error
+                        }
                     }
                 }
             }
-        },
+        }
         TypeExprKind::App(ident, args) => {
             let mut arg_tys: Vec<Type> = args.iter().map(|a| resolve_type(scope, a)).collect();
             fn expect(
