@@ -391,9 +391,9 @@ pub struct Checker<'a> {
     pub(crate) files: &'a [(String, &'a SourceFile)],
     /// File whose items/bodies are currently being processed. Every bare
     /// name is resolved against it — `file`, `fn_by_name`, `module_ref`
-    /// and `imported` all index by it — so it is written in exactly one
-    /// place: [`Checker::in_file`], which restores the previous file on
-    /// exit.
+    /// and `imported` all index by it — so after construction it has
+    /// exactly one writer, [`Checker::in_file`], which restores the
+    /// previous file on exit.
     cur_file: usize,
     pub(crate) reg: &'a Registry,
     pub(crate) out: CheckResult,
@@ -1830,6 +1830,11 @@ impl<'a> Checker<'a> {
     fn validate_derives(&mut self) {
         let entries: Vec<(DefId, Derives)> = self.derives.iter().map(|(k, v)| (*k, *v)).collect();
         for (id, d) in entries {
+            // Derives are recorded only for script structs and enums, so
+            // `collect_type_names` has already captured a span for every
+            // id here. The fallback keeps a checker bug from swallowing
+            // the error — it would render at the entry file's first byte,
+            // which is exactly the misplaced caret this map replaced.
             let span = self.out.decl_spans.get(&id).copied().unwrap_or(Span::DUMMY);
             if d.eq && !self.fields_satisfy(id, |c, t| c.eq_able(t)) {
                 let name = self.out.defs.name_of(id).to_string();
@@ -2341,7 +2346,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    // -------------------------------------------- scopes, frames, loops
+    // ------------------------------------- files, scopes, frames, loops
     //
     // Entry is scoped: the callback receives `&mut Checker`, so the push
     // and the matching pop cannot drift apart. A guard holding
@@ -2351,7 +2356,7 @@ impl<'a> Checker<'a> {
     /// one on exit. The one writer of `cur_file`: a pass that left it
     /// dangling made every later bare-name lookup resolve against an
     /// arbitrary file (#23).
-    pub(crate) fn in_file<T>(&mut self, file: usize, f: impl FnOnce(&mut Self) -> T) -> T {
+    fn in_file<T>(&mut self, file: usize, f: impl FnOnce(&mut Self) -> T) -> T {
         let prev = std::mem::replace(&mut self.cur_file, file);
         let out = f(self);
         self.cur_file = prev;

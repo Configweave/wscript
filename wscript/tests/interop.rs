@@ -950,12 +950,11 @@ fn multi_file_errors_point_at_the_right_file() {
         .find(|d| d.code == "E0220")
         .expect("type error expected");
     // The error's span lands in helpers.wscript per the source map.
-    let idx = failure
+    let (file, _) = failure
         .source_map
-        .files
-        .partition_point(|f| f.base <= type_err.span.lo)
-        - 1;
-    assert_eq!(failure.source_map.files[idx].path, "helpers.wscript");
+        .local(type_err.span.lo)
+        .expect("span is in some file");
+    assert_eq!(file.path, "helpers.wscript");
 }
 
 /// Derive validation runs once for the whole program, after the per-file
@@ -979,18 +978,13 @@ fn multi_file_derive_error_points_at_the_declaration() {
         .iter()
         .find(|d| d.code == "E0209")
         .expect("derive error expected");
-    let idx = failure
+    let (file, offset) = failure
         .source_map
-        .files
-        .partition_point(|f| f.base <= derive_err.span.lo)
-        - 1;
-    let file = &failure.source_map.files[idx];
+        .local(derive_err.span.lo)
+        .expect("span is in some file");
     assert_eq!(file.path, "bad.wscript");
     // The caret is on the type's name, not on the first byte of the file.
-    assert_eq!(
-        (derive_err.span.lo - file.base) as usize,
-        BAD.find("Bad").unwrap()
-    );
+    assert_eq!(offset as usize, BAD.find("Bad").unwrap());
 }
 
 #[test]
