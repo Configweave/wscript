@@ -261,6 +261,32 @@ impl Parser {
     }
 
     /// Skip tokens until something that can plausibly start an item.
+    /// Does the current token begin an item?
+    ///
+    /// One definition, shared by [`Self::item`]'s dispatch and
+    /// [`Self::sync_to_item`]'s recovery. They used to carry separate
+    /// lists and had already drifted: recovery omitted `mod`, `const` and
+    /// contextual `units`, so a malformed item swallowed the declaration
+    /// that followed instead of resyncing on it.
+    fn starts_item(&self) -> bool {
+        match self.kind() {
+            TokenKind::KwFn
+            | TokenKind::KwStruct
+            | TokenKind::KwEnum
+            | TokenKind::KwTrait
+            | TokenKind::KwImpl
+            | TokenKind::KwUse
+            | TokenKind::KwMod
+            | TokenKind::KwConst
+            | TokenKind::Hash => true,
+            // `units` is contextual — an item only when a name follows.
+            TokenKind::Ident(name) => {
+                name == "units" && matches!(self.nth_kind(1), TokenKind::Ident(_))
+            }
+            _ => false,
+        }
+    }
+
     fn sync_to_item(&mut self) {
         let mut depth = 0usize;
         loop {
@@ -277,17 +303,7 @@ impl Parser {
                         break;
                     }
                 }
-                TokenKind::KwFn
-                | TokenKind::KwStruct
-                | TokenKind::KwEnum
-                | TokenKind::KwTrait
-                | TokenKind::KwImpl
-                | TokenKind::KwUse
-                | TokenKind::Hash
-                    if depth == 0 =>
-                {
-                    break;
-                }
+                _ if depth == 0 && self.starts_item() => break,
                 _ => {
                     self.bump();
                 }
@@ -1384,7 +1400,7 @@ impl Parser {
     }
 
     fn range_expr(&mut self) -> Expr {
-        let lo = self.or_expr();
+        let lo = self.binary_expr(0);
         let inclusive = match self.kind() {
             TokenKind::DotDot => false,
             TokenKind::DotDotEq => true,
@@ -1392,7 +1408,7 @@ impl Parser {
         };
         self.bump();
         self.skip_newlines();
-        let hi = self.or_expr();
+        let hi = self.binary_expr(0);
         let span = lo.span.to(hi.span);
         self.mk(
             ExprKind::Range {
@@ -1404,138 +1420,45 @@ impl Parser {
         )
     }
 
-    fn or_expr(&mut self) -> Expr {
-        let mut lhs = self.and_expr();
-        // Operator chains deepen the AST without deepening the parse
-        // stack, so each link spends nesting budget too (returned when
-        // the chain ends — sibling chains don't accumulate). Same in the
-        // other precedence tiers and the postfix loop.
-        let mut chain = 0;
-        while self.at(&TokenKind::OrOr) {
-            if self.nesting_too_deep() {
-                break;
-            }
-            self.depth += 1;
-            chain += 1;
-            self.bump();
-            self.skip_newlines();
-            let rhs = self.and_expr();
-            let span = lhs.span.to(rhs.span);
-            lhs = self.mk(
-                ExprKind::Binary {
-                    op: BinOp::Or,
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                },
-                span,
-            );
-        }
-        self.depth -= chain;
-        lhs
+    /// Binding power of each binary operator, tightest last.
+    ///
+    /// Equality and ordering share a tier: `a < b == c` parses as
+    /// `(a < b) == c`, left-associatively, not as `a < (b == c)`. That
+    /// differs from C-family languages and is pinned by the `precedence`
+    /// parser fixture.
+    fn bin_op_prec(kind: &TokenKind) -> Option<(BinOp, u8)> {
+        Some(match kind {
+            TokenKind::OrOr => (BinOp::Or, 1),
+            TokenKind::AndAnd => (BinOp::And, 2),
+            TokenKind::EqEq => (BinOp::Eq, 3),
+            TokenKind::NotEq => (BinOp::Ne, 3),
+            TokenKind::Lt => (BinOp::Lt, 3),
+            TokenKind::Le => (BinOp::Le, 3),
+            TokenKind::Gt => (BinOp::Gt, 3),
+            TokenKind::Ge => (BinOp::Ge, 3),
+            TokenKind::Plus => (BinOp::Add, 4),
+            TokenKind::Minus => (BinOp::Sub, 4),
+            TokenKind::Star => (BinOp::Mul, 5),
+            TokenKind::Slash => (BinOp::Div, 5),
+            TokenKind::Percent => (BinOp::Rem, 5),
+            _ => return None,
+        })
     }
 
-    fn and_expr(&mut self) -> Expr {
-        let mut lhs = self.cmp_expr();
-        let mut chain = 0;
-        while self.at(&TokenKind::AndAnd) {
-            if self.nesting_too_deep() {
-                break;
-            }
-            self.depth += 1;
-            chain += 1;
-            self.bump();
-            self.skip_newlines();
-            let rhs = self.cmp_expr();
-            let span = lhs.span.to(rhs.span);
-            lhs = self.mk(
-                ExprKind::Binary {
-                    op: BinOp::And,
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                },
-                span,
-            );
-        }
-        self.depth -= chain;
-        lhs
-    }
-
-    fn cmp_expr(&mut self) -> Expr {
-        let mut lhs = self.add_expr();
-        let mut chain = 0;
-        loop {
-            let op = match self.kind() {
-                TokenKind::EqEq => BinOp::Eq,
-                TokenKind::NotEq => BinOp::Ne,
-                TokenKind::Lt => BinOp::Lt,
-                TokenKind::Le => BinOp::Le,
-                TokenKind::Gt => BinOp::Gt,
-                TokenKind::Ge => BinOp::Ge,
-                _ => break,
-            };
-            if self.nesting_too_deep() {
-                break;
-            }
-            self.depth += 1;
-            chain += 1;
-            self.bump();
-            self.skip_newlines();
-            let rhs = self.add_expr();
-            let span = lhs.span.to(rhs.span);
-            lhs = self.mk(
-                ExprKind::Binary {
-                    op,
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                },
-                span,
-            );
-        }
-        self.depth -= chain;
-        lhs
-    }
-
-    fn add_expr(&mut self) -> Expr {
-        let mut lhs = self.mul_expr();
-        let mut chain = 0;
-        loop {
-            let op = match self.kind() {
-                TokenKind::Plus => BinOp::Add,
-                TokenKind::Minus => BinOp::Sub,
-                _ => break,
-            };
-            if self.nesting_too_deep() {
-                break;
-            }
-            self.depth += 1;
-            chain += 1;
-            self.bump();
-            self.skip_newlines();
-            let rhs = self.mul_expr();
-            let span = lhs.span.to(rhs.span);
-            lhs = self.mk(
-                ExprKind::Binary {
-                    op,
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                },
-                span,
-            );
-        }
-        self.depth -= chain;
-        lhs
-    }
-
-    fn mul_expr(&mut self) -> Expr {
+    /// Precedence climbing over [`Self::bin_op_prec`], replacing five
+    /// byte-identical tier functions that differed only in their operator
+    /// set and the tier they called.
+    ///
+    /// Operator chains deepen the AST without deepening the parse stack,
+    /// so each link spends nesting budget too — returned when the chain
+    /// ends, so sibling chains do not accumulate. Same in the postfix loop.
+    fn binary_expr(&mut self, min_prec: u8) -> Expr {
         let mut lhs = self.unary_expr();
         let mut chain = 0;
-        loop {
-            let op = match self.kind() {
-                TokenKind::Star => BinOp::Mul,
-                TokenKind::Slash => BinOp::Div,
-                TokenKind::Percent => BinOp::Rem,
-                _ => break,
-            };
+        while let Some((op, prec)) = Self::bin_op_prec(self.kind()) {
+            if prec < min_prec {
+                break;
+            }
             if self.nesting_too_deep() {
                 break;
             }
@@ -1543,7 +1466,8 @@ impl Parser {
             chain += 1;
             self.bump();
             self.skip_newlines();
-            let rhs = self.unary_expr();
+            // `prec + 1`: every operator here is left-associative.
+            let rhs = self.binary_expr(prec + 1);
             let span = lhs.span.to(rhs.span);
             lhs = self.mk(
                 ExprKind::Binary {
