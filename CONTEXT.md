@@ -216,7 +216,9 @@ not a mode difference, which is why the LSP can no longer drop them.
 
 **Script suite** — the behaviour tests in `tests/scripts/*.wscript`, asserted by
 `// expect:` (stdout), `// exit:` (exit code) and `// error:` (rendered stderr)
-directives inside the fixture.
+directives inside the fixture. Every file directly in that directory is an
+**entry**; a file that exists only to be `use`d by one of them is a **module
+fixture** and lives in `tests/scripts/modules/`, where nothing runs it.
 
 ---
 

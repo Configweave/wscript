@@ -344,12 +344,12 @@ pub struct CheckResult {
     pub impl_maps: ImplMaps,
     pub exports: HashMap<String, (u32, FnSig)>,
     /// Reference → definition span (locals and script functions), for the
-    /// LSP's goto-definition.
+    /// LSP's goto-definition. Keyed by the *use* site.
     pub def_spans: HashMap<NodeId, Span>,
-    /// Def → the span of its declared name, recorded where the
-    /// declaration is seen. Script defs only: host registrations have no
-    /// source. Distinct from `def_spans`, which is keyed by *use* site.
-    pub decl_spans: HashMap<DefId, Span>,
+    /// Def → the span of its own declared name, keyed by the def rather
+    /// than by a use of it. Script defs only: host registrations have no
+    /// source.
+    pub def_decl_spans: HashMap<DefId, Span>,
     /// Script methods per type (inherent + trait impls), for the LSP's
     /// completion.
     pub methods_by_type: HashMap<DefId, Vec<(String, FnSig)>>,
@@ -586,6 +586,7 @@ pub fn check_files<'a>(files: &'a [(String, &'a SourceFile)], registry: &Registr
         .collect();
     let mut checker = Checker {
         files,
+        // Arbitrary: every reader of `cur_file` runs inside `in_file`.
         cur_file: 0,
         reg: registry,
         out: CheckResult {
@@ -641,9 +642,14 @@ impl<'a> Checker<'a> {
         self.infer.resolve(t).display(&self.out.defs)
     }
 
+    /// The AST of one file of the program, by index.
+    pub(crate) fn ast(&self, file: usize) -> &'a SourceFile {
+        self.files[file].1
+    }
+
     /// The file currently being processed.
     pub(crate) fn file(&self) -> &'a SourceFile {
-        self.files[self.cur_file].1
+        self.ast(self.cur_file)
     }
 
     fn run(&mut self) {
@@ -979,10 +985,10 @@ impl<'a> Checker<'a> {
                 continue;
             }
             let id = self.out.defs.push(kind);
-            // Recorded here, where the declaration is in hand. Re-deriving
+            // Recorded here, where the declaration is in hand: re-deriving
             // it later by scanning an AST is how it came to be read out of
             // the wrong file (#23).
-            self.out.decl_spans.insert(id, name.span);
+            self.out.def_decl_spans.insert(id, name.span);
             self.type_names.insert(name.name.clone(), id);
         }
     }
@@ -1832,10 +1838,13 @@ impl<'a> Checker<'a> {
         for (id, d) in entries {
             // Derives are recorded only for script structs and enums, so
             // `collect_type_names` has already captured a span for every
-            // id here. The fallback keeps a checker bug from swallowing
-            // the error — it would render at the entry file's first byte,
-            // which is exactly the misplaced caret this map replaced.
-            let span = self.out.decl_spans.get(&id).copied().unwrap_or(Span::DUMMY);
+            // id here. If that ever stops holding, fail loudly in tests
+            // rather than silently reinstate the misplaced caret this map
+            // exists to remove; a release build still reports the error,
+            // because dropping it would let an invalid derive compile.
+            let decl_span = self.out.def_decl_spans.get(&id).copied();
+            debug_assert!(decl_span.is_some(), "no declaration span for def {id:?}");
+            let span = decl_span.unwrap_or(Span::DUMMY);
             if d.eq && !self.fields_satisfy(id, |c, t| c.eq_able(t)) {
                 let name = self.out.defs.name_of(id).to_string();
                 self.error_help(
@@ -2228,11 +2237,11 @@ impl<'a> Checker<'a> {
         // declaring file comes from the fn's own source — `cur_file` is
         // established from it rather than consulted.
         let (file, decl) = match info.source {
-            FnSource::Top { file, item } => match &self.files[file].1.items[item] {
+            FnSource::Top { file, item } => match &self.ast(file).items[item] {
                 Item::Fn(f) => (file, f),
                 _ => return,
             },
-            FnSource::Method { file, item, fn_idx } => match &self.files[file].1.items[item] {
+            FnSource::Method { file, item, fn_idx } => match &self.ast(file).items[item] {
                 Item::Impl(im) => (file, &im.fns[fn_idx]),
                 _ => return,
             },
@@ -2349,13 +2358,12 @@ impl<'a> Checker<'a> {
     // ------------------------------------- files, scopes, frames, loops
     //
     // Entry is scoped: the callback receives `&mut Checker`, so the push
-    // and the matching pop cannot drift apart. A guard holding
-    // `&mut self.env` would block the `&mut self` the body needs.
+    // and the matching pop cannot drift apart. A guard cannot be used —
+    // holding `&mut` to the field it saves would block the `&mut self`
+    // the body needs.
 
     /// Check `f` with `file` as the current file, restoring the previous
-    /// one on exit. The one writer of `cur_file`: a pass that left it
-    /// dangling made every later bare-name lookup resolve against an
-    /// arbitrary file (#23).
+    /// one on exit. The one writer of [`Checker::cur_file`].
     fn in_file<T>(&mut self, file: usize, f: impl FnOnce(&mut Self) -> T) -> T {
         let prev = std::mem::replace(&mut self.cur_file, file);
         let out = f(self);

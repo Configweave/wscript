@@ -5,8 +5,13 @@
 //! ```text
 //! // expect: <exact stdout line>     (repeatable, in order)
 //! // exit: <code>                    (default 0)
-//! // error: <substring of stderr>    (compile or runtime failure expected)
+//! // error: <substring of stderr>    (repeatable, all must appear;
+//! //                                  compile or runtime failure expected)
 //! ```
+//!
+//! Every file directly in `tests/scripts/` is an entry with a test of its
+//! own; a script that exists only to be `use`d by one goes in
+//! `tests/scripts/modules/`, which `build.rs` does not descend into.
 //!
 //! All three run **in-process**: the VM's output sink captures script
 //! output, `diag_render::Renderer` captures rendered diagnostics, and the
@@ -39,7 +44,7 @@ fn script_path(name: &str) -> PathBuf {
 struct Expectations {
     lines: Vec<String>,
     exit: u8,
-    error: Option<String>,
+    errors: Vec<String>,
 }
 
 fn expectations(source: &str) -> Expectations {
@@ -52,7 +57,7 @@ fn expectations(source: &str) -> Expectations {
         } else if let Some(rest) = line.strip_prefix("// exit:") {
             e.exit = rest.trim().parse().expect("bad `// exit:` directive");
         } else if let Some(rest) = line.strip_prefix("// error:") {
-            e.error = Some(rest.trim().to_string());
+            e.errors.push(rest.trim().to_string());
         }
     }
     e
@@ -87,18 +92,20 @@ fn check_script(name: &str) {
     };
     let stderr = String::from_utf8_lossy(&rendered);
 
-    if let Some(needle) = &expected.error {
+    if !expected.errors.is_empty() {
         assert_ne!(
             outcome,
             Outcome::Exited(0),
-            "\n{}: expected failure containing `{needle}`, but the run succeeded",
+            "\n{}: expected a failure, but the run succeeded",
             path.display()
         );
-        assert!(
-            stderr.contains(needle.as_str()),
-            "\n{}: rendered diagnostics do not contain `{needle}`\n--- rendered ---\n{stderr}",
-            path.display()
-        );
+        for needle in &expected.errors {
+            assert!(
+                stderr.contains(needle.as_str()),
+                "\n{}: rendered diagnostics do not contain `{needle}`\n--- rendered ---\n{stderr}",
+                path.display()
+            );
+        }
         return;
     }
 
