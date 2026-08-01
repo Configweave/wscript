@@ -19,8 +19,11 @@ tooling (REPL/LSP/wscript.toml), and polish (diagnostics/docs/benchmarks).
 Cargo workspace per PRD §2: `wscript` (umbrella/embedding API), `wscript-core`
 (shared types/bytecode/values), `wscript-compiler`, `wscript-vm`, `wscript-std`,
 `wscript-macros` (`#[derive(Script)]`), `wscript-cli` (binary `wscript`),
-`benchmarks`. Script behaviour tests live in `tests/scripts/*.wscript`
-(asserted by `wscript-cli/tests/scripts.rs` via `// expect:` directives).
+`benchmarks`. Script behaviour tests live in `tests/scripts/*.wscript`; two
+suites consume that corpus — `wscript-cli/tests/scripts.rs` asserts output via
+`// expect:` directives, and `wscript-cli/tests/fuel_snapshot.rs` records what
+each script costs to run in `tests/fuel.snap`, so adding a script means
+regenerating that table too.
 Docs are authored in wdoc/WCL: `docs/main.wcl` is the landing site and
 `docs/wskills/wscript/` the reference model (language, stdlib, CLI, embedding),
 projected into a book, the committed `.claude/skills/wscript` skill, a deck and
@@ -42,6 +45,9 @@ the skill (delete `.claude/skills/wscript` first — stale files aren't wiped).
   fans the same recipes out one per job, so the two cannot drift.
 - Regenerate the stdlib interface after changing registrations:
   `WSCRIPT_REGEN_WSCRIPTI=1 cargo test -p wscript-cli --test wscripti_gen`.
+- Regenerate the fuel table after adding a corpus script or changing what
+  execution costs: `just fuel-regen`. Fuel is observable behaviour — a moved
+  number in `tests/fuel.snap` is a behavioural diff to review, not noise.
 
 ## Agent skills
 

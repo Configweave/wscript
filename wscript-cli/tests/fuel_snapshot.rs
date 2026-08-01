@@ -24,13 +24,16 @@
 
 use std::path::{Path, PathBuf};
 
-use wscript::{Context, Error, Fault, HostCtx, Module, PrintHook, ScriptClosure, Vm, VmConfig};
+use wscript::{
+    Context, Error, Fault, HostCtx, Module, PrintHook, ScriptClosure, Session, Vm, VmConfig,
+};
 use wscript_cli::manifest::{Mode, project_for};
 use wscript_core::bytecode::{Builtin, CallTarget, CompiledUnit, Instr};
 
 /// Bigger than any corpus script needs, so nothing in the table is a
-/// truncated run. The metered dispatch loop charges per straight-line
-/// block, so the size of the tank does not affect what a run costs.
+/// truncated run. Fuel is charged in dispatched instructions (PRD §5.2),
+/// a straight-line block at a time, so the size of the tank does not
+/// affect what a run costs.
 const TANK: u64 = 1_000_000_000;
 
 fn workspace_root() -> PathBuf {
@@ -62,22 +65,80 @@ fn corpus() -> Vec<PathBuf> {
 
 /// Script output goes nowhere: the corpus asserts on it elsewhere
 /// (`scripts.rs`), and here it would only pollute the test log.
-fn discard() -> PrintHook {
+fn null_print_hook() -> PrintHook {
     Box::new(|_, _| {})
+}
+
+/// How a case's run ended. The table writes the tag; the header explains
+/// it — both from [`Outcome::described`], so a new outcome cannot reach
+/// the table without reaching the legend.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Outcome {
+    Ok,
+    Exit,
+    Fault,
+    HostError,
+    CompileError,
+}
+
+impl Outcome {
+    /// Every outcome, in the order the legend lists them.
+    const ALL: &'static [Outcome] = &[
+        Outcome::Ok,
+        Outcome::Exit,
+        Outcome::Fault,
+        Outcome::HostError,
+        Outcome::CompileError,
+    ];
+
+    /// The tag written in the table, and the lines the header explains it
+    /// with. One match, so the two cannot drift apart.
+    fn described(self) -> (&'static str, &'static [&'static str]) {
+        match self {
+            Outcome::Ok => ("ok", &["`main` returned; the cost is exact"]),
+            Outcome::Exit => ("exit", &["`process::exit`; the cost is exact"]),
+            Outcome::Fault => (
+                "fault",
+                &[
+                    "a runtime fault — a fault abandons its straight-line",
+                    "block uncharged, so this is the fuel charged, not the",
+                    "fuel a completed run would have cost",
+                ],
+            ),
+            Outcome::HostError => (
+                "host-error",
+                &[
+                    "the call failed at the host boundary (conversion or",
+                    "signature) rather than in the script",
+                ],
+            ),
+            Outcome::CompileError => (
+                "compile-error",
+                &[
+                    "never ran (an `_err` fixture); its snapshot is the",
+                    "diagnostic one",
+                ],
+            ),
+        }
+    }
+
+    fn tag(self) -> &'static str {
+        self.described().0
+    }
 }
 
 /// What one case cost, and how its run ended.
 struct Cost {
     /// Fuel charged, or `None` when the case never ran.
     fuel: Option<u64>,
-    outcome: &'static str,
+    outcome: Outcome,
 }
 
 impl Cost {
     fn line(&self, name: &str) -> String {
         match self.fuel {
-            Some(fuel) => format!("{name} {fuel} {}\n", self.outcome),
-            None => format!("{name} - {}\n", self.outcome),
+            Some(fuel) => format!("{name} {fuel} {}\n", self.outcome.tag()),
+            None => format!("{name} - {}\n", self.outcome.tag()),
         }
     }
 }
@@ -89,16 +150,16 @@ fn measure(ctx: &Context, unit: &CompiledUnit) -> Cost {
         ctx,
         VmConfig {
             fuel: Some(TANK),
-            out: discard(),
+            out: null_print_hook(),
             ..VmConfig::default()
         },
     );
     let outcome = match vm.call_values(unit, "main", vec![]) {
-        Ok(_) => "ok",
+        Ok(_) => Outcome::Ok,
         // `process::exit` — a requested exit, not a fault.
-        Err(Error::Runtime(e)) if e.exit_code.is_some() => "exit",
-        Err(Error::Runtime(_)) => "fault",
-        Err(_) => "host-error",
+        Err(Error::Runtime(e)) if e.exit_code.is_some() => Outcome::Exit,
+        Err(Error::Runtime(_)) => Outcome::Fault,
+        Err(_) => Outcome::HostError,
     };
     let remaining = vm.fuel().expect("the VM was built metered");
     Cost {
@@ -107,10 +168,13 @@ fn measure(ctx: &Context, unit: &CompiledUnit) -> Cost {
     }
 }
 
-/// Compile and measure one corpus script through the same session the CLI
-/// would build for it (`project_for` + `Mode::Run`), so the recorded cost
-/// is the cost of `wscript run <script>`.
-fn measure_script(path: &Path) -> Cost {
+/// Compile one corpus script through the same session the CLI would build
+/// for it (`project_for` + `Mode::Run`), so what is measured is the cost
+/// of `wscript run <script>`.
+///
+/// `None` for the `_err` fixtures: they are compile-error scripts, so they
+/// have a cost of nothing and their real snapshot is the diagnostic one.
+fn compile_corpus_script(path: &Path) -> Option<(Session, CompiledUnit)> {
     let source = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
     let session = project_for(
@@ -120,15 +184,27 @@ fn measure_script(path: &Path) -> Cost {
         },
     )
     .session;
-    // The `_err` fixtures are compile-error scripts: they have a cost of
-    // nothing, and their real snapshot is the diagnostic one.
-    let Ok(compiled) = session.compile(&path.to_string_lossy(), &source) else {
+    let compiled = session.compile(&path.to_string_lossy(), &source).ok()?;
+    Some((session, compiled.unit))
+}
+
+fn measure_script(path: &Path) -> Cost {
+    let Some((session, unit)) = compile_corpus_script(path) else {
         return Cost {
             fuel: None,
-            outcome: "compile-error",
+            outcome: Outcome::CompileError,
         };
     };
-    measure(session.context(), &compiled.unit)
+    measure(session.context(), &unit)
+}
+
+/// Compile and measure a source string against `ctx` — for the cases that
+/// no corpus script can express.
+fn measure_source(ctx: &Context, source: &str) -> Cost {
+    let unit = ctx
+        .compile(source)
+        .unwrap_or_else(|e| panic!("case does not compile: {e}\n--- source ---\n{source}"));
+    measure(ctx, &unit)
 }
 
 // ------------------------------------------------------- host re-entry
@@ -178,34 +254,34 @@ const HOST_CASES: &[(&str, &str)] = &[
     ),
 ];
 
+/// One recorded host case, by name — so a test names the case it measures
+/// instead of indexing into [`HOST_CASES`], where a reordering would
+/// silently retarget the assertion.
+fn host_case(name: &str) -> &'static str {
+    HOST_CASES
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, source)| *source)
+        .unwrap_or_else(|| panic!("no host case named `{name}`"))
+}
+
 fn host_context() -> Context {
     Context::new().module(callbacks())
 }
 
-fn measure_host_case(ctx: &Context, source: &str) -> Cost {
-    let unit = ctx
-        .compile(source)
-        .unwrap_or_else(|e| panic!("host case does not compile: {e}\n--- source ---\n{source}"));
-    measure(ctx, &unit)
-}
-
 // ---------------------------------------------------------- the table
 
-const HEADER: &str = "\
-# Fuel charged by every case in the corpus, in dispatched instructions.
+const PREAMBLE: &str = "\
+# Fuel charged by every case in the corpus, in dispatched instructions
+# (PRD §5.2) — the metered dispatch loop charges a straight-line block at
+# a time, so a number is an instruction count, not a count of the points
+# where fuel was taken.
 #
 # Regenerate with `just fuel-regen`, then read the diff. A number moving is
 # a behavioural change, not a detail: a host with a per-tick budget sees it
 # as a script that suddenly faults, or one that suddenly does not.
 #
 # One line per case — `<name> <fuel> <outcome>`. Outcomes:
-#   ok             `main` returned; the cost is exact
-#   exit           `process::exit`; the cost is exact
-#   fault          a runtime fault — a fault abandons its straight-line
-#                  block uncharged, so this is the fuel charged, not the
-#                  fuel a completed run would have cost
-#   compile-error  never ran (an `_err` fixture); its snapshot is the
-#                  diagnostic one
 ";
 
 const HOST_SECTION: &str = "\
@@ -215,8 +291,28 @@ const HOST_SECTION: &str = "\
 # closure-taking host function. See `callbacks()` in fuel_snapshot.rs.
 ";
 
+/// The outcome legend, written from the same list the table's tags come
+/// from, so an outcome can never appear in the table unexplained.
+fn legend() -> String {
+    let width = Outcome::ALL
+        .iter()
+        .map(|o| o.tag().len())
+        .max()
+        .expect("at least one outcome");
+    let mut out = String::new();
+    for outcome in Outcome::ALL {
+        let (tag, lines) = outcome.described();
+        for (i, line) in lines.iter().enumerate() {
+            let column = if i == 0 { tag } else { "" };
+            out.push_str(&format!("#   {column:width$}  {line}\n"));
+        }
+    }
+    out
+}
+
 fn render() -> String {
-    let mut out = String::from(HEADER);
+    let mut out = String::from(PREAMBLE);
+    out.push_str(&legend());
     out.push('\n');
     for path in corpus() {
         let name = path.file_stem().unwrap().to_string_lossy().into_owned();
@@ -225,7 +321,7 @@ fn render() -> String {
     out.push_str(HOST_SECTION);
     let ctx = host_context();
     for (name, source) in HOST_CASES {
-        out.push_str(&measure_host_case(&ctx, source).line(name));
+        out.push_str(&measure_source(&ctx, source).line(name));
     }
     out
 }
@@ -286,7 +382,8 @@ fn fuel_costs_match_the_snapshot() {
 
 // --------------------------------------------------------- coverage
 
-/// A path through the VM that fuel is charged at.
+/// A path through the VM that fuel is charged at, recognised in the
+/// bytecode.
 #[derive(Clone, Copy)]
 enum FuelPath {
     /// A loop: a jump that goes backwards, charging the block behind it.
@@ -298,24 +395,20 @@ enum FuelPath {
     /// A host call — charged 1 for the dispatch; what the host does
     /// internally is not metered.
     HostCall,
-    /// A structural builtin, which charges per value visited rather than
-    /// once for the instruction. `ValueEq`/`ValueCmp`/`DeepClone` are only
-    /// emitted for genuinely structural operands — primitives compare
-    /// through their own opcodes — so finding one means a container walk.
-    Structural,
+    /// A structural comparison or deep clone, which charges per value
+    /// visited rather than once for the instruction.
+    /// `ValueEq`/`ValueCmp`/`DeepClone` are only emitted for genuinely
+    /// structural operands — primitives compare through their own opcodes
+    /// — so finding one means a container walk.
+    ///
+    /// The other `charge_structural` site, rendering a container
+    /// (`fmt_value`), is invisible here: `print`/`str` compile to the same
+    /// builtin whatever the operand's shape. It is covered by measurement
+    /// instead, in `printing_a_container_charges_per_value`.
+    StructuralCompare,
 }
 
 impl FuelPath {
-    fn describe(self) -> &'static str {
-        match self {
-            FuelPath::BackwardJump => "a backward jump (loop)",
-            FuelPath::ForwardJump => "a forward jump (if/match)",
-            FuelPath::ScriptCall => "a script call and return",
-            FuelPath::HostCall => "a host call",
-            FuelPath::Structural => "a structural builtin",
-        }
-    }
-
     fn matches(self, instr: &Instr) -> bool {
         match (self, instr) {
             (
@@ -346,7 +439,7 @@ impl FuelPath {
                 },
             ) => true,
             (
-                FuelPath::Structural,
+                FuelPath::StructuralCompare,
                 Instr::Call {
                     target: CallTarget::Builtin(b),
                     ..
@@ -363,6 +456,15 @@ fn compiles_path(unit: &CompiledUnit, path: FuelPath) -> bool {
         .any(|p| p.code.iter().any(|i| path.matches(i)))
 }
 
+/// A charged path, what to call it in a failure, and the corpus script
+/// that carries it — one entry per path, so a path is described in exactly
+/// one place.
+struct Covered {
+    path: FuelPath,
+    what: &'static str,
+    script: &'static str,
+}
+
 /// The corpus script that carries each path, named so a reader can see at a
 /// glance what the table covers and so removing that script fails loudly
 /// rather than quietly narrowing the snapshot.
@@ -372,12 +474,32 @@ fn compiles_path(unit: &CompiledUnit, path: FuelPath) -> bool {
 /// reached. Proving reachability would mean instrumenting the VM; the
 /// scripts below are ones whose expected output cannot be produced without
 /// taking the path, so the pairing is checked by `scripts.rs` too.
-const COVERAGE: &[(FuelPath, &str)] = &[
-    (FuelPath::BackwardJump, "m2_for_loops"),
-    (FuelPath::ForwardJump, "m1_control_flow"),
-    (FuelPath::ScriptCall, "m1_functions"),
-    (FuelPath::HostCall, "m5_math"),
-    (FuelPath::Structural, "m3_derives"),
+const COVERAGE: &[Covered] = &[
+    Covered {
+        path: FuelPath::BackwardJump,
+        what: "a backward jump (loop)",
+        script: "m2_for_loops",
+    },
+    Covered {
+        path: FuelPath::ForwardJump,
+        what: "a forward jump (if/match)",
+        script: "m1_control_flow",
+    },
+    Covered {
+        path: FuelPath::ScriptCall,
+        what: "a script call and return",
+        script: "m1_functions",
+    },
+    Covered {
+        path: FuelPath::HostCall,
+        what: "a host call",
+        script: "m5_math",
+    },
+    Covered {
+        path: FuelPath::StructuralCompare,
+        what: "a structural comparison or deep clone",
+        script: "m3_derives",
+    },
 ];
 
 #[test]
@@ -386,35 +508,28 @@ fn every_charged_path_is_covered_by_a_named_script() {
         .iter()
         .filter_map(|path| {
             let name = path.file_stem().unwrap().to_string_lossy().into_owned();
-            let source = std::fs::read_to_string(path).ok()?;
-            let session = project_for(
-                path,
-                Mode::Run {
-                    script_args: Vec::new(),
-                },
-            )
-            .session;
-            let compiled = session.compile(&path.to_string_lossy(), &source).ok()?;
-            Some((name, compiled.unit))
+            let (_, unit) = compile_corpus_script(path)?;
+            Some((name, unit))
         })
         .collect();
 
-    for (path, script) in COVERAGE {
+    for covered in COVERAGE {
         let (_, unit) = units
             .iter()
-            .find(|(name, _)| name == script)
-            .unwrap_or_else(|| panic!("no corpus script named `{script}`"));
-        if compiles_path(unit, *path) {
+            .find(|(name, _)| name == covered.script)
+            .unwrap_or_else(|| panic!("no corpus script named `{}`", covered.script));
+        if compiles_path(unit, covered.path) {
             continue;
         }
         let alternatives: Vec<&str> = units
             .iter()
-            .filter(|(_, u)| compiles_path(u, *path))
+            .filter(|(_, u)| compiles_path(u, covered.path))
             .map(|(name, _)| name.as_str())
             .collect();
         panic!(
-            "`{script}` no longer covers {}. Scripts that do: {}",
-            path.describe(),
+            "`{}` no longer covers {}. Scripts that do: {}",
+            covered.script,
+            covered.what,
             if alternatives.is_empty() {
                 "none — add one".to_string()
             } else {
@@ -424,6 +539,45 @@ fn every_charged_path_is_covered_by_a_named_script() {
     }
 }
 
+/// How many elements the printed list carries. Big enough that the walk
+/// dwarfs the one instruction the two cases differ by.
+const PRINTED_ELEMENTS: usize = 32;
+
+/// Rendering a container charges per value visited (`fmt_value`'s
+/// `charge_structural`) — the third structural example the ticket names,
+/// and the one no bytecode check can see, since `println(xs)` and
+/// `println(xs[0])` compile to the same builtin.
+///
+/// Measure it instead: both cases build the *same* list, so the only
+/// difference between them is what gets rendered. A flat charge for the
+/// call would make the two costs differ by a constant; charging per value
+/// makes them differ by the length of the list.
+#[test]
+fn printing_a_container_charges_per_value() {
+    let ctx = Context::new();
+    let elements = (1..=PRINTED_ELEMENTS)
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let whole = measure_source(
+        &ctx,
+        &format!("fn main() {{\n let xs = [{elements}]\n println(xs)\n}}"),
+    );
+    let element = measure_source(
+        &ctx,
+        &format!("fn main() {{\n let xs = [{elements}]\n println(xs[0])\n}}"),
+    );
+
+    assert_eq!(whole.outcome, Outcome::Ok);
+    assert_eq!(element.outcome, Outcome::Ok);
+    let walk = whole.fuel.unwrap().saturating_sub(element.fuel.unwrap());
+    assert!(
+        walk >= (PRINTED_ELEMENTS / 2) as u64,
+        "printing a {PRINTED_ELEMENTS}-element list cost only {walk} more fuel than printing \
+         one of its elements — rendering is not charged per value visited"
+    );
+}
+
 /// Re-entry is covered by measurement rather than by reading the bytecode:
 /// the closure body's own instructions have to show up in the bill, which
 /// can only happen if the dispatch loop handed its tank to the nested run
@@ -431,15 +585,15 @@ fn every_charged_path_is_covered_by_a_named_script() {
 #[test]
 fn host_re_entry_charges_the_callback_body() {
     let ctx = host_context();
-    let short = measure_host_case(
+    let short = measure_source(
         &ctx,
         "use cbs\nfn main() -> int { cbs::apply_twice(|x| x, 5) }",
     );
-    let long = measure_host_case(
+    let long = measure_source(
         &ctx,
         "use cbs\nfn main() -> int { cbs::apply_twice(|x| x + 0 + 0 + 0 + 0, 5) }",
     );
-    assert_eq!(short.outcome, "ok");
+    assert_eq!(short.outcome, Outcome::Ok);
     assert!(
         long.fuel > short.fuel,
         "a longer callback body cost no more fuel ({:?} vs {:?}) — \
@@ -450,7 +604,11 @@ fn host_re_entry_charges_the_callback_body() {
 
     // The error path owes the same sync: the host caught the callback's
     // fault, so the script ran on and its remaining cost was still charged.
-    let caught = measure_host_case(&ctx, HOST_CASES[2].1);
-    assert_eq!(caught.outcome, "ok", "the host recovers from the fault");
+    let caught = measure_source(&ctx, host_case("host:callback_caught"));
+    assert_eq!(
+        caught.outcome,
+        Outcome::Ok,
+        "the host recovers from the fault"
+    );
     assert!(caught.fuel.unwrap() > 0);
 }

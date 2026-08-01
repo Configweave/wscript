@@ -1,4 +1,7 @@
-# Fuel charged by every case in the corpus, in dispatched instructions.
+# Fuel charged by every case in the corpus, in dispatched instructions
+# (PRD §5.2) — the metered dispatch loop charges a straight-line block at
+# a time, so a number is an instruction count, not a count of the points
+# where fuel was taken.
 #
 # Regenerate with `just fuel-regen`, then read the diff. A number moving is
 # a behavioural change, not a detail: a host with a per-tick budget sees it
@@ -10,6 +13,8 @@
 #   fault          a runtime fault — a fault abandons its straight-line
 #                  block uncharged, so this is the fuel charged, not the
 #                  fuel a completed run would have cost
+#   host-error     the call failed at the host boundary (conversion or
+#                  signature) rather than in the script
 #   compile-error  never ran (an `_err` fixture); its snapshot is the
 #                  diagnostic one
 
