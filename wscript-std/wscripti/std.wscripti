@@ -38,11 +38,11 @@ mod value {
 
 /// Pure numeric helpers; always safe to register
 mod math {
-    const PI: float // = 3.141592653589793
-    const E: float // = 2.718281828459045
-    const TAU: float // = 6.283185307179586
-    const INF: float // = inf
-    const NAN: float // = NaN
+    const PI: float = 3.141592653589793
+    const E: float = 2.718281828459045
+    const TAU: float = 6.283185307179586
+    const INF: float = 1.0 / 0.0
+    const NAN: float = 0.0 / 0.0
     fn abs(a0: float) -> float
     fn min(a: float, b: float) -> float
     fn max(a: float, b: float) -> float

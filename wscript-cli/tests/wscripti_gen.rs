@@ -1,10 +1,19 @@
-//! Keep `wscript-std/wscripti/std.wscripti` in sync with the actual registrations
-//! (PRD §9.1: wscript-std ships generated interface files), and prove the
-//! interface parses with the same parser as scripts.
+//! The `.wscripti` format end to end: emit a registry, read it back, and
+//! insist nothing was lost on the way.
+//!
+//! Keeps `wscript-std/wscripti/std.wscripti` in sync with the actual
+//! registrations (PRD §9.1: wscript-std ships generated interface files),
+//! proves the interface parses with the same parser as scripts, and pins
+//! what an interface may and may not declare. It lives in `wscript-cli`
+//! because that is the crate that can see the stdlib and the umbrella
+//! `Context` at once — the code under test is `wscript-compiler`'s
+//! `wscripti` module.
 //!
 //! Regenerate with: `WSCRIPT_REGEN_WSCRIPTI=1 cargo test -p wscript-cli --test wscripti_gen`
 
 use std::path::PathBuf;
+
+use wscript_core::bytecode::Const;
 
 fn wscripti_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -76,21 +85,220 @@ fn declared_parameter_names_round_trip() {
     let sqrt = math.fns.iter().find(|f| f.name == "sqrt").unwrap();
     assert_eq!(sqrt.param_names(), None, "`sqrt` declares no names");
 
-    // Re-emitting reproduces every declaration verbatim. (Only `const`
-    // lines differ: the loader has no values to carry, just types.)
+    // Re-emitting reproduces the file verbatim, consts included.
     let reloaded = wscript::Context::from_registry(reg).interface_text();
-    let fn_lines = |text: &str| -> Vec<String> {
-        text.lines()
-            .map(str::trim)
-            .filter(|l| l.starts_with("fn "))
-            .map(str::to_string)
-            .collect()
-    };
     assert_eq!(
-        fn_lines(&reloaded),
-        fn_lines(&text),
+        reloaded, text,
         "declarations must survive a load and re-emit unchanged"
     );
+}
+
+/// A module exercising every constant shape a host can register, including
+/// the ones with no literal spelling (±inf, NaN) and the ones whose text
+/// needs escaping (braces read as interpolation holes; quotes and control
+/// characters need backslashes).
+fn const_zoo() -> wscript::Module {
+    let mut m = wscript::Module::new("zoo");
+    m.const_("MAX_PANES", 16i64);
+    m.const_("MIN", -9223372036854775808i64);
+    m.const_("MAX", 9223372036854775807i64);
+    m.const_("RATIO", 1.5f64);
+    m.const_("NEG", -0.25f64);
+    m.const_("TINY", 5e-324f64);
+    m.const_("HUGE", f64::MAX);
+    m.const_("INF", f64::INFINITY);
+    m.const_("NEG_INF", f64::NEG_INFINITY);
+    m.const_("NAN", f64::NAN);
+    m.const_("ZERO", 0.0f64);
+    m.const_("NEG_ZERO", -0.0f64);
+    m.const_("ON", true);
+    m.const_("OFF", false);
+    m.const_("TICK", '\n');
+    m.const_("QUOTE", '\'');
+    m.const_("EMOJI", '\u{1F600}');
+    m.const_("OPEN", '{');
+    m.const_("CLOSE", '}');
+    m.const_("GREETING", "hi \"there\"\n\tbye\\");
+    m.const_("TEMPLATE", "score: {x} and {{literal}}");
+    m.const_("EMPTY", "");
+    m
+}
+
+fn zoo_interface() -> String {
+    wscript::Context::new().module(const_zoo()).interface_text()
+}
+
+/// The bug this file's ticket (#15) exists for: the emitter wrote const
+/// values into a comment and the loader invented a zero, so `wscript check`
+/// const-folded 0 where `wscript run` folded 16.
+#[test]
+fn check_and_run_agree_on_host_const_values() {
+    let live = wscript::Context::new().module(const_zoo());
+    let mut from_interface = wscript::Registry::new();
+    let (diags, _index) = wscript_compiler::wscripti::load(&zoo_interface(), &mut from_interface);
+    assert!(diags.is_empty(), "{diags:?}");
+
+    let src = "use zoo\nfn main() -> int { zoo::MAX_PANES }";
+    let checked = wscript_compiler::compile(src, &from_interface)
+        .unwrap()
+        .unit;
+    let ran = live.compile(src).unwrap();
+
+    // Module consts fold at compile time, so the interface-only unit runs
+    // without any host implementation — and must fold the same value.
+    let fold = |reg: &wscript::Registry, unit: &wscript::CompiledUnit| -> i64 {
+        let mut vm = wscript_vm::Vm::new(reg, wscript_vm::VmConfig::default());
+        match vm.call_name(unit, "main", vec![]).unwrap() {
+            wscript::Value::Int(n) => n,
+            other => panic!("expected an int, got {other:?}"),
+        }
+    };
+    let from_check = fold(&from_interface, &checked);
+    assert_eq!(from_check, 16, "the checker folds the registered value");
+    assert_eq!(from_check, fold(live.registry(), &ran));
+}
+
+/// Every registered constant survives emit → parse → load unchanged.
+#[test]
+fn const_values_round_trip() {
+    let text = zoo_interface();
+    let mut reg = wscript::Registry::new();
+    let (diags, _index) = wscript_compiler::wscripti::load(&text, &mut reg);
+    assert!(diags.is_empty(), "{diags:?}\n--- text ---\n{text}");
+
+    let original = const_zoo();
+    let live = wscript::Context::new().module(original);
+    let expected = &live.registry().module("zoo").unwrap().consts;
+    let actual = &reg.module("zoo").expect("zoo module").consts;
+    assert_eq!(actual.len(), expected.len(), "{text}");
+    for ((n1, t1, c1), (n2, t2, c2)) in expected.iter().zip(actual) {
+        assert_eq!(n1, n2);
+        assert_eq!(t1, t2, "{n1}");
+        assert!(
+            same_const(c1, c2),
+            "{n1}: {c1:?} loaded back as {c2:?}\n{text}"
+        );
+    }
+
+    // Re-emitting is a fixed point: the second render is byte-identical.
+    assert_eq!(wscript::Context::from_registry(reg).interface_text(), text);
+}
+
+/// The text round trip, swept rather than sampled.
+///
+/// `const_zoo` is a hand-picked list, and hand-picked lists are exactly
+/// what missed `'{'` — a brace doubles inside a string but a char literal
+/// holds one character, so `'{{'` did not lex. Every code point that could
+/// need escaping is cheap to enumerate, so enumerate them: each one as a
+/// `char` constant and again inside a `string`.
+#[test]
+fn every_escapable_character_round_trips() {
+    let interesting: Vec<char> = (0u32..=0x2FF)
+        .chain([0x2028, 0x1F600, 0xFEFF, 0x10FFFF])
+        .filter_map(char::from_u32)
+        .collect();
+
+    let mut m = wscript::Module::new("chars");
+    for (i, c) in interesting.iter().enumerate() {
+        m.const_(format!("C{i}"), *c);
+        // Padded, so a mis-escape that swallows a neighbour shows up.
+        m.const_(format!("S{i}"), format!("<{c}{c}>"));
+    }
+    let text = wscript::Context::new().module(m).interface_text();
+
+    let mut reg = wscript::Registry::new();
+    let (diags, _index) = wscript_compiler::wscripti::load(&text, &mut reg);
+    assert!(diags.is_empty(), "{diags:?}\n--- text ---\n{text}");
+
+    let consts = &reg.module("chars").expect("chars module").consts;
+    assert_eq!(consts.len(), interesting.len() * 2);
+    for (i, c) in interesting.iter().enumerate() {
+        let (_, _, loaded) = &consts[i * 2];
+        assert_eq!(*loaded, Const::Char(*c), "char U+{:04X}", *c as u32);
+        let (_, _, loaded) = &consts[i * 2 + 1];
+        assert_eq!(
+            *loaded,
+            Const::Str(format!("<{c}{c}>").into()),
+            "string containing U+{:04X}",
+            *c as u32
+        );
+    }
+}
+
+/// `Const`'s `PartialEq` is no use for floats here: NaN is never equal to
+/// itself, and the round trip must still be judged to have preserved it.
+fn same_const(a: &Const, b: &Const) -> bool {
+    use Const::Float;
+    match (a, b) {
+        (Float(x), Float(y)) => (x.is_nan() && y.is_nan()) || x.to_bits() == y.to_bits(),
+        _ => a == b,
+    }
+}
+
+/// A constant the loader cannot fold is reported, never quietly stood in
+/// for: an invented value is exactly the `check`/`run` divergence #15 was
+/// filed about.
+#[test]
+fn a_constant_without_a_usable_value_is_reported() {
+    for (src, what) in [
+        ("mod m {\n    const A: int\n}\n", "no value at all"),
+        ("mod m {\n    const A: int = 1.5\n}\n", "float for an int"),
+        ("mod m {\n    const A: float = 1\n}\n", "int for a float"),
+        (
+            "mod m {\n    const A: string = 'c'\n}\n",
+            "char for a string",
+        ),
+        (
+            "mod m {\n    const A: int = 1 / 0\n}\n",
+            "int divide by zero",
+        ),
+        (
+            "mod m {\n    const A: int = 9223372036854775807 + 1\n}\n",
+            "int overflow",
+        ),
+        (
+            "mod m {\n    const A: bool = other::B\n}\n",
+            "not a literal",
+        ),
+    ] {
+        let mut reg = wscript::Registry::new();
+        let (diags, _index) = wscript_compiler::wscripti::load(src, &mut reg);
+        // E0271 specifically: the interface loader rejected it, rather
+        // than the parser having failed to reach it.
+        assert!(
+            diags.iter().any(|d| d.code == "E0271"),
+            "{what} should be reported by the loader: {src}\n{diags:?}"
+        );
+    }
+}
+
+/// One `resolve_type`: an interface cannot declare a type no script could
+/// write. Before #15 the loader had its own copy with none of these checks.
+#[test]
+fn interfaces_cannot_declare_types_a_script_could_not_write() {
+    // The codes are the checker's own — the point is that these come from
+    // the shared resolver and not from a second opinion in the loader.
+    for (src, code) in [
+        ("mod m {\n    fn f(a0: Map[float, int])\n}\n", "E0214"),
+        ("mod m {\n    fn f(a0: weak[int])\n}\n", "E0213"),
+        ("mod m {\n    fn f(a0: List[int, int])\n}\n", "E0210"),
+        ("mod m {\n    fn f(a0: List)\n}\n", "E0210"),
+        ("mod m {\n    fn f(a0: Nope)\n}\n", "E0212"),
+        // Host traits to dispatch through are v2, and sharing the resolver
+        // must not have quietly admitted them. Every trait an interface
+        // registry can see is a builtin operator trait, so this is the
+        // resolver's own rejection; `Loader::resolve_type` backstops the
+        // case where that stops being true.
+        ("mod m {\n    fn f(a0: dyn Display)\n}\n", "E0211"),
+        ("mod m {\n    fn f(a0: List[dyn Nope])\n}\n", "E0212"),
+    ] {
+        let mut reg = wscript::Registry::new();
+        let (diags, _index) = wscript_compiler::wscripti::load(src, &mut reg);
+        assert!(
+            diags.iter().any(|d| d.code == code),
+            "{src} should be rejected with {code}\n{diags:?}"
+        );
+    }
 }
 
 #[test]

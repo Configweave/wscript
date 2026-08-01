@@ -10,6 +10,7 @@ mod infer;
 mod methods;
 mod ops;
 mod pat;
+pub(crate) mod resolve;
 
 use std::collections::{HashMap, HashSet};
 
@@ -693,6 +694,28 @@ pub fn check_files<'a>(files: &'a [(String, &'a SourceFile)], registry: &Registr
     };
     checker.run();
     checker.out
+}
+
+impl resolve::TypeScope for Checker<'_> {
+    fn type_named(&self, name: &str) -> Option<DefId> {
+        self.type_names.get(name).copied()
+    }
+
+    fn defs(&self) -> &DefTable {
+        &self.out.defs
+    }
+
+    fn report(&mut self, d: Diagnostic) {
+        self.out.diags.push(d);
+    }
+
+    fn type_param(&self, name: &str) -> Option<u32> {
+        self.env
+            .type_params()
+            .iter()
+            .position(|(n, _)| n == name)
+            .map(|i| i as u32)
+    }
 }
 
 impl<'a> Checker<'a> {
@@ -2085,198 +2108,7 @@ impl<'a> Checker<'a> {
     // ------------------------------------------------------------- types
 
     pub(crate) fn resolve_type(&mut self, t: &TypeExpr) -> Type {
-        match &t.kind {
-            TypeExprKind::Unit => Type::Unit,
-            TypeExprKind::Error => Type::Error,
-            TypeExprKind::Name(ident) => match ident.name.as_str() {
-                "int" => Type::Int,
-                "float" => Type::Float,
-                "bool" => Type::Bool,
-                "char" => Type::Char,
-                "unit" => Type::Unit,
-                "string" => Type::Str,
-                "List" | "Map" | "Option" | "Result" | "weak" => {
-                    let span = t.span;
-                    let name = ident.name.clone();
-                    let arity = match ident.name.as_str() {
-                        "Map" | "Result" => 2,
-                        _ => 1,
-                    };
-                    self.error_help(
-                        "E0210",
-                        span,
-                        format!("`{name}` requires type arguments"),
-                        format!(
-                            "write `{name}[{}]`",
-                            (0..arity).map(|_| "T").collect::<Vec<_>>().join(", ")
-                        ),
-                    );
-                    Type::Error
-                }
-                other => {
-                    // In-scope generic type parameters resolve first
-                    // (shadowing an existing type name is an error at the
-                    // declaration, so no ambiguity survives here).
-                    if let Some(i) = self.env.type_params().iter().position(|(n, _)| n == other) {
-                        return Type::Param(i as u32);
-                    }
-                    match self.type_names.get(other) {
-                        Some(&id) => match self.out.defs.get(id) {
-                            DefKind::Trait(_) => {
-                                let span = ident.span;
-                                let msg =
-                                    format!("trait `{other}` cannot be used as a type directly");
-                                self.error_help(
-                                    "E0211",
-                                    span,
-                                    msg,
-                                    format!("use `dyn {other}` for a dynamically dispatched value"),
-                                );
-                                Type::Error
-                            }
-                            _ => Type::Named(id),
-                        },
-                        None => {
-                            let span = ident.span;
-                            let msg = format!("unknown type `{other}`");
-                            self.error("E0212", span, msg);
-                            Type::Error
-                        }
-                    }
-                }
-            },
-            TypeExprKind::App(ident, args) => {
-                let mut arg_tys: Vec<Type> = args.iter().map(|a| self.resolve_type(a)).collect();
-                let expect = |me: &mut Self, n: usize, arg_tys: &mut Vec<Type>| {
-                    if arg_tys.len() != n {
-                        let span = t.span;
-                        let msg = format!(
-                            "`{}` takes {n} type argument{}, found {}",
-                            ident.name,
-                            if n == 1 { "" } else { "s" },
-                            arg_tys.len()
-                        );
-                        me.error("E0210", span, msg);
-                        arg_tys.resize(n, Type::Error);
-                    }
-                };
-                match ident.name.as_str() {
-                    "List" => {
-                        expect(self, 1, &mut arg_tys);
-                        Type::List(Box::new(arg_tys.remove(0)))
-                    }
-                    "Option" => {
-                        expect(self, 1, &mut arg_tys);
-                        Type::Option(Box::new(arg_tys.remove(0)))
-                    }
-                    "weak" => {
-                        expect(self, 1, &mut arg_tys);
-                        let inner = arg_tys.remove(0);
-                        if !self.is_reference_type(&inner) {
-                            let span = t.span;
-                            let msg = format!(
-                                "`weak[{}]` is invalid: weak references only apply to \
-                                 reference types",
-                                self.ty_str(&inner)
-                            );
-                            self.error_help(
-                                "E0213",
-                                span,
-                                msg,
-                                "structs, enums, List, Map and functions can be weakly \
-                                 referenced; primitives and strings cannot",
-                            );
-                        }
-                        Type::Weak(Box::new(inner))
-                    }
-                    "Map" => {
-                        expect(self, 2, &mut arg_tys);
-                        let v = arg_tys.remove(1);
-                        let k = arg_tys.remove(0);
-                        if !matches!(
-                            k,
-                            Type::Int | Type::Bool | Type::Char | Type::Str | Type::Error
-                        ) {
-                            let span = args.first().map(|a| a.span).unwrap_or(t.span);
-                            let msg = format!("`{}` cannot be a map key", self.ty_str(&k));
-                            self.error_help(
-                                "E0214",
-                                span,
-                                msg,
-                                "map keys must be int, bool, char, or string",
-                            );
-                        }
-                        Type::Map(Box::new(k), Box::new(v))
-                    }
-                    "Result" => {
-                        expect(self, 2, &mut arg_tys);
-                        let e = arg_tys.remove(1);
-                        let ok = arg_tys.remove(0);
-                        Type::Result(Box::new(ok), Box::new(e))
-                    }
-                    other => {
-                        let span = t.span;
-                        let msg = format!("`{other}` does not take type arguments");
-                        let help = if self.env.type_params().iter().any(|(n, _)| n == other) {
-                            "type parameters do not take type arguments".to_string()
-                        } else {
-                            "user-defined generic *types* are not supported yet; generic \
-                             functions are — declare type parameters on the function: \
-                             `fn f[T](x: T)`"
-                                .to_string()
-                        };
-                        self.error_help("E0215", span, msg, help);
-                        Type::Error
-                    }
-                }
-            }
-            TypeExprKind::Fn(params, ret) => {
-                let params: Vec<Type> = params.iter().map(|p| self.resolve_type(p)).collect();
-                let ret = match ret {
-                    Some(r) => self.resolve_type(r),
-                    None => Type::Unit,
-                };
-                Type::Fn(Box::new(FnSig::new(params, ret)))
-            }
-            TypeExprKind::Dyn(ident) => match self.type_names.get(&ident.name) {
-                Some(&id) if self.out.defs.as_trait(id).is_some() => {
-                    if self.out.defs.as_trait(id).is_some_and(|t| t.operator) {
-                        let span = ident.span;
-                        let msg =
-                            format!("operator trait `{}` cannot be used as `dyn`", ident.name);
-                        self.error("E0211", span, msg);
-                        return Type::Error;
-                    }
-                    Type::Dyn(id)
-                }
-                Some(_) => {
-                    let span = ident.span;
-                    let msg = format!("`{}` is not a trait", ident.name);
-                    self.error("E0211", span, msg);
-                    Type::Error
-                }
-                None => {
-                    let span = ident.span;
-                    let msg = format!("unknown trait `{}`", ident.name);
-                    self.error("E0212", span, msg);
-                    Type::Error
-                }
-            },
-        }
-    }
-
-    pub(crate) fn is_reference_type(&self, t: &Type) -> bool {
-        matches!(
-            t,
-            Type::List(_)
-                | Type::Map(..)
-                | Type::Named(_)
-                | Type::Fn(_)
-                | Type::Dyn(_)
-                | Type::Option(_)
-                | Type::Result(..)
-                | Type::Error
-        )
+        resolve::resolve_type(self, t)
     }
 
     // ----------------------------------------------------------- vtables

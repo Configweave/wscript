@@ -16,7 +16,6 @@
 //! assert_eq!(n, 42);
 //! ```
 
-mod interface;
 mod session;
 
 use std::cell::{Ref, RefMut};
@@ -154,7 +153,7 @@ impl Context {
     /// subset of wscript syntax (declarations only), consumed by the LSP and
     /// `wscript check` via `wscript.toml`. Think `.d.ts`.
     pub fn interface_text(&self) -> String {
-        interface::render(&self.registry)
+        wscript_compiler::wscripti::render(&self.registry)
     }
 
     /// Write the interface to a file (PRD §9.1 / Appendix B).

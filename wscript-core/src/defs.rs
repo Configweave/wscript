@@ -314,6 +314,15 @@ impl DefTable {
         }
     }
 
+    /// The definition of that name, whatever kind it is. Names are unique
+    /// across kinds — a script cannot declare a struct and a trait called
+    /// the same thing — so there is nothing to disambiguate.
+    pub fn id_of(&self, name: &str) -> Option<DefId> {
+        (0..self.defs.len())
+            .map(|i| DefId(i as u32))
+            .find(|&id| self.name_of(id) == name)
+    }
+
     pub fn trait_name(&self, id: DefId) -> &str {
         self.name_of(id)
     }

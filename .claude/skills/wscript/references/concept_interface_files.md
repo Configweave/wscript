@@ -19,6 +19,8 @@ interfaces = ["api.wscripti"]
 
 `wscript check` and `wscript lsp` read the manifest and typecheck scripts against the declared API — completions, hover, and goto-definition included. Regenerate `.wscripti` files in CI to keep them honest. The stdlib ships its own at `wscript-std/wscripti/std.wscripti`.
 
+Constants carry their value, not just their type — `const MAX_PANES: int = 16`. Module constants fold at compile time, so a declared value is what `wscript check` folds into the script, and it must be the one the host registered.
+
 > [!NOTE]
 > **Feature gates grant capability**
 > Each stdlib module is a Cargo feature in wscript-std (`math fs process json toml xml`, default all). Registering a module is what grants the capability — don't register `fs`, and scripts cannot touch the filesystem.
