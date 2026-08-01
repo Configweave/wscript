@@ -39,6 +39,11 @@ wscripti-regen:
 snap-regen:
 	WSCRIPT_REGEN_SNAP=1 cargo test -p wscript-compiler
 
+# Regenerate tests/fuel.snap (what each script costs to run), then review the diff
+[group('test')]
+fuel-regen:
+	WSCRIPT_REGEN_FUEL=1 cargo test -p wscript-cli --test fuel_snapshot
+
 # Test everything
 [group('test')]
 test: workspace-test
