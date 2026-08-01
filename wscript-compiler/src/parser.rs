@@ -1247,12 +1247,26 @@ impl Parser {
         self.assign_expr()
     }
 
-    fn expr_no_struct_lit(&mut self) -> Expr {
-        let saved = self.no_struct_lit;
-        self.no_struct_lit = true;
-        let e = self.assign_expr();
+    /// Parse with `f` scoped to a struct-literal restriction, restoring
+    /// the previous one afterwards.
+    ///
+    /// The restriction is why `if p { }` parses as an `if` with an empty
+    /// body rather than a struct literal `p { }`: in a header position a
+    /// `{` starts the body. Delimiters re-enable it, because inside
+    /// parens or brackets there is no body to be ambiguous with.
+    ///
+    /// A scoped call rather than eight hand-balanced save/restore pairs:
+    /// a missed restore silently disabled struct literals for an entire
+    /// subtree, with no diagnostic.
+    fn with_struct_lits(&mut self, allowed: bool, f: impl FnOnce(&mut Self) -> Expr) -> Expr {
+        let saved = std::mem::replace(&mut self.no_struct_lit, !allowed);
+        let out = f(self);
         self.no_struct_lit = saved;
-        e
+        out
+    }
+
+    fn expr_no_struct_lit(&mut self) -> Expr {
+        self.with_struct_lits(false, |p| p.assign_expr())
     }
 
     fn mk(&mut self, kind: ExprKind, span: Span) -> Expr {
@@ -1300,13 +1314,11 @@ impl Parser {
             }
         }
         if out.is_empty() {
-            self.diags.push(
-                Diagnostic::error(
-                    "E0255",
-                    open.to(self.prev_span()),
-                    "empty type parameter list",
-                )
-                .with_help("declare at least one parameter (`fn f[T](...)`) or drop the `[]`"),
+            self.error_help(
+                "E0255",
+                open.to(self.prev_span()),
+                "empty type parameter list",
+                "declare at least one parameter (`fn f[T](...)`) or drop the `[]`",
             );
         }
         out
@@ -1341,13 +1353,11 @@ impl Parser {
         if !self.at_eof() {
             let got = self.kind().describe();
             let span = self.span();
-            self.diags.push(
-                Diagnostic::error(
-                    "E0004",
-                    span,
-                    format!("unexpected {got} after the interpolated expression"),
-                )
-                .with_help("an interpolation hole holds exactly one expression"),
+            self.error_help(
+                "E0004",
+                span,
+                format!("unexpected {got} after the interpolated expression"),
+                "an interpolation hole holds exactly one expression",
             );
         }
         self.tokens = saved_tokens;
@@ -1628,10 +1638,8 @@ impl Parser {
                 break;
             }
             // Struct literals are fine inside call parens.
-            let saved = self.no_struct_lit;
-            self.no_struct_lit = false;
-            args.push(self.expr());
-            self.no_struct_lit = saved;
+            let arg = self.with_struct_lits(true, |p| p.expr());
+            args.push(arg);
             if !self.eat(&TokenKind::Comma) {
                 self.expect(&TokenKind::RParen, "`,` or `)` in arguments");
                 break;
@@ -1775,10 +1783,7 @@ impl Parser {
             let span = start.to(self.prev_span());
             return self.mk(ExprKind::UnitLit, span);
         }
-        let saved = self.no_struct_lit;
-        self.no_struct_lit = false;
-        let inner = self.expr();
-        self.no_struct_lit = saved;
+        let inner = self.with_struct_lits(true, |p| p.expr());
         self.expect(
             &TokenKind::RParen,
             "`)` to close the parenthesized expression",
@@ -1798,10 +1803,8 @@ impl Parser {
                 self.error("E0100", span, "unclosed list literal: missing `]`");
                 break;
             }
-            let saved = self.no_struct_lit;
-            self.no_struct_lit = false;
-            items.push(self.expr());
-            self.no_struct_lit = saved;
+            let item = self.with_struct_lits(true, |p| p.expr());
+            items.push(item);
             if !self.eat(&TokenKind::Comma) {
                 self.expect(&TokenKind::RBracket, "`,` or `]` in list literal");
                 break;
@@ -1824,12 +1827,14 @@ impl Parser {
                 self.error("E0100", span, "unclosed map literal: missing `}`");
                 break;
             }
-            let saved = self.no_struct_lit;
-            self.no_struct_lit = false;
-            let key = self.expr();
-            self.expect(&TokenKind::Colon, "`:` between map key and value");
-            let value = self.expr();
-            self.no_struct_lit = saved;
+            let (key, value) = {
+                let saved = std::mem::replace(&mut self.no_struct_lit, false);
+                let key = self.expr();
+                self.expect(&TokenKind::Colon, "`:` between map key and value");
+                let value = self.expr();
+                self.no_struct_lit = saved;
+                (key, value)
+            };
             entries.push((key, value));
             self.skip_newlines();
             if !self.eat(&TokenKind::Comma) && !self.at(&TokenKind::RBrace) {
