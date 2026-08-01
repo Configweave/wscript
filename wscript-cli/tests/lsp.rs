@@ -222,6 +222,54 @@ fn lsp_hover_shows_declared_host_parameter_names() {
     lsp.notify("exit", "null");
 }
 
+/// A deep AST must survive the editor's stacks.
+///
+/// Operator chains stack AST depth without costing the parser recursion,
+/// so a document that parses cleanly can still be hundreds of levels deep
+/// — and `check::Index` is built by a recursive walk of that tree. It is
+/// built inside `analyze_entry`, on the 32 MiB pipeline thread, where
+/// every other recursive pass runs; building it lazily on first query
+/// would put the walk on tokio's 2 MiB stack instead. Exercised through
+/// the server for that reason: a unit test runs on the test harness's
+/// stack and would pass either way.
+#[test]
+fn lsp_survives_a_deeply_chained_document() {
+    let mut lsp = Lsp::start();
+    let id = lsp.request("initialize", r#"{"capabilities":{}}"#);
+    lsp.read_until(&format!("\"id\":{id}"));
+    lsp.notify("initialized", "{}");
+
+    // Well inside the parser's chain budget, so this parses and checks:
+    // the AST really is ~400 deep by the time the index walks it.
+    let chain = std::iter::repeat_n("1", 400)
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let doc = format!("fn main() -> int {{\n    {chain}\n}}\n");
+    lsp.notify(
+        "textDocument/didOpen",
+        &format!(
+            r#"{{"textDocument":{{"uri":"file:///deep.wscript","languageId":"wscript","version":1,"text":{}}}}}"#,
+            serde_jsonish(&doc)
+        ),
+    );
+    let diags = lsp.read_until("publishDiagnostics");
+    assert!(
+        diags.contains(r#""diagnostics":[]"#),
+        "the chain must parse and check, or the walk never gets deep: {diags}"
+    );
+
+    // …and the server is still answering afterwards.
+    let id = lsp.request(
+        "textDocument/hover",
+        r#"{"textDocument":{"uri":"file:///deep.wscript"},"position":{"line":1,"character":8}}"#,
+    );
+    let hover = lsp.read_until(&format!("\"id\":{id}"));
+    assert!(hover.contains("int"), "hover: {hover}");
+
+    lsp.request("shutdown", "null");
+    lsp.notify("exit", "null");
+}
+
 /// Every link of a call chain starts at the same offset, so hover must
 /// pick the one the cursor is on rather than reporting all of them.
 #[test]
