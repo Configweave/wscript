@@ -68,8 +68,17 @@ share it, and capture slots are threaded through every intervening closure.
 > `Reg(u16)` or `Capture(u16)`. They are not interchangeable.
 
 **Diagnostic** — a compile-time message carrying a stable `code` (`E0001`…),
-severity, labelled spans and optional help. Every code should explain itself;
-`diag.rs` holds fallback help text for codes whose sites supply none.
+severity, labelled spans and optional help.
+
+**Code registry** — `CODES` in `diag.rs`: the canonical list of every
+diagnostic code, its fallback help, and whether the fixture corpus covers it or
+is **exempt** with a recorded reason. Every code carries help, so no diagnostic
+can render mute whichever site raised it — that is how "every error explains
+itself" is enforced rather than hoped for. **Site help** (`error_help`,
+`with_help`, `ops::Msg`) wins where it exists, because it can name the type or
+argument that actually went wrong. The gates live in
+`wscript-compiler/tests/diag_codes.rs` (registry vs. source) and
+`diag_snapshots.rs` (registry vs. corpus).
 
 **Interface file** (`.wscripti`) — a declaration-only file describing host
 modules, functions, consts and opaque types, so `wscript check` and the LSP can

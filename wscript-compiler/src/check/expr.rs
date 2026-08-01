@@ -158,8 +158,12 @@ impl<'a> Checker<'a> {
         if self.expr_depth >= MAX_EXPR_DEPTH {
             if !self.expr_depth_reported {
                 self.expr_depth_reported = true;
+                // The parser's own backstop (`MAX_NESTING_BUDGET`) reports
+                // the same condition under the same code: from the reader's
+                // side "this is nested too deeply" is one error, and which
+                // pass noticed it is an implementation detail.
                 self.error(
-                    "E0271",
+                    "E0114",
                     e.span,
                     format!("expression is nested more than {MAX_EXPR_DEPTH} levels deep"),
                 );

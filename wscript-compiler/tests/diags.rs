@@ -206,7 +206,7 @@ fn pathological_nesting_errors_instead_of_overflowing() {
     }
     fails_with(
         &format!("fn main() {{ let x = [[1]]\n let y = {e}; }}"),
-        "E0271",
+        "E0114",
     );
     // Sane nesting still compiles.
     ok(&format!(
