@@ -67,6 +67,28 @@ share it, and capture slots are threaded through every intervening closure.
 > `Capture(u16)`. `CaptureSrc` (`bytecode.rs:508`) is the *bytecode's* view —
 > `Reg(u16)` or `Capture(u16)`. They are not interchangeable.
 
+**Env** — the checker's body-checking state: lexical scopes, function frames,
+loops and the type parameters currently in scope (`check/env.rs:59`). Plain data
+holding no reference to the checker, so capture threading — the subtlest logic
+in it — is unit-testable on its own. Callers enter through scoped methods on
+`Checker` (`in_scope`, `in_fn`, `in_loop`, `with_type_params`) rather than the
+push/pop pairs beneath them.
+
+**Lowering** — how the checker decided one *expression* node becomes bytecode
+(`check/mod.rs:286`). One per node, replacing thirteen parallel
+`HashMap<NodeId, _>` side tables; payloads that used to need a second lookup — a
+unit conversion's factor, a struct literal's field permutation — are inline in
+the variant. Read it through `CheckResult::lowering`, so a missing entry is an
+internal error rather than a silently-wrong instruction. Patterns are not in
+this space; they keep their own tables.
+
+**Operand** — the descriptor the operator ladders decide over (`check/ops.rs:135`):
+a **shape** (`Int`, `Quantity`, `Named`, `Container`, `Poison`, …), the user
+`impl` of this operator's trait if there is one, and whether the type supports
+the operation **structurally** — derives it, or its elements do, or the type
+parameter declares the bound. Three fields serve all four ladders because the
+caller resolves the operator-specific question before building the descriptor.
+
 **Diagnostic** — a compile-time message carrying a stable `code` (`E0001`…),
 severity, labelled spans and optional help. Every code should explain itself;
 `diag.rs` holds fallback help text for codes whose sites supply none.
@@ -190,18 +212,10 @@ directives inside the fixture.
 
 Named by the deepening programme in
 [#3](https://github.com/Configweave/wscript/issues/3) and **not yet in the code**.
-Listed here so the tickets and the glossary agree.
-
-**Lowering** — how the checker decided one node becomes bytecode. One per node,
-replacing the mutually-exclusive side tables ([#10](https://github.com/Configweave/wscript/issues/10)).
+Listed here so the tickets and the glossary agree. `Lowering`, `Operand` and
+`Env` have since shipped and are defined above.
 
 **Index** — the checker's product for the editor: `symbol_at`, `completions_at`,
-`span_of`, `methods_of`. Sibling to the emit-facing lowerings
-([#16](https://github.com/Configweave/wscript/issues/16)).
-
-**Operand** — the descriptor the operator table decides over: type shape,
-quantity base, trait impl, bounds ([#9](https://github.com/Configweave/wscript/issues/9)).
-
-**Env** — the checker's scope, frame, loop and type-parameter state, entered
-through scoped methods rather than paired push/pop
-([#8](https://github.com/Configweave/wscript/issues/8)).
+`span_of`, `methods_of`. Partial where the lowerings are total — an editor asks
+about positions that need not resolve. The last entry here; it retires this
+section when [#16](https://github.com/Configweave/wscript/issues/16) lands.

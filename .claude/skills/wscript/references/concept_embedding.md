@@ -1,6 +1,6 @@
 # Embedding in Rust
 
-_Context + Module + Vm: register host APIs, compile once (Send+Sync), run one Vm per thread._
+_Context + Module + Vm: register host APIs, compile once (Send+Sync), run one Vm per thread; Session for projects whose scripts import each other._
 
 wscript's reason to exist: exposing host functions and types is one derive and one
 registration call, with plain Rust signatures, and **all** type errors — including
@@ -39,11 +39,33 @@ let n: i64 = vm.call_unit(&unit, "main", ())?;
 | Piece | Role |
 | --- | --- |
 | `Context` | host registrations + compiler; `Send + Sync`, cheaply cloneable |
+| `Session` | a `Context` **plus** the resolver its `use` imports go through — the multi-file path |
 | `Module` | a named bag of functions, constants and types; scripts opt in with `use name` |
 | `Vm` | per-thread execution; `!Send` (script values are `Rc`-managed) |
 | `CompiledUnit` | the output of `ctx.compile(source)`; `Send + Sync` |
 
 Nothing is ambient (capability-style): a script can only touch what you registered. Compile once, share the `Context` and `CompiledUnit` across threads, and spin one `Vm` per thread. See [interop types](../references/concept_interop_types.md) for exposing data, and the **Embed wscript in a Rust application** process for the full runbook.
+
+## Embedding a project: `Session`
+
+Everything above is the single-source path, and it stays the right one when the host owns the whole script: `Context` + `compile` + `Vm::new` is smaller and is not going anywhere. Reach for a `Session` when the script is a \*project\* — an entry file that `use`s other script files, resolved against source roots. A `Context` answers "what has the host registered?"; a session answers the larger question "how is this project compiled?", because it holds the registrations **and** the import resolver, wired once and kept together so the two cannot be paired wrongly.
+
+```rust
+use wscript::{Session, VmConfig};
+
+let session = Session::builder()          // `m` is the Module from above
+    .module(wscript::std_modules::math())
+    .module(m)
+    .src_roots(vec!["scripts/lib".into()])   // where `use helper` is searched,
+    .build();                                // after the importing file's own dir
+
+// The whole import graph compiles into one unit. `path` is what diagnostics
+// name and what relative imports resolve against — it need not exist on disk.
+let compiled = session.compile("scripts/main.wscript", source)?;
+session.run(&compiled, VmConfig::default());
+```
+
+`compiled.unit` is the same `CompiledUnit` as before, so `Vm`, `call`, `fn_handle` and the rest are unchanged — `session.context()` hands back a `Context` when you want to drive the VM yourself. `compiled.sources` carries every file's text for rendering a diagnostic or a fault trace across the graph, and `session.analyze(path, source)` returns the checker's tables however partial, which is what an editor wants. Sessions are cheap to clone (both halves are behind an `Arc`), so a tool holding state in a mutex clones one rather than rebuilding it. Without an explicit resolver, imports resolve on the filesystem relative to the importing file and nowhere else; `NoImports` refuses them outright.
 
 ## Calling script from Rust
 
