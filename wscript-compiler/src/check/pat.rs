@@ -530,7 +530,7 @@ impl<'a> Checker<'a> {
         match &pat.kind {
             PatternKind::Wildcard | PatternKind::Error => DPat::Wild,
             PatternKind::Binding(_) => match self.out.pat_variant(pat.id) {
-                Some((def, tag)) => DPat::Ctor(
+                Some((def, tag, _)) => DPat::Ctor(
                     Ctor::Variant {
                         def,
                         tag,
@@ -551,7 +551,7 @@ impl<'a> Checker<'a> {
             PatternKind::CharLit(c) => DPat::Ctor(Ctor::Char(*c), vec![]),
             PatternKind::StrLit(s) => DPat::Ctor(Ctor::Str(s.clone()), vec![]),
             PatternKind::Variant { args, .. } => {
-                let Some((def, tag)) = self.out.pat_variant(pat.id) else {
+                let Some((def, tag, order)) = self.out.pat_variant(pat.id) else {
                     return DPat::Wild;
                 };
                 let arity = self.variant_arity(def, tag);
@@ -564,20 +564,13 @@ impl<'a> Checker<'a> {
                         }
                     }
                     VariantPatArgs::Struct { fields, .. } => {
-                        let order = self.out.pat_field_order(pat.id);
-                        for (i, (_, p)) in fields.iter().enumerate() {
-                            if let Some(&idx) = order.and_then(|o| o.get(i))
-                                && (idx as usize) < arity
-                            {
-                                sub[idx as usize] = self.lower_pattern(p);
-                            }
-                        }
+                        self.scatter_named_fields(fields, order, &mut sub);
                     }
                 }
                 DPat::Ctor(Ctor::Variant { def, tag, arity }, sub)
             }
             PatternKind::Struct { fields, .. } => {
-                let Some(def) = self.out.pat_struct(pat.id) else {
+                let Some((def, order)) = self.out.pat_struct(pat.id) else {
                     return DPat::Wild;
                 };
                 let arity = self
@@ -587,17 +580,24 @@ impl<'a> Checker<'a> {
                     .map(|s| s.fields.len())
                     .unwrap_or(0);
                 let mut sub = vec![DPat::Wild; arity];
-                let order = self.out.pat_field_order(pat.id);
-                for (i, (_, p)) in fields.iter().enumerate() {
-                    if let Some(&idx) = order.and_then(|o| o.get(i))
-                        && (idx as usize) < arity
-                    {
-                        sub[idx as usize] = self.lower_pattern(p);
-                    }
-                }
+                self.scatter_named_fields(fields, order, &mut sub);
                 DPat::Ctor(Ctor::Struct { def, arity }, sub)
             }
             PatternKind::Or(alts) => DPat::Or(alts.iter().map(|a| self.lower_pattern(a)).collect()),
+        }
+    }
+
+    /// Place each named field's sub-pattern at its declared position in
+    /// `sub` (the matrix wants declaration order, not written order).
+    /// Fields the checker could not resolve carry `u16::MAX` and stay
+    /// wildcards, as do positions the pattern did not mention.
+    fn scatter_named_fields(&self, fields: &[(Ident, Pattern)], order: &[u16], sub: &mut [DPat]) {
+        for (i, (_, p)) in fields.iter().enumerate() {
+            if let Some(&idx) = order.get(i)
+                && (idx as usize) < sub.len()
+            {
+                sub[idx as usize] = self.lower_pattern(p);
+            }
         }
     }
 

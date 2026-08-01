@@ -617,28 +617,25 @@ impl CheckResult {
         }
     }
 
-    // The same projections over [`PatLowering`].
+    // The same projections over [`PatLowering`]. Each returns the whole
+    // payload of one variant, so a consumer that needs a variant's tag
+    // *and* its field order reads them together — the pair the checker
+    // wrote as one value is never re-correlated by two lookups.
 
-    /// The enum def and tag a variant pattern selects.
-    pub fn pat_variant(&self, node: NodeId) -> Option<(DefId, u32)> {
+    /// The enum def and tag a variant pattern selects, plus the runtime
+    /// index of each named field as written (empty unless it is a struct
+    /// variant).
+    pub fn pat_variant(&self, node: NodeId) -> Option<(DefId, u32, &[u16])> {
         match self.pat_lowering(node)? {
-            PatLowering::Variant { def, tag, .. } => Some((*def, *tag)),
+            PatLowering::Variant { def, tag, order } => Some((*def, *tag, order)),
             _ => None,
         }
     }
-    /// The struct def a struct pattern destructures.
-    pub fn pat_struct(&self, node: NodeId) -> Option<DefId> {
+    /// The struct def a struct pattern destructures, plus the runtime
+    /// index of each field as written.
+    pub fn pat_struct(&self, node: NodeId) -> Option<(DefId, &[u16])> {
         match self.pat_lowering(node)? {
-            PatLowering::Struct { def, .. } => Some(*def),
-            _ => None,
-        }
-    }
-    /// The runtime field index of each named field as written — struct
-    /// patterns and struct-variant patterns alike, since both are lowered
-    /// by the same shared field handling.
-    pub fn pat_field_order(&self, node: NodeId) -> Option<&[u16]> {
-        match self.pat_lowering(node)? {
-            PatLowering::Variant { order, .. } | PatLowering::Struct { order, .. } => Some(order),
+            PatLowering::Struct { def, order } => Some((*def, order)),
             _ => None,
         }
     }
