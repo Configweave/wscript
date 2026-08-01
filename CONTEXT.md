@@ -157,6 +157,12 @@ guarantee; it exists only in memory between `compile` and `run`.
 **Frame** — one activation record: a base into the register stack, a proto, a
 program counter and a return slot.
 
+**Control transfer** — anything that moves a frame's program counter other than
+stepping to the next instruction: a taken jump, a call into a frame, a return
+out of one, and the escape into native code (host function or builtin) that can
+spend fuel without moving the pc at all. The unit **fuel** is charged in: each
+transfer pays for the straight-line run of instructions that ends at it.
+
 **Fuel** — an execution budget in dispatched instructions, bounding runaway
 scripts deterministically. The tank belongs to the VM and depletes across calls.
 Charged at control-transfer points rather than per instruction, so exhaustion

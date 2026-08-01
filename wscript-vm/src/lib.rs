@@ -117,6 +117,29 @@ struct Frame {
     closure: Option<Rc<Closure>>,
 }
 
+/// Where a new frame's arguments come from. The two sources are the only
+/// difference between a call made by the host and one made by a call
+/// instruction, so [`Vm::push_frame`] takes this rather than existing
+/// twice — and the depth limit is then checked in exactly one place.
+enum Args<'a> {
+    /// Values the host already holds: an entry call, or a closure invoked
+    /// from a builtin.
+    Values(&'a [Value]),
+    /// `n` values sitting on the register stack from absolute index `at`,
+    /// where a call instruction's compiler-assigned argument window put
+    /// them.
+    Stack { at: usize, n: usize },
+}
+
+impl Args<'_> {
+    fn len(&self) -> usize {
+        match *self {
+            Args::Values(vs) => vs.len(),
+            Args::Stack { n, .. } => n,
+        }
+    }
+}
+
 /// A wscript virtual machine. Not `Send`: script values are `Rc`-managed
 /// (PRD §4.3) — spin one `Vm` per thread from a shared `Context`.
 pub struct Vm {
@@ -251,8 +274,7 @@ impl Vm {
         let unit_idx = self.load(unit);
         self.cur_unit = unit_idx;
         let entry_depth = self.frames.len();
-        let base = self.stack_top();
-        self.push_frame(proto, base, usize::MAX, None, &args)?;
+        self.push_frame(proto, usize::MAX, None, Args::Values(&args))?;
         let result = self.execute(entry_depth);
         if result.is_err() {
             // Unwind frames left behind by the fault.
@@ -301,23 +323,43 @@ impl Vm {
         }
     }
 
+    /// Push a call frame for `proto` on top of the register stack, with
+    /// `args` copied into its leading registers. The one place a script
+    /// frame comes into existence, so the one place the recursion guard
+    /// has to be checked.
     fn push_frame(
         &mut self,
         proto: u32,
-        base: usize,
         ret_slot: usize,
         closure: Option<Rc<Closure>>,
-        args: &[Value],
+        args: Args<'_>,
     ) -> Result<(), RuntimeError> {
         if self.frames.len() >= self.depth_limit {
             return Err(self.fault("stack overflow: too many nested calls"));
         }
+        let base = self.stack_top();
         let n_regs = self.units[self.cur_unit].unit.protos[proto as usize].n_regs as usize;
-        if self.stack.len() < base + n_regs {
-            self.stack.resize(base + n_regs, Value::Unit);
+        // A proto always has registers for its own parameters, so the max
+        // only bites if a caller passes more arguments than the callee
+        // declares — impossible from checked bytecode and rejected at the
+        // typed host boundary, but it costs one comparison to write the
+        // args somewhere addressable rather than off the end of the stack.
+        let needed = base + n_regs.max(args.len());
+        if self.stack.len() < needed {
+            self.stack.resize(needed, Value::Unit);
         }
-        for (i, a) in args.iter().enumerate() {
-            self.stack[base + i] = a.clone();
+        match args {
+            Args::Values(vs) => {
+                for (i, a) in vs.iter().enumerate() {
+                    self.stack[base + i] = a.clone();
+                }
+            }
+            Args::Stack { at, n } => {
+                for i in 0..n {
+                    let v = self.stack[at + i].clone();
+                    self.stack[base + i] = v;
+                }
+            }
         }
         self.frames.push(Frame {
             proto,
@@ -339,8 +381,7 @@ impl Vm {
         match f {
             Value::Closure(c) => {
                 let entry_depth = self.frames.len();
-                let base = self.stack_top();
-                self.push_frame(c.proto, base, usize::MAX, Some(c.clone()), &args)?;
+                self.push_frame(c.proto, usize::MAX, Some(c.clone()), Args::Values(&args))?;
                 self.execute(entry_depth)
             }
             other => Err(self.fault(format!("cannot call a {} value", other.kind_name()))),
@@ -376,8 +417,7 @@ impl Vm {
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
         let entry_depth = self.frames.len();
-        let base = self.stack_top();
-        self.push_frame(proto, base, usize::MAX, None, &args)?;
+        self.push_frame(proto, usize::MAX, None, Args::Values(&args))?;
         self.execute(entry_depth)
     }
 
@@ -385,8 +425,9 @@ impl Vm {
     /// display). These builtins walk arbitrarily large value graphs in a
     /// single dispatched instruction, so without this a huge (or DAG-
     /// shaped) comparison would run unmetered and unkillable. Draws from
-    /// `self.fuel` directly — sound because the dispatch loop syncs its
-    /// local tank into `self.fuel` around every builtin call.
+    /// `self.fuel` directly — sound because a builtin is only ever reached
+    /// through [`Transfer::transfer_native`], which lends `self.fuel` the
+    /// dispatch loop's tank for the duration of the call.
     pub(crate) fn charge_structural(&mut self) -> Result<(), RuntimeError> {
         match self.fuel {
             Some(0) => Err(self.fault("fuel exhausted")),
@@ -446,32 +487,31 @@ impl Vm {
 
     fn execute(&mut self, entry_depth: usize) -> Result<Value, RuntimeError> {
         // Monomorphized dispatch: the unmetered loop carries no fuel
-        // bookkeeping at all, and the metered loop charges fuel in
-        // straight-line blocks rather than per instruction (the
-        // benchmark gate for this feature was ≤2% unmetered / ≤5%
-        // metered; a per-instruction check blew both). The tank lives
-        // in a local the optimizer can hold in a register; it syncs
-        // with `self.fuel` around builtin AND host calls — the two
-        // dispatch arms that can re-enter a nested `execute` loop
-        // (builtins via map/filter/custom impls; host functions via
-        // HostCtx::call_value script callbacks). Sound because those
-        // synced paths are the only way anything can touch fuel
-        // mid-execution.
+        // bookkeeping at all, and the metered loop charges in
+        // straight-line blocks rather than per instruction (the benchmark
+        // gate for this feature was ≤2% unmetered / ≤5% metered; a
+        // per-instruction check blew both). Both are [`Transfer`]'s
+        // doing — see there for the accounting; the tank it carries is a
+        // local the optimizer can hold in a register, so it is written
+        // back to `self.fuel` here.
         match self.fuel {
             Some(tank) => {
-                let mut fuel = tank;
-                let result = self.execute_impl::<true>(entry_depth, &mut fuel);
-                self.fuel = Some(fuel);
+                let mut transfer = Transfer::<true>::new(self, tank);
+                let result = self.execute_impl(entry_depth, &mut transfer);
+                self.fuel = Some(transfer.fuel);
                 result
             }
-            None => self.execute_impl::<false>(entry_depth, &mut 0),
+            None => {
+                let mut transfer = Transfer::<false>::new(self, 0);
+                self.execute_impl(entry_depth, &mut transfer)
+            }
         }
     }
 
     fn execute_impl<const METERED: bool>(
         &mut self,
         entry_depth: usize,
-        fuel: &mut u64,
+        transfer: &mut Transfer<METERED>,
     ) -> Result<Value, RuntimeError> {
         macro_rules! reg {
             ($base:expr, $r:expr) => {
@@ -525,30 +565,10 @@ impl Vm {
             };
         }
 
-        // Fuel accounting (METERED only): 1 instruction = 1 fuel, exact,
-        // but charged in straight-line blocks — `block_start` marks the
-        // pc where the current uncharged run began, and every arm that
-        // transfers control (taken jumps, calls, returns) charges the
-        // run's length before doing so, then resets `block_start`.
-        // Straight-line dispatch therefore carries zero fuel overhead.
-        // Exhaustion surfaces at the charge point: up to one basic block
-        // may run past the budget, but never a host call or a loop
-        // iteration. Faults abandon their block uncharged — `fuel()` is
-        // specified after successful calls and after exhaustion (0).
-        let mut block_start = self.frames.last().unwrap().pc;
-        macro_rules! charge {
-            () => {
-                if METERED {
-                    let ran = (self.frames.last().unwrap().pc - block_start) as u64;
-                    let Some(rest) = fuel.checked_sub(ran) else {
-                        *fuel = 0;
-                        return Err(self.fault("fuel exhausted"));
-                    };
-                    *fuel = rest;
-                }
-            };
-        }
-
+        // No arm below charges fuel or restarts a block: every mutation
+        // of `pc`, and every escape into native code that could spend
+        // fuel of its own, goes through a `transfer.*` call, which does
+        // both. See [`Transfer`].
         loop {
             let (instr, base) = {
                 let frame = self.frames.last().unwrap();
@@ -559,7 +579,7 @@ impl Vm {
                     (proto.code[frame.pc], frame.base)
                 }
             };
-            self.frames.last_mut().unwrap().pc += 1;
+            transfer.advance(self);
 
             match instr {
                 Instr::Nop => {}
@@ -672,26 +692,15 @@ impl Vm {
                     reg!(base, dst) = Value::Bool(string!(base, a) <= string!(base, b));
                 }
 
-                Instr::Jump { off } => {
-                    charge!();
-                    let frame = self.frames.last_mut().unwrap();
-                    frame.pc = (frame.pc as i64 + off as i64) as usize;
-                    block_start = frame.pc;
-                }
+                Instr::Jump { off } => transfer.transfer_to(self, off)?,
                 Instr::JumpIfFalse { cond, off } => {
                     if !boolean!(base, cond) {
-                        charge!();
-                        let frame = self.frames.last_mut().unwrap();
-                        frame.pc = (frame.pc as i64 + off as i64) as usize;
-                        block_start = frame.pc;
+                        transfer.transfer_to(self, off)?;
                     }
                 }
                 Instr::JumpIfTrue { cond, off } => {
                     if boolean!(base, cond) {
-                        charge!();
-                        let frame = self.frames.last_mut().unwrap();
-                        frame.pc = (frame.pc as i64 + off as i64) as usize;
-                        block_start = frame.pc;
+                        transfer.transfer_to(self, off)?;
                     }
                 }
 
@@ -701,51 +710,41 @@ impl Vm {
                     nargs,
                     target,
                 } => {
-                    charge!();
                     let args_at = base + abase as usize;
                     match target {
                         CallTarget::Proto(p) => {
-                            self.push_call(p, args_at, nargs, base + dst as usize, None)?;
-                            block_start = 0;
+                            let ret_slot = base + dst as usize;
+                            let args = Args::Stack {
+                                at: args_at,
+                                n: nargs as usize,
+                            };
+                            transfer
+                                .transfer_into(self, |vm| vm.push_frame(p, ret_slot, None, args))?;
                         }
                         CallTarget::Host(h) => {
-                            block_start = self.frames.last().unwrap().pc;
-                            let args: Vec<Value> = (0..nargs as usize)
+                            let host_args: Vec<Value> = (0..nargs as usize)
                                 .map(|i| self.stack[args_at + i].clone())
                                 .collect();
                             let imp = self.host_fns[h as usize].clone();
-                            // Host functions may re-enter the VM through
-                            // HostCtx::call_value (script callbacks) —
-                            // sync the fuel tank like the builtin arm so
-                            // callback instructions draw from it.
-                            if METERED {
-                                self.fuel = Some(*fuel);
-                            }
-                            let result = {
-                                let mut ctx = VmHostCtx { vm: self };
-                                imp.call(&mut ctx, args)
-                            };
-                            if METERED {
-                                *fuel = self.fuel.unwrap_or(0);
-                            }
+                            // A host function may re-enter the VM through
+                            // HostCtx::call_value (script callbacks), so it
+                            // runs with the tank lent to it.
+                            let result = transfer.transfer_native(self, |vm| {
+                                let mut ctx = VmHostCtx { vm };
+                                imp.call(&mut ctx, host_args)
+                            })?;
                             match result {
                                 Ok(v) => reg!(base, dst) = v,
                                 Err(e) => return Err(self.host_fault(e)),
                             }
                         }
                         CallTarget::Builtin(b) => {
-                            block_start = self.frames.last().unwrap().pc;
-                            // Builtins may re-enter a nested dispatch
-                            // loop, which draws from `self.fuel` — sync
-                            // the local tank across the call (also on
-                            // Err, so the caller's write-back is right).
-                            if METERED {
-                                self.fuel = Some(*fuel);
-                            }
-                            let r = self.call_builtin(b, args_at, nargs);
-                            if METERED {
-                                *fuel = self.fuel.unwrap_or(0);
-                            }
+                            // Builtins re-enter a nested dispatch loop
+                            // (map/filter/custom impls) and charge for the
+                            // value graphs they walk, so they too run with
+                            // the tank lent to them.
+                            let r = transfer
+                                .transfer_native(self, |vm| vm.call_builtin(b, args_at, nargs))?;
                             reg!(base, dst) = r?;
                         }
                     }
@@ -756,25 +755,18 @@ impl Vm {
                     base: abase,
                     nargs,
                 } => {
-                    charge!();
                     let callee = reg!(base, f).clone();
-                    match callee {
-                        Value::Closure(c) => {
-                            self.push_call(
-                                c.proto,
-                                base + abase as usize,
-                                nargs,
-                                base + dst as usize,
-                                Some(c),
-                            )?;
-                            block_start = 0;
-                        }
+                    let ret_slot = base + dst as usize;
+                    let args = Args::Stack {
+                        at: base + abase as usize,
+                        n: nargs as usize,
+                    };
+                    transfer.transfer_into(self, |vm| match callee {
+                        Value::Closure(c) => vm.push_frame(c.proto, ret_slot, Some(c), args),
                         other => {
-                            return Err(
-                                self.fault(format!("cannot call a {} value", other.kind_name()))
-                            );
+                            Err(vm.fault(format!("cannot call a {} value", other.kind_name())))
                         }
-                    }
+                    })?;
                 }
                 Instr::CallVirtual {
                     dst,
@@ -782,45 +774,44 @@ impl Vm {
                     nargs,
                     slot,
                 } => {
-                    charge!();
                     let args_at = base + abase as usize;
-                    let recv = self.stack[args_at].clone();
-                    let Value::Dyn(d) = recv else {
-                        return Err(self.fault(format!(
-                            "type confusion: dynamic dispatch on a {} value",
-                            recv.kind_name()
-                        )));
-                    };
-                    let target = self.units[self.cur_unit].unit.vtables[d.vtable as usize].targets
-                        [slot as usize];
-                    let CallTarget::Proto(p) = target else {
-                        return Err(self.fault("invalid vtable entry"));
-                    };
-                    // Unwrap the receiver for the concrete method.
-                    self.stack[args_at] = d.inner.clone();
-                    self.push_call(p, args_at, nargs, base + dst as usize, None)?;
-                    block_start = 0;
+                    let ret_slot = base + dst as usize;
+                    transfer.transfer_into(self, |vm| {
+                        let recv = vm.stack[args_at].clone();
+                        let Value::Dyn(d) = recv else {
+                            return Err(vm.fault(format!(
+                                "type confusion: dynamic dispatch on a {} value",
+                                recv.kind_name()
+                            )));
+                        };
+                        let target = vm.units[vm.cur_unit].unit.vtables[d.vtable as usize].targets
+                            [slot as usize];
+                        let CallTarget::Proto(p) = target else {
+                            return Err(vm.fault("invalid vtable entry"));
+                        };
+                        // Unwrap the receiver for the concrete method.
+                        vm.stack[args_at] = d.inner.clone();
+                        vm.push_frame(
+                            p,
+                            ret_slot,
+                            None,
+                            Args::Stack {
+                                at: args_at,
+                                n: nargs as usize,
+                            },
+                        )
+                    })?;
                 }
                 Instr::Ret { src } => {
-                    charge!();
                     let v = reg!(base, src).clone();
-                    let frame = self.frames.pop().unwrap();
-                    self.stack.truncate(frame.base);
-                    if self.frames.len() == entry_depth {
+                    if let Some(v) = transfer.transfer_out(self, entry_depth, v)? {
                         return Ok(v);
                     }
-                    block_start = self.frames.last().unwrap().pc;
-                    self.stack[frame.ret_slot] = v;
                 }
                 Instr::RetUnit => {
-                    charge!();
-                    let frame = self.frames.pop().unwrap();
-                    self.stack.truncate(frame.base);
-                    if self.frames.len() == entry_depth {
-                        return Ok(Value::Unit);
+                    if let Some(v) = transfer.transfer_out(self, entry_depth, Value::Unit)? {
+                        return Ok(v);
                     }
-                    block_start = self.frames.last().unwrap().pc;
-                    self.stack[frame.ret_slot] = Value::Unit;
                 }
 
                 Instr::NewStruct {
@@ -1105,38 +1096,6 @@ impl Vm {
         }
     }
 
-    /// Push a script call frame, copying `nargs` args from `args_at`.
-    fn push_call(
-        &mut self,
-        proto: u32,
-        args_at: usize,
-        nargs: u16,
-        ret_slot: usize,
-        closure: Option<Rc<Closure>>,
-    ) -> Result<(), RuntimeError> {
-        if self.frames.len() >= self.depth_limit {
-            return Err(self.fault("stack overflow: too many nested calls"));
-        }
-        let new_base = self.stack_top();
-        let n_regs = self.units[self.cur_unit].unit.protos[proto as usize].n_regs as usize;
-        let needed = new_base + n_regs.max(nargs as usize);
-        if self.stack.len() < needed {
-            self.stack.resize(needed, Value::Unit);
-        }
-        for i in 0..nargs as usize {
-            let v = self.stack[args_at + i].clone();
-            self.stack[new_base + i] = v;
-        }
-        self.frames.push(Frame {
-            proto,
-            base: new_base,
-            pc: 0,
-            ret_slot,
-            closure,
-        });
-        Ok(())
-    }
-
     fn host_fault(&self, e: HostError) -> RuntimeError {
         // A fault raised inside a script callback (HostCtx::call_value)
         // that the host function propagated: re-raise it with the
@@ -1162,6 +1121,152 @@ impl Vm {
             },
         );
         f
+    }
+}
+
+// ------------------------------------------------------- control transfer
+
+/// Control transfer for one running dispatch loop: the only thing that
+/// moves a frame's `pc` — [`advance`](Transfer::advance) by one for the
+/// instruction just fetched, the `transfer_*` methods for everything else
+/// — and so the only thing that charges fuel for the instructions it
+/// moved past.
+///
+/// Fuel is 1 instruction = 1 fuel, exact, but *charged* a straight-line
+/// block at a time: `block_start` marks the pc where the current uncharged
+/// run began, and each transfer pays for the run that ends at it before
+/// starting the next one. Straight-line dispatch therefore carries no fuel
+/// overhead at all, and unmetered dispatch (`METERED = false`, a separate
+/// monomorphization) carries none of the bookkeeping either.
+///
+/// The visible consequence is the one [`Vm::set_fuel`] documents:
+/// exhaustion surfaces at the charge point, so up to one basic block may
+/// run past the budget — but never a host call, a script call or a loop
+/// iteration, because each of those *is* a charge point. A fault other
+/// than exhaustion abandons its block uncharged.
+///
+/// Three obligations used to sit on each dispatch arm that transferred
+/// control, and each was a comment rather than a check: charge before
+/// moving `pc`, restart the block at the right pc for that kind of
+/// transfer, and lend the tank to anything that might re-enter the VM.
+/// They live here now, so an arm cannot honour two of the three, and a new
+/// control-transfer instruction gets them by construction.
+///
+/// Every method takes the `Vm` it is transferring within rather than
+/// holding it: the dispatch loop runs as `&mut self` on the `Vm`, so a
+/// `Transfer` that borrowed it could not be a local of that loop — which
+/// is exactly what keeping the tank in a register requires.
+struct Transfer<const METERED: bool> {
+    /// The pc where the current uncharged straight-line run began.
+    block_start: usize,
+    /// The dispatch loop's fuel tank: a local mirror of [`Vm::fuel`] the
+    /// optimizer can keep in a register. Meaningless when `!METERED`.
+    fuel: u64,
+}
+
+impl<const METERED: bool> Transfer<METERED> {
+    /// Begin accounting at the frame the loop starts in. Its pc is 0 —
+    /// every entry into a dispatch loop pushes the frame it runs — but
+    /// the block starts wherever the frame is, so that the accounting
+    /// does not rest on it.
+    fn new(vm: &Vm, fuel: u64) -> Transfer<METERED> {
+        Transfer {
+            block_start: vm.frames.last().unwrap().pc,
+            fuel,
+        }
+    }
+
+    /// Step past the instruction just fetched. The one pc movement that
+    /// is not a transfer — and the unit the block length that every
+    /// transfer pays for is measured in.
+    fn advance(&self, vm: &mut Vm) {
+        vm.frames.last_mut().unwrap().pc += 1;
+    }
+
+    /// Pay for the straight-line run that ends at the current pc.
+    fn charge(&mut self, vm: &Vm) -> Result<(), RuntimeError> {
+        if METERED {
+            let ran = (vm.frames.last().unwrap().pc - self.block_start) as u64;
+            let Some(rest) = self.fuel.checked_sub(ran) else {
+                self.fuel = 0;
+                return Err(vm.fault("fuel exhausted"));
+            };
+            self.fuel = rest;
+        }
+        Ok(())
+    }
+
+    /// Jump within the current frame: `pc += off`, relative to the next
+    /// instruction (the pc has already been advanced past this one).
+    fn transfer_to(&mut self, vm: &mut Vm, off: i32) -> Result<(), RuntimeError> {
+        self.charge(vm)?;
+        let frame = vm.frames.last_mut().unwrap();
+        frame.pc = (frame.pc as i64 + off as i64) as usize;
+        self.block_start = frame.pc;
+        Ok(())
+    }
+
+    /// Call into a new script frame. `push` does the pushing, plus any
+    /// resolution that must happen after the caller's block is paid for —
+    /// so a callee that cannot be resolved faults with the same fuel spent
+    /// as one that can.
+    fn transfer_into(
+        &mut self,
+        vm: &mut Vm,
+        push: impl FnOnce(&mut Vm) -> Result<(), RuntimeError>,
+    ) -> Result<(), RuntimeError> {
+        self.charge(vm)?;
+        push(vm)?;
+        // The callee starts at the top of its own code.
+        self.block_start = 0;
+        Ok(())
+    }
+
+    /// Return `v` from the current frame. `Ok(None)` means the caller's
+    /// frame took the value and dispatch continues there; `Ok(Some(v))`
+    /// means the frame that returned was this loop's entry frame, so the
+    /// loop is done.
+    fn transfer_out(
+        &mut self,
+        vm: &mut Vm,
+        entry_depth: usize,
+        v: Value,
+    ) -> Result<Option<Value>, RuntimeError> {
+        self.charge(vm)?;
+        let frame = vm.frames.pop().unwrap();
+        vm.stack.truncate(frame.base);
+        if vm.frames.len() == entry_depth {
+            return Ok(Some(v));
+        }
+        // The caller resumes mid-block, at the instruction after its call.
+        self.block_start = vm.frames.last().unwrap().pc;
+        vm.stack[frame.ret_slot] = v;
+        Ok(None)
+    }
+
+    /// Leave the dispatch loop for native code — a host function or a
+    /// builtin — and come back. The pc does not move, but the block ends
+    /// here all the same: the callee may spend fuel of its own, either by
+    /// re-entering a nested `execute` (script callbacks, `map`/`filter`,
+    /// custom operator impls) or through [`Vm::charge_structural`]. Both
+    /// draw from `Vm::fuel`, so the tank is lent across the call and taken
+    /// back afterwards — on the error path too, since a host may catch a
+    /// callback's fault and run on.
+    fn transfer_native<R>(
+        &mut self,
+        vm: &mut Vm,
+        call: impl FnOnce(&mut Vm) -> R,
+    ) -> Result<R, RuntimeError> {
+        self.charge(vm)?;
+        self.block_start = vm.frames.last().unwrap().pc;
+        if METERED {
+            vm.fuel = Some(self.fuel);
+        }
+        let result = call(vm);
+        if METERED {
+            self.fuel = vm.fuel.unwrap_or(0);
+        }
+        Ok(result)
     }
 }
 
