@@ -13,8 +13,8 @@ enum Value {
 }
 
 impl Value {
-    fn get(self, a0: string) -> Option[Value]
-    fn at(self, a0: int) -> Option[Value]
+    fn get(self, key: string) -> Option[Value]
+    fn at(self, idx: int) -> Option[Value]
     fn keys(self) -> List[string]
     fn len(self) -> int
     fn is_null(self) -> bool
@@ -44,15 +44,15 @@ mod math {
     const INF: float // = inf
     const NAN: float // = NaN
     fn abs(a0: float) -> float
-    fn min(a0: float, a1: float) -> float
-    fn max(a0: float, a1: float) -> float
-    fn clamp(a0: float, a1: float, a2: float) -> float
+    fn min(a: float, b: float) -> float
+    fn max(a: float, b: float) -> float
+    fn clamp(x: float, lo: float, hi: float) -> float
     fn floor(a0: float) -> float
     fn ceil(a0: float) -> float
     fn round(a0: float) -> float
     fn trunc(a0: float) -> float
     fn sqrt(a0: float) -> float
-    fn pow(a0: float, a1: float) -> float
+    fn pow(x: float, y: float) -> float
     fn exp(a0: float) -> float
     fn ln(a0: float) -> float
     fn log2(a0: float) -> float
@@ -63,46 +63,46 @@ mod math {
     fn asin(a0: float) -> float
     fn acos(a0: float) -> float
     fn atan(a0: float) -> float
-    fn atan2(a0: float, a1: float) -> float
+    fn atan2(y: float, x: float) -> float
     fn sinh(a0: float) -> float
     fn cosh(a0: float) -> float
     fn tanh(a0: float) -> float
     fn asinh(a0: float) -> float
     fn acosh(a0: float) -> float
     fn atanh(a0: float) -> float
-    fn lerp(a0: float, a1: float, a2: float) -> float
+    fn lerp(a: float, b: float, t: float) -> float
     fn signum(a0: float) -> float
     fn iabs(a0: int) -> int
-    fn imin(a0: int, a1: int) -> int
-    fn imax(a0: int, a1: int) -> int
-    fn iclamp(a0: int, a1: int, a2: int) -> int
+    fn imin(a: int, b: int) -> int
+    fn imax(a: int, b: int) -> int
+    fn iclamp(x: int, lo: int, hi: int) -> int
     fn isignum(a0: int) -> int
     /// Uniform float in [0, 1)
     fn rand() -> float
     /// Uniform int in [a, b) — empty ranges return a
-    fn rand_range(a0: int, a1: int) -> int
+    fn rand_range(a: int, b: int) -> int
 }
 
 /// File I/O (capability: filesystem access)
 mod fs {
     fn read_to_string(a0: string) -> Result[string, string]
     fn read_bytes(a0: string) -> Result[List[int], string]
-    fn write(a0: string, a1: string) -> Result[unit, string]
-    fn append(a0: string, a1: string) -> Result[unit, string]
+    fn write(path: string, content: string) -> Result[unit, string]
+    fn append(path: string, content: string) -> Result[unit, string]
     fn exists(a0: string) -> bool
     fn is_file(a0: string) -> bool
     fn is_dir(a0: string) -> bool
     fn list_dir(a0: string) -> Result[List[string], string]
     fn create_dir(a0: string) -> Result[unit, string]
     fn create_dir_all(a0: string) -> Result[unit, string]
-    fn copy(a0: string, a1: string) -> Result[unit, string]
-    fn rename(a0: string, a1: string) -> Result[unit, string]
+    fn copy(from: string, to: string) -> Result[unit, string]
+    fn rename(from: string, to: string) -> Result[unit, string]
     fn remove_file(a0: string) -> Result[unit, string]
     fn remove_dir(a0: string) -> Result[unit, string]
     fn size(a0: string) -> Result[int, string]
     fn mtime_unix(a0: string) -> Result[float, string]
     fn walk(a0: string) -> Result[List[string], string]
-    fn join(a0: string, a1: string) -> string
+    fn join(a: string, b: string) -> string
     fn parent(a0: string) -> Option[string]
     fn file_name(a0: string) -> Option[string]
     fn ext(a0: string) -> Option[string]
@@ -111,9 +111,9 @@ mod fs {
 /// Command execution and environment (capability: process control)
 mod process {
     /// Run a command to completion; Err on spawn failure
-    fn run(a0: string, a1: List[string]) -> Result[Output, string]
+    fn run(cmd: string, args: List[string]) -> Result[Output, string]
     fn env(a0: string) -> Option[string]
-    fn set_env(a0: string, a1: string)
+    fn set_env(key: string, value: string)
     fn cwd() -> Result[string, string]
     /// Arguments passed after the script path on the command line
     fn args() -> List[string]
@@ -133,17 +133,17 @@ mod time {
 
 /// Regular expressions (pure; invalid patterns fault)
 mod regex {
-    fn is_match(a0: string, a1: string) -> bool
+    fn is_match(pattern: string, s: string) -> bool
     /// First match, or None
-    fn find(a0: string, a1: string) -> Option[string]
+    fn find(pattern: string, s: string) -> Option[string]
     /// Every non-overlapping match, in order
-    fn find_all(a0: string, a1: string) -> List[string]
+    fn find_all(pattern: string, s: string) -> List[string]
     /// Replace every match; `$1`/`$name` expand capture groups
-    fn replace(a0: string, a1: string, a2: string) -> string
+    fn replace(pattern: string, s: string, rep: string) -> string
     /// Capture groups of the first match: group 0 (whole match) first; non-participating groups are empty strings
-    fn captures(a0: string, a1: string) -> Option[List[string]]
+    fn captures(pattern: string, s: string) -> Option[List[string]]
     /// Split around every match
-    fn split(a0: string, a1: string) -> List[string]
+    fn split(pattern: string, s: string) -> List[string]
 }
 
 /// JSON parsing and serialization (shared Value type)

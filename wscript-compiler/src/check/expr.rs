@@ -717,8 +717,8 @@ impl<'a> Checker<'a> {
         name: &str,
     ) -> Option<Result<(FnSig, u32), (Type, wscript_core::bytecode::Const)>> {
         let module = &self.reg.modules[mod_idx];
-        if let Some((_, sig, idx, _)) = module.fns.iter().find(|(n, ..)| n == name) {
-            return Some(Ok((sig.clone(), *idx)));
+        if let Some(f) = module.fns.iter().find(|f| f.name == name) {
+            return Some(Ok((f.sig.clone(), f.host_idx)));
         }
         if let Some((_, ty, c)) = module.consts.iter().find(|(n, ..)| n == name) {
             return Some(Err((ty.clone(), c.clone())));

@@ -146,6 +146,117 @@ fn lsp_four_features() {
     lsp.notify("exit", "null");
 }
 
+/// Hover over a host call shows the parameter names the host declared
+/// (issue #22). `atan2` is the case that matters: `(y, x)` and `(x, y)`
+/// are both `(float, float)`, so positional placeholders leave the editor
+/// unable to tell you which way round the arguments go.
+#[test]
+fn lsp_hover_shows_declared_host_parameter_names() {
+    let mut lsp = Lsp::start();
+    let id = lsp.request("initialize", r#"{"capabilities":{}}"#);
+    lsp.read_until(&format!("\"id\":{id}"));
+    lsp.notify("initialized", "{}");
+
+    let doc = "use math\nfn main() -> float {\n    math::atan2(1.0, 2.0)\n}\n";
+    lsp.notify(
+        "textDocument/didOpen",
+        &format!(
+            r#"{{"textDocument":{{"uri":"file:///hover.wscript","languageId":"wscript","version":1,"text":{}}}}}"#,
+            serde_jsonish(doc)
+        ),
+    );
+    lsp.read_until("publishDiagnostics");
+
+    // On the `atan2` callee — line 2, character 12.
+    let id = lsp.request(
+        "textDocument/hover",
+        r#"{"textDocument":{"uri":"file:///hover.wscript"},"position":{"line":2,"character":12}}"#,
+    );
+    let hover = lsp.read_until(&format!("\"id\":{id}"));
+    assert!(
+        hover.contains("math::atan2(y: float, x: float) -> float"),
+        "hover should name the parameters: {hover}"
+    );
+
+    // Methods carry names the same way.
+    let doc = "use json\nfn main() {\n    let v = json::parse(\"{}\").unwrap()\n    let got = v.get(\"a\")\n}\n";
+    lsp.notify(
+        "textDocument/didOpen",
+        &format!(
+            r#"{{"textDocument":{{"uri":"file:///method.wscript","languageId":"wscript","version":1,"text":{}}}}}"#,
+            serde_jsonish(doc)
+        ),
+    );
+    lsp.read_until("publishDiagnostics");
+    // On the `get` callee — line 3, character 17.
+    let id = lsp.request(
+        "textDocument/hover",
+        r#"{"textDocument":{"uri":"file:///method.wscript"},"position":{"line":3,"character":17}}"#,
+    );
+    let hover = lsp.read_until(&format!("\"id\":{id}"));
+    assert!(
+        hover.contains("Value.get(key: string)"),
+        "method hover should name the parameters: {hover}"
+    );
+
+    // On the receiver `v` — line 3, character 14. A receiver is not the
+    // call, so hovering it says what `v` is and nothing about `get`.
+    let id = lsp.request(
+        "textDocument/hover",
+        r#"{"textDocument":{"uri":"file:///method.wscript"},"position":{"line":3,"character":14}}"#,
+    );
+    let hover = lsp.read_until(&format!("\"id\":{id}"));
+    assert!(
+        hover.contains("Value"),
+        "the receiver's own type is what hover has to say: {hover}"
+    );
+    assert!(
+        !hover.contains("Value.get"),
+        "hovering the receiver should not report the method called on it: {hover}"
+    );
+
+    lsp.request("shutdown", "null");
+    lsp.notify("exit", "null");
+}
+
+/// Every link of a call chain starts at the same offset, so hover must
+/// pick the one the cursor is on rather than reporting all of them.
+#[test]
+fn lsp_hover_on_a_chain_reports_one_call() {
+    let mut lsp = Lsp::start();
+    let id = lsp.request("initialize", r#"{"capabilities":{}}"#);
+    lsp.read_until(&format!("\"id\":{id}"));
+    lsp.notify("initialized", "{}");
+
+    let doc = "use json\nfn main() {\n    let x = json::parse(\"{}\").unwrap().get(\"a\")\n}\n";
+    lsp.notify(
+        "textDocument/didOpen",
+        &format!(
+            r#"{{"textDocument":{{"uri":"file:///chain.wscript","languageId":"wscript","version":1,"text":{}}}}}"#,
+            serde_jsonish(doc)
+        ),
+    );
+    lsp.read_until("publishDiagnostics");
+
+    // On `json`, the head of the chain — line 2, character 13.
+    let id = lsp.request(
+        "textDocument/hover",
+        r#"{"textDocument":{"uri":"file:///chain.wscript"},"position":{"line":2,"character":13}}"#,
+    );
+    let hover = lsp.read_until(&format!("\"id\":{id}"));
+    assert!(
+        hover.contains("json::parse(string)"),
+        "hover should report the call under the cursor: {hover}"
+    );
+    assert!(
+        !hover.contains("Value.get"),
+        "…and not a method further along the chain: {hover}"
+    );
+
+    lsp.request("shutdown", "null");
+    lsp.notify("exit", "null");
+}
+
 #[test]
 fn lsp_method_completions() {
     let mut lsp = Lsp::start();

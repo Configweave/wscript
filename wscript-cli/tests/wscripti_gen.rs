@@ -52,6 +52,47 @@ fn std_wscripti_parses_with_the_script_parser() {
     );
 }
 
+/// Declared parameter names (issue #22) are written out and read back
+/// unchanged; undeclared ones stay positional placeholders rather than
+/// being laundered into names the host never gave.
+#[test]
+fn declared_parameter_names_round_trip() {
+    let text = current_interface();
+    assert!(
+        text.contains("fn atan2(y: float, x: float)"),
+        "declared names belong in the interface:\n{text}"
+    );
+
+    let mut reg = wscript::Registry::new();
+    let (diags, _index) = wscript_compiler::wscripti::load(&text, &mut reg);
+    assert!(diags.is_empty(), "{diags:?}");
+
+    let math = reg.module("math").expect("math module");
+    let atan2 = math.fns.iter().find(|f| f.name == "atan2").unwrap();
+    assert_eq!(
+        atan2.param_names(),
+        Some(&["y".to_string(), "x".into()][..])
+    );
+    let sqrt = math.fns.iter().find(|f| f.name == "sqrt").unwrap();
+    assert_eq!(sqrt.param_names(), None, "`sqrt` declares no names");
+
+    // Re-emitting reproduces every declaration verbatim. (Only `const`
+    // lines differ: the loader has no values to carry, just types.)
+    let reloaded = wscript::Context::from_registry(reg).interface_text();
+    let fn_lines = |text: &str| -> Vec<String> {
+        text.lines()
+            .map(str::trim)
+            .filter(|l| l.starts_with("fn "))
+            .map(str::to_string)
+            .collect()
+    };
+    assert_eq!(
+        fn_lines(&reloaded),
+        fn_lines(&text),
+        "declarations must survive a load and re-emit unchanged"
+    );
+}
+
 #[test]
 fn scripts_typecheck_against_wscripti_alone() {
     // PRD §9.1: the LSP/check can typecheck against interfaces with no

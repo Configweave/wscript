@@ -34,6 +34,21 @@ let mut vm = Vm::new(&ctx);
 let n: i64 = vm.call_unit(&unit, "main", ())?;
 ```
 
+## Naming parameters
+
+A closure's parameter names live only in its source text, so `fn_` records positions: the generated interface and editor hovers show `atan2(a0: float, a1: float)`, which cannot tell a reader that the arguments are `(y, x)`. Declare the names alongside the closure to fix that — the rule of thumb is to annotate every registration taking two or more arguments (and every method taking one), and leave `|x: f64| x.sqrt()` alone.
+
+```rust
+m.fn_named("atan2", ["y", "x"], |y: f64, x: f64| y.atan2(x));
+m.fn_named("clamp", ["x", "lo", "hi"], |x: f64, lo: f64, hi: f64| x.clamp(lo, hi));
+m.fn_("sqrt", |x: f64| x.sqrt());   // one parameter — nothing to confuse
+
+m.ty::<Config>()
+ .method_named("get", ["key"], |c: &Config, key: &str| c.get(key));
+```
+
+Names are documentation, not type structure: `fn(int) -> int` is one type however its parameters are written. A count that disagrees with the closure's arity is a registration-time panic, not a script error.
+
 ## The pieces
 
 | Piece | Role |

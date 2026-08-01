@@ -38,24 +38,35 @@ pub fn regex() -> Module {
     let mut m = Module::new("regex");
     m.doc("Regular expressions (pure; invalid patterns fault)");
 
-    m.fn_("is_match", |pattern: &str, s: &str| -> Fault<bool> {
-        Fault(with_regex(pattern, |re| re.is_match(s)))
-    });
+    m.fn_named(
+        "is_match",
+        ["pattern", "s"],
+        |pattern: &str, s: &str| -> Fault<bool> { Fault(with_regex(pattern, |re| re.is_match(s))) },
+    );
     m.doc_next("First match, or None");
-    m.fn_("find", |pattern: &str, s: &str| -> Fault<Option<String>> {
-        Fault(with_regex(pattern, |re| {
-            re.find(s).map(|m| m.as_str().to_string())
-        }))
-    });
+    m.fn_named(
+        "find",
+        ["pattern", "s"],
+        |pattern: &str, s: &str| -> Fault<Option<String>> {
+            Fault(with_regex(pattern, |re| {
+                re.find(s).map(|m| m.as_str().to_string())
+            }))
+        },
+    );
     m.doc_next("Every non-overlapping match, in order");
-    m.fn_("find_all", |pattern: &str, s: &str| -> Fault<Vec<String>> {
-        Fault(with_regex(pattern, |re| {
-            re.find_iter(s).map(|m| m.as_str().to_string()).collect()
-        }))
-    });
+    m.fn_named(
+        "find_all",
+        ["pattern", "s"],
+        |pattern: &str, s: &str| -> Fault<Vec<String>> {
+            Fault(with_regex(pattern, |re| {
+                re.find_iter(s).map(|m| m.as_str().to_string()).collect()
+            }))
+        },
+    );
     m.doc_next("Replace every match; `$1`/`$name` expand capture groups");
-    m.fn_(
+    m.fn_named(
         "replace",
+        ["pattern", "s", "rep"],
         |pattern: &str, s: &str, rep: &str| -> Fault<String> {
             Fault(with_regex(pattern, |re| {
                 re.replace_all(s, rep).into_owned()
@@ -66,8 +77,9 @@ pub fn regex() -> Module {
         "Capture groups of the first match: group 0 (whole match) first; \
          non-participating groups are empty strings",
     );
-    m.fn_(
+    m.fn_named(
         "captures",
+        ["pattern", "s"],
         |pattern: &str, s: &str| -> Fault<Option<Vec<String>>> {
             Fault(with_regex(pattern, |re| {
                 re.captures(s).map(|caps| {
@@ -82,10 +94,14 @@ pub fn regex() -> Module {
         },
     );
     m.doc_next("Split around every match");
-    m.fn_("split", |pattern: &str, s: &str| -> Fault<Vec<String>> {
-        Fault(with_regex(pattern, |re| {
-            re.split(s).map(str::to_string).collect()
-        }))
-    });
+    m.fn_named(
+        "split",
+        ["pattern", "s"],
+        |pattern: &str, s: &str| -> Fault<Vec<String>> {
+            Fault(with_regex(pattern, |re| {
+                re.split(s).map(str::to_string).collect()
+            }))
+        },
+    );
     m
 }

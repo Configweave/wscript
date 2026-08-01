@@ -23,21 +23,53 @@ impl std::fmt::Debug for HostFnEntry {
     }
 }
 
-/// A method on a host-registered type (`m.ty::<Pane>().method(...)`).
-/// The receiver is not part of `sig`.
+/// A host function as *declared*: what the checker, the interface emitter
+/// and the editor need to talk about it. Module functions
+/// (`m.fn_(...)`, in [`ModuleDef::fns`]) and methods on a registered type
+/// (`m.ty::<Pane>().method(...)`, in [`Registry::methods`]) declare the
+/// same things, so they share this type; a method's receiver is not part
+/// of `sig` and not one of the `params`.
+///
+/// Parameter names live here rather than in [`FnSig`] because `FnSig` is
+/// part of type identity (it derives `Eq`/`Hash` and is embedded in
+/// `Type::Fn`): `fn(int) -> int` must not become a different type for
+/// being written with a different parameter name. Names are documentation
+/// — the interface emitter and the LSP show them, the checker ignores them.
 #[derive(Debug, Clone)]
-pub struct HostMethod {
+pub struct HostFnDecl {
     pub name: String,
     pub sig: FnSig,
+    /// Index into [`Registry::host_fns`], which holds the implementation.
     pub host_idx: u32,
     pub doc: Option<String>,
+    /// Declared parameter names, positionally matching `sig.params`.
+    /// Empty when the host declared none — consumers then fall back to
+    /// positional placeholders rather than inventing a name.
+    pub params: Vec<String>,
+}
+
+impl HostFnDecl {
+    /// Declared parameter names, or `None` when the host declared none.
+    pub fn param_names(&self) -> Option<&[String]> {
+        // `params` is either empty or one name per parameter: registration
+        // asserts it (`Module::merge_into`) and the `.wscripti` loader
+        // reads both from the same declaration. So the only case here is
+        // "nothing was declared".
+        (!self.params.is_empty()).then_some(&self.params[..])
+    }
+}
+
+/// The placeholder standing in for parameter `i` where the host declared
+/// no name. Deliberately synthetic: `a0` reads as "nothing was declared",
+/// where a plausible-looking invented name would read as fact.
+pub fn positional_param_name(i: usize) -> String {
+    format!("a{i}")
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ModuleDef {
     pub name: String,
-    /// name → (signature, host fn index, doc)
-    pub fns: Vec<(String, FnSig, u32, Option<String>)>,
+    pub fns: Vec<HostFnDecl>,
     pub consts: Vec<(String, Type, Const)>,
     /// Types registered under this module (also importable via `use`).
     pub types: Vec<DefId>,
@@ -54,7 +86,7 @@ pub struct Registry {
     pub modules: Vec<ModuleDef>,
     pub host_fns: Vec<HostFnEntry>,
     /// Methods of host-registered (usually opaque) types.
-    pub methods: HashMap<DefId, Vec<HostMethod>>,
+    pub methods: HashMap<DefId, Vec<HostFnDecl>>,
 }
 
 impl Registry {

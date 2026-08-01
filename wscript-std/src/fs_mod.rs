@@ -21,11 +21,16 @@ pub fn fs() -> Module {
             .map(|bytes| bytes.into_iter().map(|b| b as i64).collect())
             .map_err(err_str)
     });
-    m.fn_("write", |path: &str, content: &str| -> Result<(), String> {
-        std::fs::write(path, content).map_err(err_str)
-    });
-    m.fn_(
+    m.fn_named(
+        "write",
+        ["path", "content"],
+        |path: &str, content: &str| -> Result<(), String> {
+            std::fs::write(path, content).map_err(err_str)
+        },
+    );
+    m.fn_named(
         "append",
+        ["path", "content"],
         |path: &str, content: &str| -> Result<(), String> {
             use std::io::Write;
             std::fs::OpenOptions::new()
@@ -54,12 +59,18 @@ pub fn fs() -> Module {
     m.fn_("create_dir_all", |path: &str| -> Result<(), String> {
         std::fs::create_dir_all(path).map_err(err_str)
     });
-    m.fn_("copy", |from: &str, to: &str| -> Result<(), String> {
-        std::fs::copy(from, to).map(|_| ()).map_err(err_str)
-    });
-    m.fn_("rename", |from: &str, to: &str| -> Result<(), String> {
-        std::fs::rename(from, to).map_err(err_str)
-    });
+    m.fn_named(
+        "copy",
+        ["from", "to"],
+        |from: &str, to: &str| -> Result<(), String> {
+            std::fs::copy(from, to).map(|_| ()).map_err(err_str)
+        },
+    );
+    m.fn_named(
+        "rename",
+        ["from", "to"],
+        |from: &str, to: &str| -> Result<(), String> { std::fs::rename(from, to).map_err(err_str) },
+    );
     m.fn_("remove_file", |path: &str| -> Result<(), String> {
         std::fs::remove_file(path).map_err(err_str)
     });
@@ -104,7 +115,7 @@ pub fn fs() -> Module {
     });
 
     // path helpers (pure string manipulation)
-    m.fn_("join", |a: &str, b: &str| {
+    m.fn_named("join", ["a", "b"], |a: &str, b: &str| {
         Path::new(a).join(b).to_string_lossy().into_owned()
     });
     m.fn_("parent", |path: &str| -> Option<String> {

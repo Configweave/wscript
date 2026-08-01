@@ -65,7 +65,7 @@ fn interfaces_register_host_functions() {
         .find(|m| m.name == "host")
         .expect("`host` module");
     assert!(
-        host.fns.iter().any(|(name, ..)| name == "greet"),
+        host.fns.iter().any(|f| f.name == "greet"),
         "greet registered"
     );
 }
