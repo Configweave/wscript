@@ -94,3 +94,19 @@ Examples live in `examples/` (run with `wscript run`) and
 
 `just ci::check` is the merge bar — format check, lint, tests, examples — and is
 what CI runs, one job per part. `just --list ci` shows the parts individually.
+
+### Releases
+
+Releases are cut by CI from `main`; nothing is tagged by hand. An empty commit
+carrying a trailer publishes a tag and the `wscript` binaries for
+`x86_64-unknown-linux-gnu` and `x86_64-pc-windows-msvc`:
+
+```sh
+git commit --allow-empty -m "chore: release" -m "pre-release: true"   # vX.Y.Z-alpha
+git commit --allow-empty -m "chore: release" -m "release: true"       # vX.Y.Z
+```
+
+The version is the bump implied by the conventional commits since the last `v*`
+tag. A push with neither trailer runs the checks and stops. `just release-stamp
+<version>` is the manifest edit CI makes before building, if you want to
+reproduce a release build locally.
