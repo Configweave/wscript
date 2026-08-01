@@ -79,8 +79,18 @@ push/pop pairs beneath them.
 `HashMap<NodeId, _>` side tables; payloads that used to need a second lookup — a
 unit conversion's factor, a struct literal's field permutation — are inline in
 the variant. Read it through `CheckResult::lowering`, so a missing entry is an
-internal error rather than a silently-wrong instruction. Patterns are not in
-this space; they keep their own tables.
+internal error rather than a silently-wrong instruction. Patterns lower
+differently and have their own space — see **PatLowering**.
+
+**PatLowering** — the same, for one *pattern* node (`check/mod.rs:314`): the
+variant or struct it selects and the runtime index of each field as written,
+or a unit literal's folded constant. Read it through
+`CheckResult::pat_lowering`. Patterns needed a separate space because they
+test and bind rather than produce a value, and they needed a separate fold
+because a pattern's identity and its field order were recorded by different
+functions: `check_pattern_fields` is shared by struct patterns and
+struct-variant patterns, so it *returns* the order and each caller writes one
+complete value.
 
 **Operand** — the descriptor the operator ladders decide over (`check/ops.rs:135`):
 a **shape** (`Int`, `Quantity`, `Named`, `Container`, `Poison`, …), the user

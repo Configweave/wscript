@@ -281,7 +281,8 @@ pub struct Derives {
 /// Adding a language construct adds a variant here, and every consumer
 /// stops compiling until it is handled — which is the point.
 ///
-/// Patterns have their own space; see #19.
+/// Patterns lower differently (they test and bind rather than produce a
+/// value) and have their own space: [`PatLowering`].
 #[derive(Debug, Clone)]
 pub enum Lowering {
     Var(VarRes),
@@ -310,6 +311,36 @@ pub enum Lowering {
     Closure(ClosureRes),
 }
 
+/// How one pattern node lowers to bytecode.
+///
+/// The counterpart of [`Lowering`] for the pattern space, replacing four
+/// parallel side tables. A pattern's identity and its field permutation
+/// used to be recorded by different functions — `check_pattern_fields` is
+/// shared by struct patterns and struct-variant patterns, so it could not
+/// know which it was completing. It now *returns* the order and each
+/// caller writes one complete value, so no node is ever half-lowered.
+///
+/// Patterns that only test a value (`_`, `1`, `true`, `'c'`, `"s"`) and
+/// plain bindings lower from their `PatternKind` alone and record nothing;
+/// a binding's local slot lives in `decl_locals`.
+#[derive(Debug, Clone)]
+pub enum PatLowering {
+    /// A variant pattern, or a bare binding that names a unit variant.
+    /// `order` is the runtime field index of each field *as written*, and
+    /// is empty for unit and tuple variants.
+    Variant {
+        def: DefId,
+        tag: u32,
+        order: Vec<u16>,
+    },
+    /// A struct pattern, with the runtime field index of each field *as
+    /// written*.
+    Struct { def: DefId, order: Vec<u16> },
+    /// A suffixed literal in pattern position, already folded to a
+    /// base-unit constant. The expression form is [`Lowering::QuantityLit`].
+    QuantityLit(Factor),
+}
+
 /// Everything the checker learned, keyed by AST node ids.
 #[derive(Default)]
 pub struct CheckResult {
@@ -324,16 +355,9 @@ pub struct CheckResult {
     /// Local slot for `let` statements, `for` loop variables and pattern
     /// bindings (keyed by stmt id / for-expr id / pattern id).
     pub decl_locals: HashMap<NodeId, LocalId>,
-    /// Suffixed literals in *pattern* position, folded to a base-unit
-    /// constant. The expression form is `Lowering::QuantityLit`.
-    pub pat_quantity_lits: HashMap<NodeId, Factor>,
-    /// Struct *patterns*: for each field as written, the runtime field
-    /// index. The struct-literal form is inline in `Lowering::StructLit`.
-    pub pat_field_orders: HashMap<NodeId, Vec<u16>>,
-    /// Variant patterns (and bindings reinterpreted as unit variants).
-    pub pattern_variants: HashMap<NodeId, (DefId, u32)>,
-    /// Struct patterns → the struct def they destructure.
-    pub pattern_structs: HashMap<NodeId, DefId>,
+    /// How each pattern node lowers. Private, like `lowerings`: reach it
+    /// through [`CheckResult::pat_lowering`].
+    pat_lowerings: HashMap<NodeId, PatLowering>,
     /// Exprs needing a `MakeDyn` wrap after evaluation → vtable id.
     pub dyn_wraps: HashMap<NodeId, u32>,
     pub fn_infos: Vec<FnInfo>,
@@ -465,6 +489,20 @@ impl CheckResult {
         self.lowerings.insert(node, lowering);
     }
 
+    /// How pattern `node` lowers.
+    ///
+    /// `None` is meaningful here, unlike [`CheckResult::lowering`]: the
+    /// patterns that need no resolution (`_`, literals, plain bindings)
+    /// record nothing. It is a checker bug only for the pattern kinds that
+    /// do — variant, struct and unit-literal patterns.
+    pub fn pat_lowering(&self, node: NodeId) -> Option<&PatLowering> {
+        self.pat_lowerings.get(&node)
+    }
+
+    pub(crate) fn set_pat_lowering(&mut self, node: NodeId, lowering: PatLowering) {
+        self.pat_lowerings.insert(node, lowering);
+    }
+
     /// Simulate the checker dropping a resolution, so the emitter's
     /// internal-error path can be tested. There is no other way to reach
     /// it: every real path records one.
@@ -476,6 +514,17 @@ impl CheckResult {
             .find(|(_, l)| matches!(l, Lowering::BinOp(_)))
             .map(|(n, _)| *n);
         node.is_some_and(|n| self.lowerings.remove(&n).is_some())
+    }
+
+    /// The pattern-space counterpart of [`CheckResult::drop_a_bin_op`].
+    #[cfg(test)]
+    pub(crate) fn drop_a_pat_variant(&mut self) -> bool {
+        let node = self
+            .pat_lowerings
+            .iter()
+            .find(|(_, l)| matches!(l, PatLowering::Variant { .. }))
+            .map(|(n, _)| *n);
+        node.is_some_and(|n| self.pat_lowerings.remove(&n).is_some())
     }
 
     // Typed projections of [`Lowering`], for consumers that already know
@@ -564,6 +613,35 @@ impl CheckResult {
     pub fn closure(&self, node: NodeId) -> Option<&ClosureRes> {
         match self.lowering(node)? {
             Lowering::Closure(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    // The same projections over [`PatLowering`]. Each returns the whole
+    // payload of one variant, so a consumer that needs a variant's tag
+    // *and* its field order reads them together — the pair the checker
+    // wrote as one value is never re-correlated by two lookups.
+
+    /// The enum def and tag a variant pattern selects, plus the runtime
+    /// index of each named field as written (empty unless it is a struct
+    /// variant).
+    pub fn pat_variant(&self, node: NodeId) -> Option<(DefId, u32, &[u16])> {
+        match self.pat_lowering(node)? {
+            PatLowering::Variant { def, tag, order } => Some((*def, *tag, order)),
+            _ => None,
+        }
+    }
+    /// The struct def a struct pattern destructures, plus the runtime
+    /// index of each field as written.
+    pub fn pat_struct(&self, node: NodeId) -> Option<(DefId, &[u16])> {
+        match self.pat_lowering(node)? {
+            PatLowering::Struct { def, order } => Some((*def, order)),
+            _ => None,
+        }
+    }
+    pub fn pat_quantity_lit(&self, node: NodeId) -> Option<Factor> {
+        match self.pat_lowering(node)? {
+            PatLowering::QuantityLit(f) => Some(*f),
             _ => None,
         }
     }

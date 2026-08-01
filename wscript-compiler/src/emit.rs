@@ -1566,7 +1566,10 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
         match &pat.kind {
             PatternKind::Wildcard | PatternKind::Error => {}
             PatternKind::Binding(_) => {
-                if let Some(&(_, tag)) = self.em.res.pattern_variants.get(&pat.id) {
+                // A binding names either a unit variant (a tag test) or a
+                // new local (a slot in `decl_locals`) — the checker
+                // records exactly one of the two, never neither.
+                if let Some((_, tag, _)) = self.em.res.pat_variant(pat.id) {
                     self.emit_tag_test(reg, tag, fails);
                 } else if let Some(&local) = self.em.res.decl_locals.get(&pat.id) {
                     let dst = self.local_reg(local);
@@ -1575,6 +1578,8 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
                     } else {
                         self.push(Instr::Move { dst, src: reg });
                     }
+                } else {
+                    self.em.ice(pat.span, "binding pattern");
                 }
             }
             PatternKind::IntLit(n) => {
@@ -1582,11 +1587,10 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
             }
             // Folded to a base-unit constant by the checker; float-backed
             // families never reach here (they cannot be matched on).
-            PatternKind::QuantityLit { .. } => {
-                if let Some(&Factor::Int(n)) = self.em.res.pat_quantity_lits.get(&pat.id) {
-                    self.emit_int_pattern_test(n, reg, fails);
-                }
-            }
+            PatternKind::QuantityLit { .. } => match self.em.res.pat_quantity_lit(pat.id) {
+                Some(Factor::Int(n)) => self.emit_int_pattern_test(n, reg, fails),
+                _ => self.em.ice(pat.span, "unit literal pattern"),
+            },
             PatternKind::BoolLit(b) => {
                 if *b {
                     fails.push(self.jump_if_false_placeholder(reg));
@@ -1619,7 +1623,12 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
                 fails.push(self.jump_if_false_placeholder(cond));
             }
             PatternKind::Variant { args, .. } => {
-                let Some(&(_, tag)) = self.em.res.pattern_variants.get(&pat.id) else {
+                // Tag and field order come out of one lookup: the checker
+                // wrote them as one value. (`res` is copied out so `order`
+                // outlives the `&mut self` calls below.)
+                let res = self.em.res;
+                let Some((_, tag, order)) = res.pat_variant(pat.id) else {
+                    self.em.ice(pat.span, "variant pattern");
                     return;
                 };
                 self.emit_tag_test(reg, tag, fails);
@@ -1643,50 +1652,17 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
                         }
                     }
                     VariantPatArgs::Struct { fields, .. } => {
-                        let order = self
-                            .em
-                            .res
-                            .pat_field_orders
-                            .get(&pat.id)
-                            .cloned()
-                            .unwrap_or_default();
-                        for (i, (_, p)) in fields.iter().enumerate() {
-                            let Some(&idx) = order.get(i) else { continue };
-                            if idx == u16::MAX || matches!(p.kind, PatternKind::Wildcard) {
-                                continue;
-                            }
-                            let field = self.alloc_temp();
-                            self.push(Instr::GetField {
-                                dst: field,
-                                obj: reg,
-                                idx,
-                            });
-                            self.emit_pattern(p, field, fails);
-                        }
+                        self.emit_named_field_patterns(fields, order, reg, fails);
                     }
                 }
             }
             PatternKind::Struct { fields, .. } => {
-                let order = self
-                    .em
-                    .res
-                    .pat_field_orders
-                    .get(&pat.id)
-                    .cloned()
-                    .unwrap_or_default();
-                for (i, (_, p)) in fields.iter().enumerate() {
-                    let Some(&idx) = order.get(i) else { continue };
-                    if idx == u16::MAX || matches!(p.kind, PatternKind::Wildcard) {
-                        continue;
-                    }
-                    let field = self.alloc_temp();
-                    self.push(Instr::GetField {
-                        dst: field,
-                        obj: reg,
-                        idx,
-                    });
-                    self.emit_pattern(p, field, fails);
-                }
+                let res = self.em.res;
+                let Some((_, order)) = res.pat_struct(pat.id) else {
+                    self.em.ice(pat.span, "struct pattern");
+                    return;
+                };
+                self.emit_named_field_patterns(fields, order, reg, fails);
             }
             PatternKind::Or(alts) => {
                 // Succeed if any alternative matches (no bindings inside,
@@ -1709,6 +1685,32 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
                     self.patch_to_here(s);
                 }
             }
+        }
+    }
+
+    /// Test each named field's sub-pattern against the field it names, for
+    /// struct patterns and struct-variant patterns alike. `order[i]` is
+    /// the runtime index of the `i`th field as written; `u16::MAX` marks a
+    /// field the checker could not resolve.
+    fn emit_named_field_patterns(
+        &mut self,
+        fields: &[(Ident, Pattern)],
+        order: &[u16],
+        reg: u16,
+        fails: &mut Vec<usize>,
+    ) {
+        for (i, (_, p)) in fields.iter().enumerate() {
+            let Some(&idx) = order.get(i) else { continue };
+            if idx == u16::MAX || matches!(p.kind, PatternKind::Wildcard) {
+                continue;
+            }
+            let field = self.alloc_temp();
+            self.push(Instr::GetField {
+                dst: field,
+                obj: reg,
+                idx,
+            });
+            self.emit_pattern(p, field, fails);
         }
     }
 
@@ -1946,6 +1948,36 @@ mod tests {
             ices[0].help_text().is_some_and(|h| h.contains("report")),
             "an ICE must tell the reader it is the compiler's fault and ask \
              to be reported"
+        );
+    }
+
+    /// The pattern space has the same contract: a pattern the checker
+    /// resolved but did not record must not silently emit a match that
+    /// skips its tag test — that would run the wrong arm.
+    #[test]
+    fn a_dropped_pattern_lowering_reports_an_internal_error() {
+        let reg = Registry::new();
+        // One variant pattern only, so `drop_a_pat_variant` has no choice
+        // about which node it drops (`None` would be a binding pattern).
+        let parsed = crate::parse("fn main() -> int { match Some(1) { Some(n) => n, _ => 0 } }");
+        let refs: Vec<(String, &SourceFile)> = vec![(String::new(), &parsed.file)];
+        let mut checked = crate::check::check_files(&refs, &reg);
+        assert!(checked.diags.is_empty(), "fixture must compile cleanly");
+
+        let (_, clean) = emit_files(&[&parsed.file], &checked);
+        assert!(clean.is_empty(), "a well-formed unit reports nothing");
+
+        assert!(
+            checked.drop_a_pat_variant(),
+            "fixture should have a variant pattern"
+        );
+        let (_, ices) = emit_files(&[&parsed.file], &checked);
+        assert_eq!(ices.len(), 1, "one internal error");
+        assert_eq!(ices[0].code, "E9999");
+        assert!(
+            ices[0].message.contains("variant pattern"),
+            "message should name what was missing: {}",
+            ices[0].message
         );
     }
 }
