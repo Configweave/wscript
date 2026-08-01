@@ -46,14 +46,15 @@ let n: i64 = vm.call_unit(&unit, "main", ())?;
 
 Nothing is ambient (capability-style): a script can only touch what you registered. Compile once, share the `Context` and `CompiledUnit` across threads, and spin one `Vm` per thread. See [interop types](../references/concept_interop_types.md) for exposing data, and the **Embed wscript in a Rust application** process for the full runbook.
 
-## Embedding a project: `Session`
+## Embedding a project
 
 Everything above is the single-source path, and it stays the right one when the host owns the whole script: `Context` + `compile` + `Vm::new` is smaller and is not going anywhere. Reach for a `Session` when the script is a \*project\* — an entry file that `use`s other script files, resolved against source roots. A `Context` answers "what has the host registered?"; a session answers the larger question "how is this project compiled?", because it holds the registrations **and** the import resolver, wired once and kept together so the two cannot be paired wrongly.
 
 ```rust
 use wscript::{Session, VmConfig};
 
-let session = Session::builder()          // `m` is the Module from above
+// In place of the `Context::new()` above: the same `m`, wired into a session.
+let session = Session::builder()
     .module(wscript::std_modules::math())
     .module(m)
     .src_roots(vec!["scripts/lib".into()])   // where `use helper` is searched,
@@ -61,7 +62,8 @@ let session = Session::builder()          // `m` is the Module from above
 
 // The whole import graph compiles into one unit. `path` is what diagnostics
 // name and what relative imports resolve against — it need not exist on disk.
-let compiled = session.compile("scripts/main.wscript", source)?;
+let source = std::fs::read_to_string("scripts/main.wscript")?;
+let compiled = session.compile("scripts/main.wscript", &source)?;
 session.run(&compiled, VmConfig::default());
 ```
 

@@ -87,7 +87,8 @@ a **shape** (`Int`, `Quantity`, `Named`, `Container`, `Poison`, …), the user
 `impl` of this operator's trait if there is one, and whether the type supports
 the operation **structurally** — derives it, or its elements do, or the type
 parameter declares the bound. Three fields serve all four ladders because the
-caller resolves the operator-specific question before building the descriptor.
+checker's **shell** — the effectful methods wrapped around the pure ladder
+table — resolves the operator-specific question before building the descriptor.
 
 **Diagnostic** — a compile-time message carrying a stable `code` (`E0001`…),
 severity, labelled spans and optional help. Every code should explain itself;
@@ -212,8 +213,7 @@ directives inside the fixture.
 
 Named by the deepening programme in
 [#3](https://github.com/Configweave/wscript/issues/3) and **not yet in the code**.
-Listed here so the tickets and the glossary agree. `Lowering`, `Operand` and
-`Env` have since shipped and are defined above.
+Listed here so the tickets and the glossary agree.
 
 **Index** — the checker's product for the editor: `symbol_at`, `completions_at`,
 `span_of`, `methods_of`. Partial where the lowerings are total — an editor asks
