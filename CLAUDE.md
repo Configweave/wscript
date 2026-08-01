@@ -19,13 +19,14 @@ tooling (REPL/LSP/wscript.toml), and polish (diagnostics/docs/benchmarks).
 Cargo workspace per PRD §2: `wscript` (umbrella/embedding API), `wscript-core`
 (shared types/bytecode/values), `wscript-compiler`, `wscript-vm`, `wscript-std`,
 `wscript-macros` (`#[derive(Script)]`), `wscript-cli` (binary `wscript`),
-`benchmarks`. Script behaviour tests live in `tests/scripts/*.wscript`; two
+`benchmarks`. Script behaviour tests live in `tests/scripts/*.wscript`; three
 suites consume that corpus — `wscript-cli/tests/scripts.rs` asserts output via
-`// expect:` directives, and `wscript-cli/tests/fuel_snapshot.rs` records what
+`// expect:` directives, `wscript-cli/tests/fuel_snapshot.rs` records what
 each script costs to run in `tests/fuel.snap`, so adding a script means
-regenerating that table too. Every `.wscript` directly in that directory is
-run as an entry by both, so files that exist only to be `use`d by another
-script live in `tests/scripts/modules/`.
+regenerating that table too, and `wscript-cli/tests/verify_corpus.rs` checks
+that what the emitter produced for it is in range. Every `.wscript` directly
+in that directory is run as an entry by all three, so files that exist only to
+be `use`d by another script live in `tests/scripts/modules/`.
 Docs are authored in wdoc/WCL: `docs/main.wcl` is the landing site and
 `docs/wskills/wscript/` the reference model (language, stdlib, CLI, embedding),
 projected into a book, the committed `.claude/skills/wscript` skill, a deck and

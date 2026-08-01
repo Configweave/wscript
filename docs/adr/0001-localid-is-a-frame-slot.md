@@ -34,11 +34,11 @@ property.
 
 Two things depend on it, neither of them local to the checker:
 
-1. **The emitter identifies registers with locals.** `local_reg` is the identity
-   function (`wscript-compiler/src/emit.rs:374-376`):
+1. **The emitter identifies registers with locals.** `RegAlloc::local` is the
+   identity function (`wscript-compiler/src/emit/code.rs`):
 
    ```rust
-   fn local_reg(&self, local: LocalId) -> u16 { local as u16 }
+   fn local(&self, local: LocalId) -> Reg { Reg(local as u16) }
    ```
 
    There is no mapping layer. A `LocalId` *is* a register index in the frame

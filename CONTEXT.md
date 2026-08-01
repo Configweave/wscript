@@ -147,6 +147,31 @@ _Avoid_: "chunk", "function object" (that is a runtime closure value).
 directly. Arguments occupy registers `0..n_params`; calls pass arguments in a
 contiguous **window** `base..base + nargs`.
 
+**Scratch** — a register the emitter allocates for an intermediate value, handed
+to a scope and released when that scope ends (`emit/code.rs`). Locals and capture
+cells sit at fixed slots; everything above them is scratch, so a frame is sized
+by the body's deepest expression rather than by the sum of its expressions.
+_Avoid_: "temporary variable" — a scratch names no binding.
+
+**Value register** (`ValueReg`) — where an emitted expression's value landed, and
+whether the emitter owns it: a **scratch** it allocated, or a register the frame
+owns (a local, a capture cell) that it may read but not clobber. Reading a plain
+local borrows its register instead of copying it, so this is what tells the two
+apart. _Avoid_: "operand" — that is the checker's operator-ladder descriptor
+above, an unrelated type in the same crate.
+
+**Label** — a branch target created before its position is known, bound exactly
+once, and resolved to an offset when the body is finished; a body holding a label
+that was never bound does not finish. "Patching" a jump is the mechanism
+underneath — private to the label table, and no longer how the emitter reasons.
+
+**Verification** — the check that a compiled unit's operands are in range: every
+register below the proto's `n_regs`, every jump inside its body, every constant /
+def / proto / vtable index within its table (`wscript-core/src/verify.rs`). It is
+a compile-side assertion held over the script corpus by the test suite, *not* a
+load-time gate: the VM still indexes with these operands unchecked, and an
+embedder calling `compile` pays nothing for it.
+
 **Vtable** — the method table for one `(concrete type, trait)` impl, used by
 `dyn Trait` dispatch; slot order follows the trait's declaration order.
 
@@ -160,7 +185,10 @@ descend into nested values.
 table and its *implementation* in the VM, connected only by the variant name.
 
 The bytecode format is **internal and unstable** — there is no serialization
-guarantee; it exists only in memory between `compile` and `run`.
+guarantee; it exists only in memory between `compile` and `run`. It is also
+**trusted**: the dispatch loop indexes with instruction operands directly rather
+than re-validating them, so running a hand-crafted or corrupted unit may panic.
+Everything crossing the *script* boundary is checked and faults instead.
 
 ---
 
