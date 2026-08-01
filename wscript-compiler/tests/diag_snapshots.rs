@@ -14,6 +14,7 @@
 mod common;
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 
 use wscript_core::diag::{Diagnostic, Severity};
 use wscript_core::registry::Registry;
@@ -26,19 +27,46 @@ enum Origin {
     Interface,
 }
 
-impl Origin {
-    fn prefix(self) -> &'static str {
-        match self {
+/// One of a fixture's two files: its text, and which one it is.
+///
+/// The pair travels together because neither half reads a span alone — the
+/// text turns an offset into a line and column, the origin says which file
+/// that line is in — so the pair, not its halves, is what a diagnostic points
+/// at. Shared, because every diagnostic from a file points at the same one.
+#[derive(Clone)]
+struct Source {
+    origin: Origin,
+    text: Arc<str>,
+}
+
+impl Source {
+    fn script(text: &str) -> Source {
+        Source {
+            origin: Origin::Script,
+            text: text.into(),
+        }
+    }
+
+    fn interface(text: &str) -> Source {
+        Source {
+            origin: Origin::Interface,
+            text: text.into(),
+        }
+    }
+
+    /// `1:20-1:27`, said against the file it indexes into.
+    fn span_str(&self, lo: u32, hi: u32) -> String {
+        let at = match self.origin {
             Origin::Script => "",
             Origin::Interface => "interface ",
-        }
+        };
+        format!("{at}{}", common::span_str(&self.text, lo, hi))
     }
 }
 
-/// A diagnostic, and where to read its span.
+/// A diagnostic, and the file to read its span against.
 struct Located {
-    origin: Origin,
-    src: String,
+    src: Source,
     diag: Diagnostic,
 }
 
@@ -50,22 +78,21 @@ fn render(diags: &[Located]) -> String {
         return "(no diagnostics)\n".to_string();
     }
     let mut out = String::new();
-    for Located { origin, src, diag } in diags {
+    for Located { src, diag } in diags {
         let sev = match diag.severity {
             Severity::Error => "",
             Severity::Warning => " warning",
         };
-        let at = origin.prefix();
         out.push_str(&format!(
-            "{}{sev}  {at}{}\n",
+            "{}{sev}  {}\n",
             diag.code,
-            common::span_str(src, diag.span.lo, diag.span.hi)
+            src.span_str(diag.span.lo, diag.span.hi)
         ));
         out.push_str(&format!("  {}\n", diag.message));
         for (span, label) in &diag.labels {
             out.push_str(&format!(
-                "  label {at}{}: {label}\n",
-                common::span_str(src, span.lo, span.hi)
+                "  label {}: {label}\n",
+                src.span_str(span.lo, span.hi)
             ));
         }
         if let Some(help) = diag.help_text() {
@@ -84,22 +111,22 @@ fn diagnostics_of(fixture: &Path) -> Vec<Located> {
 
     let interface_path = fixture.with_extension("wscripti");
     if let Ok(interface_src) = std::fs::read_to_string(&interface_path) {
+        let src = Source::interface(&interface_src);
         let (diags, _index) = wscript_compiler::wscripti::load(&interface_src, &mut reg);
         out.extend(diags.into_iter().map(|diag| Located {
-            origin: Origin::Interface,
-            src: interface_src.clone(),
+            src: src.clone(),
             diag,
         }));
     }
 
-    let src = std::fs::read_to_string(fixture)
+    let script_src = std::fs::read_to_string(fixture)
         .unwrap_or_else(|e| panic!("reading {}: {e}", fixture.display()));
-    let diags = match wscript_compiler::compile(&src, &reg) {
+    let src = Source::script(&script_src);
+    let diags = match wscript_compiler::compile(&script_src, &reg) {
         Ok(compiled) => compiled.warnings,
         Err(diags) => diags,
     };
     out.extend(diags.into_iter().map(|diag| Located {
-        origin: Origin::Script,
         src: src.clone(),
         diag,
     }));
@@ -107,29 +134,34 @@ fn diagnostics_of(fixture: &Path) -> Vec<Located> {
 }
 
 /// The whole corpus, compiled once: every fixture paired with what it makes
-/// the compiler say. Four tests ask four questions of the same answer.
-fn corpus() -> Vec<(PathBuf, Vec<Located>)> {
-    let root = Path::new("tests/fixtures/diags");
-    let fixtures = common::fixtures(root);
-    assert!(
-        !fixtures.is_empty(),
-        "no fixtures under {} — did the directory move?",
-        root.display()
-    );
-    fixtures
-        .into_iter()
-        .map(|fixture| {
-            let diags = diagnostics_of(&fixture);
-            (fixture, diags)
-        })
-        .collect()
+/// the compiler say. Four tests ask four questions of the same answer, and
+/// they share a process, so they share the answer rather than recompiling the
+/// corpus once each.
+fn corpus() -> &'static [(PathBuf, Vec<Located>)] {
+    static CORPUS: OnceLock<Vec<(PathBuf, Vec<Located>)>> = OnceLock::new();
+    CORPUS.get_or_init(|| {
+        let root = Path::new("tests/fixtures/diags");
+        let fixtures = common::files(root, "wscript");
+        assert!(
+            !fixtures.is_empty(),
+            "no fixtures under {} — did the directory move?",
+            root.display()
+        );
+        fixtures
+            .into_iter()
+            .map(|fixture| {
+                let diags = diagnostics_of(&fixture);
+                (fixture, diags)
+            })
+            .collect()
+    })
 }
 
 #[test]
 fn diagnostic_snapshots() {
     let mut failures = Vec::new();
     for (fixture, diags) in corpus() {
-        if let Err(msg) = common::check_snapshot(&fixture, &render(&diags)) {
+        if let Err(msg) = common::check_snapshot(fixture, &render(diags)) {
             failures.push(msg);
         }
     }
@@ -158,6 +190,17 @@ fn every_fixture_produces_a_diagnostic() {
 /// compiler say, the reader gets a `help:` line telling them what to do about
 /// it. Site help or the code's fallback both count — the reader cannot tell
 /// them apart, and should not have to.
+///
+/// A backstop, deliberately: `RegisteredCode::help` is not optional and
+/// `diag_codes.rs` insists every emitted code is registered, so between them
+/// muteness is already unreachable by construction. This catches the ways
+/// round that — a code assembled rather than written as a literal, a source
+/// file outside the tree `diag_codes.rs` reads — and it is the assertion that
+/// states the goal in the goal's own words.
+///
+/// What no test can gate is the harder half: a site that forgets its own help
+/// still renders the code's fallback, which is generic, and generic help can
+/// be wrong for that site. That is a review question, not a gate.
 #[test]
 fn every_rendered_diagnostic_explains_itself() {
     let mut mute = Vec::new();

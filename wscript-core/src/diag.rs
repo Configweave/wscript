@@ -79,13 +79,14 @@ pub enum Coverage {
     Exempt(&'static str),
 }
 
-/// One diagnostic code: its fallback help, and how it is tested.
+/// One row of the code registry: a diagnostic code, its fallback help, and
+/// how it is tested.
 ///
 /// Build entries with [`covered`] or [`exempt`] rather than by hand — the
 /// two of them are the whole vocabulary, and which one a row uses is the
 /// only decision a new code needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CodeInfo {
+pub struct RegisteredCode {
     /// Stable diagnostic code, e.g. `E0003`.
     pub code: &'static str,
     /// Help shown when the emission site supplies none. Site help wins
@@ -98,8 +99,8 @@ pub struct CodeInfo {
 }
 
 /// A code some fixture must render.
-const fn covered(code: &'static str, help: &'static str) -> CodeInfo {
-    CodeInfo {
+const fn covered(code: &'static str, help: &'static str) -> RegisteredCode {
+    RegisteredCode {
         code,
         help,
         coverage: Coverage::Fixture,
@@ -107,8 +108,8 @@ const fn covered(code: &'static str, help: &'static str) -> CodeInfo {
 }
 
 /// A code no fixture can render, and why not.
-const fn exempt(code: &'static str, help: &'static str, why: &'static str) -> CodeInfo {
-    CodeInfo {
+const fn exempt(code: &'static str, help: &'static str, why: &'static str) -> RegisteredCode {
+    RegisteredCode {
         code,
         help,
         coverage: Coverage::Exempt(why),
@@ -124,7 +125,7 @@ const fn exempt(code: &'static str, help: &'static str, why: &'static str) -> Co
 /// itself" is that sentence, mechanised — no diagnostic can render mute,
 /// whichever of a code's emission sites raised it and whether or not the
 /// corpus happens to exercise that one.
-pub static CODES: &[CodeInfo] = &[
+pub static CODES: &[RegisteredCode] = &[
     // ---------------------------------------------------------- lexer
     covered("E0001", "close the comment with `*/`"),
     covered(

@@ -78,7 +78,8 @@ itself" is enforced rather than hoped for. **Site help** (`error_help`,
 `with_help`, `ops::Msg`) wins where it exists, because it can name the type or
 argument that actually went wrong. The gates live in
 `wscript-compiler/tests/diag_codes.rs` (registry vs. source) and
-`diag_snapshots.rs` (registry vs. corpus).
+`diag_snapshots.rs` (registry vs. corpus). _Avoid_: bare "registry" — that is
+the host-registration **Registry**, an unrelated type the same tests also use.
 
 **Interface file** (`.wscripti`) — a declaration-only file describing host
 modules, functions, consts and opaque types, so `wscript check` and the LSP can
@@ -145,7 +146,8 @@ frame share one mutable binding.
 
 **Registry** — every host registration visible to a compilation: defs, modules,
 host functions and methods of host types. Shared immutably between the checker
-and every VM spun from the owning `Context`.
+and every VM spun from the owning `Context`. _Avoid_: using it for the
+diagnostic **code registry**, which is a different table entirely.
 
 **Module** — a namespace of host functions, consts and types, registered by the
 embedder and reachable from script as `name::thing`.

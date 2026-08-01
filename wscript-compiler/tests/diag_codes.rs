@@ -7,6 +7,11 @@
 //! other check, and a code registered but never emitted sends the next reader
 //! looking for something that is not there.
 
+// Only the directory walker is wanted here; the rest of `common` is snapshot
+// plumbing this test has no use for.
+#[allow(dead_code)]
+mod common;
+
 use std::path::{Path, PathBuf};
 
 use wscript_core::diag::CODES;
@@ -30,30 +35,27 @@ fn source_files() -> Vec<PathBuf> {
 
     let mut out = Vec::new();
     for dir in crates {
-        collect_rs(&dir, &mut out);
+        out.extend(common::files(&dir, "rs"));
     }
+    let before = out.len();
     out.retain(|p| *p != registry);
     out.sort();
+
+    // The exclusion is the whole basis of this test: if `diag.rs` moves, the
+    // retain quietly removes nothing, every registered code then reads as
+    // emitted, and half of the assertions below pass vacuously.
+    assert_eq!(
+        before - out.len(),
+        1,
+        "{} is not among the sources read — has the registry moved?",
+        registry.display()
+    );
     assert!(
         out.len() > 10,
         "found only {} source files — did the workspace layout change?",
         out.len()
     );
     out
-}
-
-fn collect_rs(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_rs(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
 }
 
 /// Every `"E1234"` / `"W1234"` string literal in `text`.
