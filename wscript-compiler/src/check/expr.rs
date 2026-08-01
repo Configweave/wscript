@@ -7,9 +7,10 @@ use wscript_core::types::{FnSig, Type};
 use crate::ast::*;
 
 use super::methods::{self, SchemeConstraint};
+use super::ops;
 use super::{
     BinOpKind, CallKind, Checker, ConvKind, ForKind, IndexKind, MethodRes, PathRes, PreludeFn,
-    PrimKind, StructLitRes, TryKind, UnOpKind,
+    StructLitRes, TryKind, UnOpKind,
 };
 
 /// AST-depth budget for `check_expr` — the backstop behind the parser's
@@ -851,65 +852,15 @@ impl<'a> Checker<'a> {
     // --------------------------------------------------------- operators
 
     fn check_unary(&mut self, e: &Expr, op: UnOp, operand: &Expr) -> Type {
-        let t = self.check_expr(operand, None);
-        let rt = self.resolve(&t);
         match op {
             UnOp::Not => {
+                let t = self.check_expr(operand, None);
+                let rt = self.resolve(&t);
                 self.expect_bool(&rt, operand.span, "the operand of `!`");
                 self.out.un_ops.insert(e.id, UnOpKind::Not);
                 Type::Bool
             }
-            UnOp::Neg => match rt {
-                Type::Int => {
-                    self.out.un_ops.insert(e.id, UnOpKind::NegInt);
-                    Type::Int
-                }
-                Type::Float => {
-                    self.out.un_ops.insert(e.id, UnOpKind::NegFloat);
-                    Type::Float
-                }
-                Type::Var(_) => {
-                    // Default unresolved numeric negation to int.
-                    if self.infer.unify(&Type::Int, &t).is_ok() {
-                        self.out.un_ops.insert(e.id, UnOpKind::NegInt);
-                        Type::Int
-                    } else {
-                        Type::Error
-                    }
-                }
-                // A unit value negates as the number it is stored in.
-                Type::Named(def) if self.out.defs.is_quantity(def) => {
-                    let kind = if self.base_of(def) == Type::Float {
-                        UnOpKind::NegFloat
-                    } else {
-                        UnOpKind::NegInt
-                    };
-                    self.out.un_ops.insert(e.id, kind);
-                    Type::Named(def)
-                }
-                Type::Named(def) => {
-                    if let Some(protos) = self.trait_impls.get(&(def, defs::TRAIT_NEG)) {
-                        let proto = protos[0];
-                        self.out.un_ops.insert(e.id, UnOpKind::NegCall { proto });
-                        Type::Named(def)
-                    } else {
-                        let name = self.out.defs.name_of(def).to_string();
-                        self.error_help(
-                            "E0234",
-                            e.span,
-                            format!("cannot negate `{name}`"),
-                            format!("implement the `Neg` trait: `impl Neg for {name}`"),
-                        );
-                        Type::Error
-                    }
-                }
-                Type::Error | Type::Never => Type::Error,
-                other => {
-                    let ts = self.ty_str(&other);
-                    self.error("E0234", e.span, format!("cannot negate `{ts}`"));
-                    Type::Error
-                }
-            },
+            UnOp::Neg => self.check_neg(e, operand),
         }
     }
 
@@ -931,158 +882,10 @@ impl<'a> Checker<'a> {
                 );
                 Type::Bool
             }
-            Add | Sub | Mul | Div | Rem => self.check_arith(e, op, lhs, rhs),
-            Eq | Ne => self.check_eq(e, op == Ne, lhs, rhs),
-            Lt | Le | Gt | Ge => self.check_cmp(e, op, lhs, rhs),
+            Add | Sub | Mul | Div | Rem => self.check_operator(e, ops::Op::Arith(op), lhs, rhs),
+            Eq | Ne => self.check_operator(e, ops::Op::Eq { negate: op == Ne }, lhs, rhs),
+            Lt | Le | Gt | Ge => self.check_operator(e, ops::Op::Cmp(op), lhs, rhs),
         }
-    }
-
-    fn check_arith(&mut self, e: &Expr, op: BinOp, lhs: &Expr, rhs: &Expr) -> Type {
-        let lt = self.check_expr(lhs, None);
-        // Unit families scale by, and divide into, their backing number, so
-        // their operands do not have to match. Everything else does.
-        if let Some(ty) = self.check_unit_arith(e, op, &lt, rhs) {
-            return ty;
-        }
-        let rt = self.check_expr(rhs, Some(&lt));
-        self.unify_or_err(
-            &lt,
-            &rt,
-            rhs.span,
-            "arithmetic requires both operands to have the same type \
-             (use `int(x)` / `float(x)` to convert)",
-        );
-        self.arith_result(e.id, e.span, op, &lt)
-    }
-
-    /// Arithmetic where either side is a unit family:
-    ///
-    /// ```text
-    /// D + D → D    D - D → D    D % D → D
-    /// D * n → D    n * D → D    D / n → D
-    /// D / D → n                 (n is the backing type)
-    /// ```
-    ///
-    /// Returns `None` when neither side is a unit family, so the caller
-    /// falls through to the ordinary same-type rule.
-    fn check_unit_arith(&mut self, e: &Expr, op: BinOp, lt: &Type, rhs: &Expr) -> Option<Type> {
-        // `n * D` — the literal-first form. Only `*` makes sense here:
-        // `2 / 5s` and `2 + 5s` have no meaning without dimensions.
-        let Some(def) = self.unit_family(lt) else {
-            if !matches!(lt, Type::Int | Type::Float) {
-                return None;
-            }
-            let rt = self.check_expr(rhs, None);
-            let def = self.unit_family(&rt)?;
-            let base = self.base_of(def);
-            if op != BinOp::Mul {
-                let (n, ts) = (self.out.defs.name_of(def).to_string(), self.ty_str(lt));
-                self.error_help(
-                    "E0234",
-                    e.span,
-                    format!("no `{}` operator for `{ts}` and `{n}`", op_symbol(op)),
-                    format!("a number can only scale a unit value: `{n} * n` or `n * {n}`"),
-                );
-                return Some(Type::Error);
-            }
-            self.unify_or_err(
-                &base,
-                lt,
-                e.span,
-                "scaling a unit value requires its backing type",
-            );
-            self.record_arith(e.id, &base, op);
-            return Some(Type::Named(def));
-        };
-
-        let base = self.base_of(def);
-        let self_ty = Type::Named(def);
-        match op {
-            // Same-family combination, or scaling by a plain number — the
-            // right operand decides which.
-            BinOp::Add | BinOp::Sub | BinOp::Rem => {
-                let rt = self.check_expr(rhs, Some(&self_ty));
-                self.unify_or_err(
-                    &self_ty,
-                    &rt,
-                    rhs.span,
-                    "both operands must be values of the same unit family",
-                );
-                self.record_arith(e.id, &base, op);
-                Some(self_ty)
-            }
-            BinOp::Mul => {
-                let rt = self.check_expr(rhs, Some(&base));
-                if self.unit_family(&rt).is_some() {
-                    let n = self.out.defs.name_of(def).to_string();
-                    let rn = self.ty_str(&rt);
-                    self.error_help(
-                        "E0234",
-                        e.span,
-                        format!("cannot multiply `{n}` by `{rn}`"),
-                        "multiplying two unit values would produce a new dimension, \
-                         which this release does not model — scale by a plain number \
-                         instead",
-                    );
-                    return Some(Type::Error);
-                }
-                self.unify_or_err(
-                    &base,
-                    &rt,
-                    rhs.span,
-                    "scaling a unit value requires its backing type",
-                );
-                self.record_arith(e.id, &base, op);
-                Some(self_ty)
-            }
-            // `D / D` is a plain ratio; `D / n` scales down.
-            BinOp::Div => {
-                let rt = self.check_expr(rhs, None);
-                match self.unit_family(&rt) {
-                    Some(other) if other == def => {
-                        self.record_arith(e.id, &base, op);
-                        Some(base)
-                    }
-                    Some(other) => {
-                        let (a, b) = (
-                            self.out.defs.name_of(def).to_string(),
-                            self.out.defs.name_of(other).to_string(),
-                        );
-                        self.error_help(
-                            "E0234",
-                            e.span,
-                            format!("cannot divide `{a}` by `{b}`"),
-                            "dividing across unit families would produce a new dimension, \
-                             which this release does not model",
-                        );
-                        Some(Type::Error)
-                    }
-                    None => {
-                        self.unify_or_err(
-                            &base,
-                            &rt,
-                            rhs.span,
-                            "dividing a unit value requires its own family or its \
-                             backing type",
-                        );
-                        self.record_arith(e.id, &base, op);
-                        Some(self_ty)
-                    }
-                }
-            }
-            _ => None,
-        }
-    }
-
-    /// Record the int/float lowering for an operator on a unit family —
-    /// the values are already plain numbers at runtime.
-    fn record_arith(&mut self, node: NodeId, base: &Type, op: BinOp) {
-        let kind = if *base == Type::Float {
-            BinOpKind::FloatArith(op)
-        } else {
-            BinOpKind::IntArith(op)
-        };
-        self.out.bin_ops.insert(node, kind);
     }
 
     /// The primitive a unit family's values are stored in.
@@ -1111,305 +914,6 @@ impl<'a> Checker<'a> {
         match self.resolve(t) {
             Type::Named(id) if self.out.defs.is_quantity(id) => Some(id),
             _ => None,
-        }
-    }
-
-    /// Classify an arithmetic operator application over `operand_ty`,
-    /// recording the lowering into `bin_ops` under `node` (a Binary expr
-    /// or a compound Assign) and returning the result type.
-    fn arith_result(&mut self, node: NodeId, span: Span, op: BinOp, operand_ty: &Type) -> Type {
-        let t = self.resolve(operand_ty);
-        match &t {
-            Type::Int => {
-                self.out.bin_ops.insert(node, BinOpKind::IntArith(op));
-                Type::Int
-            }
-            Type::Float => {
-                self.out.bin_ops.insert(node, BinOpKind::FloatArith(op));
-                Type::Float
-            }
-            Type::Str if op == BinOp::Add => {
-                self.out.bin_ops.insert(node, BinOpKind::Concat);
-                Type::Str
-            }
-            Type::Var(_) => {
-                // Unconstrained operands (e.g. closure params used only
-                // here) default to int.
-                if self.infer.unify(&Type::Int, &t).is_ok() {
-                    self.out.bin_ops.insert(node, BinOpKind::IntArith(op));
-                    Type::Int
-                } else {
-                    Type::Error
-                }
-            }
-            // Reached through paths that bypass `check_unit_arith` (both
-            // operands already known equal). Same lowering: plain numbers.
-            Type::Named(def) if self.out.defs.is_quantity(*def) => {
-                let def = *def;
-                let base = self.base_of(def);
-                self.record_arith(node, &base, op);
-                if op == BinOp::Div {
-                    base
-                } else {
-                    Type::Named(def)
-                }
-            }
-            Type::Named(def) => {
-                let def = *def;
-                let trait_id = match op {
-                    BinOp::Add => defs::TRAIT_ADD,
-                    BinOp::Sub => defs::TRAIT_SUB,
-                    BinOp::Mul => defs::TRAIT_MUL,
-                    BinOp::Div => defs::TRAIT_DIV,
-                    _ => defs::TRAIT_REM,
-                };
-                if let Some(protos) = self.trait_impls.get(&(def, trait_id)) {
-                    let proto = protos[0];
-                    self.out
-                        .bin_ops
-                        .insert(node, BinOpKind::ArithCall { proto });
-                    Type::Named(def)
-                } else {
-                    let name = self.out.defs.name_of(def).to_string();
-                    let tr = self.out.defs.name_of(trait_id).to_string();
-                    self.error_help(
-                        "E0234",
-                        span,
-                        format!("no `{}` operator for `{name}`", op_symbol(op)),
-                        format!("implement the `{tr}` trait: `impl {tr} for {name}`"),
-                    );
-                    Type::Error
-                }
-            }
-            Type::Param(i) => {
-                let pn = self.param_name(*i);
-                self.error_help(
-                    "E0253",
-                    span,
-                    format!(
-                        "no `{}` operator for the type parameter `{pn}`",
-                        op_symbol(op)
-                    ),
-                    "arithmetic bounds on type parameters arrive in a later release; \
-                     take concrete numeric types for now",
-                );
-                Type::Error
-            }
-            Type::Error | Type::Never => Type::Error,
-            other => {
-                let ts = self.ty_str(other);
-                let help = if matches!(other, Type::Str) {
-                    "strings support `+` for concatenation only"
-                } else {
-                    "arithmetic operators work on int and float \
-                     (and types implementing the operator traits)"
-                };
-                self.error_help(
-                    "E0234",
-                    span,
-                    format!("no `{}` operator for `{ts}`", op_symbol(op)),
-                    help,
-                );
-                Type::Error
-            }
-        }
-    }
-
-    fn check_eq(&mut self, e: &Expr, negate: bool, lhs: &Expr, rhs: &Expr) -> Type {
-        let lt = self.check_expr(lhs, None);
-        let rt = self.check_expr(rhs, Some(&lt));
-        self.unify_or_err(
-            &lt,
-            &rt,
-            rhs.span,
-            "both sides of a comparison must have the same type",
-        );
-        // Unit values compare as the number they are stored in; the unify
-        // above has already ruled out mixing families.
-        let t = self.backing_type(&lt);
-        let kind = match &t {
-            Type::Int => Some(PrimKind::Int),
-            Type::Float => Some(PrimKind::Float),
-            Type::Bool => Some(PrimKind::Bool),
-            Type::Char => Some(PrimKind::Char),
-            Type::Str => Some(PrimKind::Str),
-            _ => None,
-        };
-        if let Some(kind) = kind {
-            self.out
-                .bin_ops
-                .insert(e.id, BinOpKind::EqPrim { kind, negate });
-            return Type::Bool;
-        }
-        match &t {
-            Type::Named(def) => {
-                let def = *def;
-                if let Some(&proto) = self.out.impl_maps.eq.get(&def.0) {
-                    self.out
-                        .bin_ops
-                        .insert(e.id, BinOpKind::EqCall { proto, negate });
-                    Type::Bool
-                } else if self.named_has_eq(def) {
-                    self.out.bin_ops.insert(e.id, BinOpKind::EqValue { negate });
-                    Type::Bool
-                } else {
-                    let name = self.out.defs.name_of(def).to_string();
-                    self.error_help(
-                        "E0235",
-                        e.span,
-                        format!("`==` on `{name}` requires an `Eq` implementation"),
-                        format!(
-                            "add `#[derive(Eq)]` to `{name}`, or `impl Eq for {name}`; \
-                             for reference identity use `same(a, b)` (PRD §3.7)"
-                        ),
-                    );
-                    Type::Error
-                }
-            }
-            Type::Option(_) | Type::Result(..) | Type::List(_) | Type::Map(..) => {
-                if self.eq_able(&t) {
-                    self.out.bin_ops.insert(e.id, BinOpKind::EqValue { negate });
-                    Type::Bool
-                } else {
-                    let ts = self.ty_str(&t);
-                    self.error_help(
-                        "E0235",
-                        e.span,
-                        format!("`==` on `{ts}` requires the element type to support `==`"),
-                        "element types must be primitives, strings, or Eq types",
-                    );
-                    Type::Error
-                }
-            }
-            Type::Param(i) => {
-                if self.param_has_bound(*i, super::BoundKind::Eq) {
-                    self.out.bin_ops.insert(e.id, BinOpKind::EqValue { negate });
-                    Type::Bool
-                } else {
-                    let pn = self.param_name(*i);
-                    self.error_help(
-                        "E0253",
-                        e.span,
-                        format!("`==` on `{pn}` requires an `Eq` bound"),
-                        format!("declare the parameter with a bound: `[{pn}: Eq]`"),
-                    );
-                    Type::Error
-                }
-            }
-            Type::Unit => {
-                self.error_help(
-                    "E0235",
-                    e.span,
-                    "cannot compare unit values",
-                    "`unit` has only one value; the comparison is always true",
-                );
-                Type::Error
-            }
-            Type::Error | Type::Never | Type::Var(_) => {
-                // Unconstrained: accept and lower to structural equality.
-                self.out.bin_ops.insert(e.id, BinOpKind::EqValue { negate });
-                Type::Bool
-            }
-            other => {
-                let ts = self.ty_str(other);
-                self.error_help(
-                    "E0235",
-                    e.span,
-                    format!("`==` is not supported for `{ts}`"),
-                    "function, weak and dyn values support `same(a, b)` reference \
-                     identity only",
-                );
-                Type::Error
-            }
-        }
-    }
-
-    fn check_cmp(&mut self, e: &Expr, op: BinOp, lhs: &Expr, rhs: &Expr) -> Type {
-        let lt = self.check_expr(lhs, None);
-        let rt = self.check_expr(rhs, Some(&lt));
-        self.unify_or_err(
-            &lt,
-            &rt,
-            rhs.span,
-            "both sides of a comparison must have the same type",
-        );
-        // Unit values compare as the number they are stored in; the unify
-        // above has already ruled out mixing families.
-        let t = self.backing_type(&lt);
-        let kind = match &t {
-            Type::Int => Some(PrimKind::Int),
-            Type::Float => Some(PrimKind::Float),
-            Type::Char => Some(PrimKind::Char),
-            Type::Str => Some(PrimKind::Str),
-            _ => None,
-        };
-        if let Some(kind) = kind {
-            self.out
-                .bin_ops
-                .insert(e.id, BinOpKind::CmpPrim { kind, op });
-            return Type::Bool;
-        }
-        match &t {
-            Type::Var(_) => {
-                if self.infer.unify(&Type::Int, &t).is_ok() {
-                    self.out.bin_ops.insert(
-                        e.id,
-                        BinOpKind::CmpPrim {
-                            kind: PrimKind::Int,
-                            op,
-                        },
-                    );
-                    Type::Bool
-                } else {
-                    Type::Error
-                }
-            }
-            Type::Named(def) => {
-                let def = *def;
-                if let Some(&proto) = self.out.impl_maps.cmp.get(&def.0) {
-                    self.out
-                        .bin_ops
-                        .insert(e.id, BinOpKind::CmpCall { proto, op });
-                    Type::Bool
-                } else if self.derives.get(&def).is_some_and(|d| d.ord) {
-                    self.out.bin_ops.insert(e.id, BinOpKind::CmpValue { op });
-                    Type::Bool
-                } else {
-                    let name = self.out.defs.name_of(def).to_string();
-                    self.error_help(
-                        "E0235",
-                        e.span,
-                        format!("ordering comparison on `{name}` requires `Ord`"),
-                        format!("add `#[derive(Eq, Ord)]` to `{name}`, or `impl Ord for {name}`"),
-                    );
-                    Type::Error
-                }
-            }
-            Type::Param(i) => {
-                if self.param_has_bound(*i, super::BoundKind::Ord) {
-                    self.out.bin_ops.insert(e.id, BinOpKind::CmpValue { op });
-                    Type::Bool
-                } else {
-                    let pn = self.param_name(*i);
-                    self.error_help(
-                        "E0253",
-                        e.span,
-                        format!("ordering comparison on `{pn}` requires an `Ord` bound"),
-                        format!("declare the parameter with a bound: `[{pn}: Ord]`"),
-                    );
-                    Type::Error
-                }
-            }
-            Type::Error | Type::Never => Type::Error,
-            other => {
-                let ts = self.ty_str(other);
-                self.error(
-                    "E0235",
-                    e.span,
-                    format!("ordering comparison is not supported for `{ts}`"),
-                );
-                Type::Error
-            }
         }
     }
 
@@ -1467,30 +971,17 @@ impl<'a> Checker<'a> {
                 Some(op) => {
                     // `place op= value` — the operator runs between the
                     // place's current value and `value`; the lowering is
-                    // recorded under the Assign node's id.
-                    //
-                    // Unit places follow the same relaxed operand rules as
-                    // the binary form, so `d *= 2` and `d += 500ms` both
-                    // work; the result must still land back in the place.
-                    if let Some(result) = self.check_unit_arith(e, op, &place_ty, value) {
-                        self.unify_or_err(
-                            &place_ty,
-                            &result,
-                            e.span,
-                            "compound assignment must produce a value of the place's \
-                             own unit family",
-                        );
-                        return Type::Unit;
-                    }
-                    let vt = self.check_expr(value, Some(&place_ty));
+                    // recorded under the Assign node's id. Unit places
+                    // follow the same relaxed operand rules as the binary
+                    // form, so `d *= 2` and `d += 500ms` both work; the
+                    // result must still land back in the place.
+                    let result = self.check_compound(e.id, e.span, op, &place_ty, value);
                     self.unify_or_err(
                         &place_ty,
-                        &vt,
-                        value.span,
-                        "compound assignment requires the value to match the place's \
-                         type (use `int(x)` / `float(x)` to convert)",
+                        &result,
+                        e.span,
+                        "compound assignment must produce a value of the place's own type",
                     );
-                    self.arith_result(e.id, e.span, op, &place_ty);
                 }
             }
         }
@@ -3013,23 +2504,5 @@ impl<'a> Checker<'a> {
 
         self.out.closures.insert(e.id, super::ClosureRes { proto });
         Type::Fn(Box::new(FnSig::new(param_tys, self.resolve(&ret_ty))))
-    }
-}
-
-fn op_symbol(op: BinOp) -> &'static str {
-    match op {
-        BinOp::Add => "+",
-        BinOp::Sub => "-",
-        BinOp::Mul => "*",
-        BinOp::Div => "/",
-        BinOp::Rem => "%",
-        BinOp::Eq => "==",
-        BinOp::Ne => "!=",
-        BinOp::Lt => "<",
-        BinOp::Le => "<=",
-        BinOp::Gt => ">",
-        BinOp::Ge => ">=",
-        BinOp::And => "&&",
-        BinOp::Or => "||",
     }
 }

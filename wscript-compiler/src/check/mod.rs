@@ -8,6 +8,7 @@ mod env;
 mod expr;
 mod infer;
 mod methods;
+mod ops;
 mod pat;
 
 use std::collections::{HashMap, HashSet};
@@ -130,7 +131,7 @@ pub enum PrimKind {
 }
 
 /// Resolved lowering of a binary operator.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOpKind {
     IntArith(BinOp),
     FloatArith(BinOp),
@@ -170,7 +171,7 @@ pub enum BinOpKind {
     },
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnOpKind {
     NegInt,
     NegFloat,
