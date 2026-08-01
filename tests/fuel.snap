@@ -1,0 +1,78 @@
+# Fuel charged by every case in the corpus, in dispatched instructions
+# (PRD §5.2) — the metered dispatch loop charges a straight-line block at
+# a time, so a number is an instruction count, not a count of the points
+# where fuel was taken.
+#
+# Regenerate with `just fuel-regen`, then read the diff. A number moving is
+# a behavioural change, not a detail: a host with a per-tick budget sees it
+# as a script that suddenly faults, or one that suddenly does not.
+#
+# One line per case — `<name> <fuel> <outcome>`. Outcomes:
+#   ok             `main` returned; the cost is exact
+#   exit           `process::exit`; the cost is exact
+#   fault          a runtime fault — a fault abandons its straight-line
+#                  block uncharged, so this is the fuel charged, not the
+#                  fuel a completed run would have cost
+#   host-error     the call failed at the host boundary (conversion or
+#                  signature) rather than in the script
+#   compile-error  never ran (an `_err` fixture); its snapshot is the
+#                  diagnostic one
+
+ergo_assoc_fns 69 ok
+ergo_assoc_fns_err - compile-error
+ergo_compound_assign 122 ok
+ergo_fmt_spec_err - compile-error
+ergo_fmt_specs 68 ok
+lang_generics 271 ok
+lang_generics_err - compile-error
+lang_generics_err2 - compile-error
+lang_interpolation 113 ok
+lang_interpolation_err - compile-error
+lang_interpolation_err2 - compile-error
+lang_units 203 ok
+lang_units_err - compile-error
+lang_units_err2 - compile-error
+lang_units_err3 - compile-error
+lang_units_err4 - compile-error
+m1_arithmetic 39 ok
+m1_control_flow 204 ok
+m1_fault_div_zero 0 fault
+m1_fault_stacktrace 8 fault
+m1_functions 50 ok
+m1_newlines 31 ok
+m1_strings 15 ok
+m2_closures 73 ok
+m2_containers 106 ok
+m2_enums_match 103 ok
+m2_exhaustiveness - compile-error
+m2_for_loops 222 ok
+m2_option_result 251 ok
+m2_strings 46 ok
+m2_structs 60 ok
+m3_cycle_eq_fault 217 fault
+m3_cycle_identity_ok 32 ok
+m3_cycle_print_clone_fault 209 fault
+m3_derives 73 ok
+m3_operators 109 ok
+m3_rc_semantics 110 ok
+m3_traits 75 ok
+m5_fs 79 ok
+m5_fs_metadata 90 ok
+m5_json 56 ok
+m5_math 53 ok
+m5_process 32 ok
+m5_process_exit 5 exit
+m5_regex 92 ok
+m5_regex_fault 3 fault
+m5_time 29 ok
+m5_toml_xml 114 ok
+std_combinators_err - compile-error
+std_list_combinators 357 ok
+std_map_combinators 90 ok
+#
+# Host re-entry: a host function calling back into the VM through a
+# ScriptClosure, which no corpus script can reach — the stdlib registers no
+# closure-taking host function. See `callbacks()` in fuel_snapshot.rs.
+host:callback_ok 10 ok
+host:callback_fault 3 fault
+host:callback_caught 5 ok

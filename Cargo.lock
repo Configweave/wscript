@@ -1537,6 +1537,7 @@ dependencies = [
  "tower-lsp-server",
  "wscript",
  "wscript-compiler",
+ "wscript-core",
  "wscript-std",
  "wscript-vm",
 ]

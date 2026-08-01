@@ -530,6 +530,12 @@ fn fuel_exhaustion_faults_with_trace() {
 fn fuel_exact_budget() {
     // Golden instruction count for a fixed script — doubles as a
     // bytecode-stability canary: if codegen changes, update K.
+    //
+    // This is the one case whose number is arrived at by hand, and it
+    // stays that way: it reasons about an exact cost for one straight-line
+    // block. Every other cost — every jump, call, return, host call,
+    // re-entry and structural walk in the corpus — is recorded in
+    // `tests/fuel.snap` by `wscript-cli/tests/fuel_snapshot.rs`.
     const K: u64 = 4;
     let ctx = Context::new();
     let unit = ctx.compile("fn main() -> int { 1 + 2 }").unwrap();
