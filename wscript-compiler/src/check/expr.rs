@@ -9,8 +9,8 @@ use crate::ast::*;
 use super::methods::{self, SchemeConstraint};
 use super::ops;
 use super::{
-    BinOpKind, CallKind, Checker, ConvKind, ForKind, IndexKind, MethodRes, PathRes, PreludeFn,
-    StructLitRes, TryKind, UnOpKind,
+    BinOpKind, CallKind, Checker, ConvKind, ForKind, IndexKind, Lowering, MethodRes, PathRes,
+    PreludeFn, StructLitRes, TryKind, UnOpKind,
 };
 
 /// AST-depth budget for `check_expr` — the backstop behind the parser's
@@ -271,7 +271,7 @@ impl<'a> Checker<'a> {
     ) -> Type {
         match self.fold_quantity(e.span, value, unit, expect) {
             Some((def, folded)) => {
-                self.out.quantity_lits.insert(e.id, folded);
+                self.out.set_lowering(e.id, Lowering::QuantityLit(folded));
                 Type::Named(def)
             }
             None => Type::Error,
@@ -568,7 +568,7 @@ impl<'a> Checker<'a> {
         match segments {
             [single] => {
                 if let Some((res, ty)) = self.lookup_var(&single.name) {
-                    self.out.var_refs.insert(e.id, res);
+                    self.out.set_lowering(e.id, Lowering::Var(res));
                     if let Some(span) = self.lookup_var_span(&single.name) {
                         self.out.def_spans.insert(e.id, span);
                     }
@@ -585,7 +585,8 @@ impl<'a> Checker<'a> {
                 }
                 match self.imported(&single.name) {
                     Some(super::ImportedRef::Const(ty, c)) => {
-                        self.out.paths.insert(e.id, PathRes::Const(c));
+                        self.out
+                            .set_lowering(e.id, Lowering::Path(PathRes::Const(c)));
                         return ty;
                     }
                     Some(super::ImportedRef::HostFn(_)) => {
@@ -606,12 +607,12 @@ impl<'a> Checker<'a> {
                     return self.script_fn_value(e, proto, &single.name);
                 }
                 if single.name == "None" {
-                    self.out.paths.insert(
+                    self.out.set_lowering(
                         e.id,
-                        PathRes::Variant {
+                        Lowering::Path(PathRes::Variant {
                             def: defs::DEF_OPTION,
                             tag: defs::TAG_NONE,
-                        },
+                        }),
                     );
                     return Type::Option(Box::new(self.infer.fresh()));
                 }
@@ -743,7 +744,8 @@ impl<'a> Checker<'a> {
                 }
             }
             Some(Err((ty, c))) => {
-                self.out.paths.insert(e.id, PathRes::Const(c));
+                self.out
+                    .set_lowering(e.id, Lowering::Path(PathRes::Const(c)));
                 ty
             }
             None => {
@@ -775,7 +777,8 @@ impl<'a> Checker<'a> {
         };
         match vdef_kind {
             VariantKind::Unit => {
-                self.out.paths.insert(e.id, PathRes::Variant { def, tag });
+                self.out
+                    .set_lowering(e.id, Lowering::Path(PathRes::Variant { def, tag }));
                 self.enum_value_type(def)
             }
             VariantKind::Tuple => {
@@ -857,7 +860,7 @@ impl<'a> Checker<'a> {
                 let t = self.check_expr(operand, None);
                 let rt = self.resolve(&t);
                 self.expect_bool(&rt, operand.span, "the operand of `!`");
-                self.out.un_ops.insert(e.id, UnOpKind::Not);
+                self.out.set_lowering(e.id, Lowering::UnOp(UnOpKind::Not));
                 Type::Bool
             }
             UnOp::Neg => self.check_neg(e, operand),
@@ -872,13 +875,13 @@ impl<'a> Checker<'a> {
                 self.expect_bool(&lt, lhs.span, "the left operand of a logical operator");
                 let rt = self.check_expr(rhs, Some(&Type::Bool));
                 self.expect_bool(&rt, rhs.span, "the right operand of a logical operator");
-                self.out.bin_ops.insert(
+                self.out.set_lowering(
                     e.id,
-                    if op == And {
+                    Lowering::BinOp(if op == And {
                         BinOpKind::And
                     } else {
                         BinOpKind::Or
-                    },
+                    }),
                 );
                 Type::Bool
             }
@@ -923,7 +926,7 @@ impl<'a> Checker<'a> {
         let place_ty = match &target.kind {
             ExprKind::Path(segments) if segments.len() == 1 => {
                 let target_ty = self.check_expr(target, None);
-                if self.out.var_refs.contains_key(&target.id) {
+                if matches!(self.out.lowering(target.id), Some(Lowering::Var(_))) {
                     Some(target_ty)
                 } else {
                     if !matches!(target_ty, Type::Error) {
@@ -941,7 +944,9 @@ impl<'a> Checker<'a> {
             ExprKind::Field { .. } => Some(self.check_expr(target, None)),
             ExprKind::Index { .. } => {
                 let elem_ty = self.check_expr(target, None);
-                if let Some(IndexKind::UserGet { .. }) = self.out.indexes.get(&target.id) {
+                if let Some(Lowering::Index(IndexKind::UserGet { .. })) =
+                    self.out.lowering(target.id)
+                {
                     self.error_help(
                         "E0236",
                         target.span,
@@ -1001,7 +1006,7 @@ impl<'a> Checker<'a> {
         // a function value.
         if let ExprKind::Path(segments) = &callee.kind {
             if let Some((kind, ret)) = self.resolve_call_path(e, callee, segments, args, expect) {
-                self.out.calls.insert(e.id, kind);
+                self.out.set_lowering(e.id, kind);
                 return ret;
             }
             return Type::Error;
@@ -1021,7 +1026,7 @@ impl<'a> Checker<'a> {
         match t {
             Type::Fn(sig) => {
                 self.check_args(e.span, "this function", &sig.params, args);
-                self.out.calls.insert(e.id, CallKind::Value);
+                self.out.set_lowering(e.id, Lowering::Call(CallKind::Value));
                 sig.ret.clone()
             }
             Type::Error | Type::Never => Type::Error,
@@ -1076,25 +1081,25 @@ impl<'a> Checker<'a> {
         segments: &[Ident],
         args: &[Expr],
         expect: Option<&Type>,
-    ) -> Option<(CallKind, Type)> {
+    ) -> Option<(Lowering, Type)> {
         let _ = &expect;
         match segments {
             [single] => {
                 // Locals (closure values) shadow functions.
                 if let Some((res, ty)) = self.lookup_var(&single.name) {
-                    self.out.var_refs.insert(callee.id, res);
+                    self.out.set_lowering(callee.id, Lowering::Var(res));
                     if let Some(span) = self.lookup_var_span(&single.name) {
                         self.out.def_spans.insert(callee.id, span);
                     }
                     self.record_type(callee.id, ty.clone());
                     let ret = self.check_value_call(e, &ty, callee.span, args);
-                    return Some((CallKind::Value, ret));
+                    return Some((Lowering::Call(CallKind::Value), ret));
                 }
                 match self.imported(&single.name) {
                     Some(super::ImportedRef::HostFn(idx)) => {
                         let sig = self.reg.host_fns[idx as usize].sig.clone();
                         self.check_args(e.span, &format!("`{}`", single.name), &sig.params, args);
-                        return Some((CallKind::Host(idx), sig.ret));
+                        return Some((Lowering::Call(CallKind::Host(idx)), sig.ret));
                     }
                     Some(super::ImportedRef::ScriptFn(proto)) => {
                         return Some(self.script_fn_call(
@@ -1117,10 +1122,10 @@ impl<'a> Checker<'a> {
                         let t = self.infer.fresh();
                         self.check_args(e.span, "`Some`", std::slice::from_ref(&t), args);
                         return Some((
-                            CallKind::Variant {
+                            Lowering::Call(CallKind::Variant {
                                 def: defs::DEF_OPTION,
                                 tag: defs::TAG_SOME,
-                            },
+                            }),
                             Type::Option(Box::new(t)),
                         ));
                     }
@@ -1128,10 +1133,10 @@ impl<'a> Checker<'a> {
                         let t = self.infer.fresh();
                         self.check_args(e.span, "`Ok`", std::slice::from_ref(&t), args);
                         return Some((
-                            CallKind::Variant {
+                            Lowering::Call(CallKind::Variant {
                                 def: defs::DEF_RESULT,
                                 tag: defs::TAG_OK,
-                            },
+                            }),
                             Type::Result(Box::new(t), Box::new(self.infer.fresh())),
                         ));
                     }
@@ -1139,10 +1144,10 @@ impl<'a> Checker<'a> {
                         let t = self.infer.fresh();
                         self.check_args(e.span, "`Err`", std::slice::from_ref(&t), args);
                         return Some((
-                            CallKind::Variant {
+                            Lowering::Call(CallKind::Variant {
                                 def: defs::DEF_RESULT,
                                 tag: defs::TAG_ERR,
-                            },
+                            }),
                             Type::Result(Box::new(self.infer.fresh()), Box::new(t)),
                         ));
                     }
@@ -1150,7 +1155,7 @@ impl<'a> Checker<'a> {
                 }
                 if let Some(p) = Self::prelude_fn(&single.name) {
                     let ret = self.check_prelude_call(e, p, args)?;
-                    return Some((CallKind::Prelude(p), ret));
+                    return Some((Lowering::Call(CallKind::Prelude(p)), ret));
                 }
                 let name = single.name.clone();
                 self.error_help(
@@ -1187,7 +1192,7 @@ impl<'a> Checker<'a> {
                                 &sig.params,
                                 args,
                             );
-                            return Some((CallKind::Host(idx), sig.ret));
+                            return Some((Lowering::Call(CallKind::Host(idx)), sig.ret));
                         }
                         Some(Err((ty, _))) => {
                             let ts = self.ty_str(&ty);
@@ -1286,7 +1291,8 @@ impl<'a> Checker<'a> {
     /// `let f = mod::helper`): one erased proto serves generic fns too —
     /// instantiate with fresh vars and let the context bind them.
     fn script_fn_value(&mut self, e: &Expr, proto: u32, name: &str) -> Type {
-        self.out.paths.insert(e.id, PathRes::FnValue(proto));
+        self.out
+            .set_lowering(e.id, Lowering::Path(PathRes::FnValue(proto)));
         let info = &self.out.fn_infos[proto as usize];
         self.out.def_spans.insert(e.id, info.span);
         let sig = info.sig.clone();
@@ -1323,17 +1329,17 @@ impl<'a> Checker<'a> {
         label: &str,
         args: &[Expr],
         expect: Option<&Type>,
-    ) -> (CallKind, Type) {
+    ) -> (Lowering, Type) {
         let info = &self.out.fn_infos[proto as usize];
         self.out.def_spans.insert(callee.id, info.span);
         let sig = info.sig.clone();
         if !info.type_params.is_empty() {
             let type_params = info.type_params.clone();
             let ret = self.check_generic_call(e, label, &type_params, &sig, args, expect);
-            return (CallKind::Proto(proto), ret);
+            return (Lowering::Call(CallKind::Proto(proto)), ret);
         }
         self.check_args(e.span, &format!("`{label}`"), &sig.params, args);
-        (CallKind::Proto(proto), sig.ret)
+        (Lowering::Call(CallKind::Proto(proto)), sig.ret)
     }
 
     /// A call to a generic fn: instantiate its type parameters with
@@ -1431,7 +1437,7 @@ impl<'a> Checker<'a> {
         ty_name: &Ident,
         fn_name: &Ident,
         args: &[Expr],
-    ) -> Option<(CallKind, Type)> {
+    ) -> Option<(Lowering, Type)> {
         let &proto = self.assoc.get(&def)?.get(&fn_name.name)?;
         let info = &self.out.fn_infos[proto as usize];
         self.out.def_spans.insert(callee.id, info.span);
@@ -1442,7 +1448,7 @@ impl<'a> Checker<'a> {
             &sig.params,
             args,
         );
-        Some((CallKind::Proto(proto), sig.ret))
+        Some((Lowering::Call(CallKind::Proto(proto)), sig.ret))
     }
 
     /// `Duration::ms(n)` — build a unit value from a number that isn't a
@@ -1453,14 +1459,16 @@ impl<'a> Checker<'a> {
         def: DefId,
         unit: &Ident,
         args: &[Expr],
-    ) -> Option<(CallKind, Type)> {
+    ) -> Option<(Lowering, Type)> {
         let u = self.out.defs.as_unit(def)?;
         let factor = u.factor_of(&unit.name)?;
         let (base, family) = (u.base.clone(), u.name.clone());
         let label = format!("`{family}::{}`", unit.name);
         self.check_args(e.span, &label, std::slice::from_ref(&base), args);
-        self.out.unit_convs.insert(e.id, ConvKind::In { factor });
-        Some((CallKind::UnitConv, Type::Named(def)))
+        Some((
+            Lowering::UnitConv(ConvKind::In { factor }),
+            Type::Named(def),
+        ))
     }
 
     fn check_variant_ctor(
@@ -1469,7 +1477,7 @@ impl<'a> Checker<'a> {
         def: DefId,
         variant: &Ident,
         args: &[Expr],
-    ) -> Option<(CallKind, Type)> {
+    ) -> Option<(Lowering, Type)> {
         let Some((tag, kind, _)) = self.variant_info(def, &variant.name) else {
             let enum_name = self.out.defs.name_of(def).to_string();
             let vname = variant.name.clone();
@@ -1490,7 +1498,7 @@ impl<'a> Checker<'a> {
                     &payload,
                     args,
                 );
-                Some((CallKind::Variant { def, tag }, result_ty))
+                Some((Lowering::Call(CallKind::Variant { def, tag }), result_ty))
             }
             VariantKind::Unit => {
                 let vname = variant.name.clone();
@@ -1715,9 +1723,11 @@ impl<'a> Checker<'a> {
                     && args.is_empty()
                     && self.param_has_bound(i, super::BoundKind::Clone)
                 {
-                    self.out.methods.insert(
+                    self.out.set_lowering(
                         e.id,
-                        MethodRes::Builtin(wscript_core::bytecode::Builtin::DeepClone),
+                        Lowering::Method(MethodRes::Builtin(
+                            wscript_core::bytecode::Builtin::DeepClone,
+                        )),
                     );
                     return rt.clone();
                 }
@@ -1841,7 +1851,8 @@ impl<'a> Checker<'a> {
                 builtin = wscript_core::bytecode::Builtin::ListSumFloat;
             }
         }
-        self.out.methods.insert(e.id, MethodRes::Builtin(builtin));
+        self.out
+            .set_lowering(e.id, Lowering::Method(MethodRes::Builtin(builtin)));
         ret
     }
 
@@ -1850,7 +1861,8 @@ impl<'a> Checker<'a> {
         if let Some(&proto) = self.inherent.get(&def).and_then(|m| m.get(&name.name)) {
             let sig = self.out.fn_infos[proto as usize].sig.clone();
             self.check_args(e.span, &format!("`{}`", name.name), &sig.params[1..], args);
-            self.out.methods.insert(e.id, MethodRes::Proto(proto));
+            self.out
+                .set_lowering(e.id, Lowering::Method(MethodRes::Proto(proto)));
             return sig.ret;
         }
         // 2. Host-registered methods.
@@ -1860,7 +1872,8 @@ impl<'a> Checker<'a> {
             let sig = m.sig.clone();
             let idx = m.host_idx;
             self.check_args(e.span, &format!("`{}`", name.name), &sig.params, args);
-            self.out.methods.insert(e.id, MethodRes::Host(idx));
+            self.out
+                .set_lowering(e.id, Lowering::Method(MethodRes::Host(idx)));
             return sig.ret;
         }
         // 3. Trait-impl methods (static dispatch on the concrete type).
@@ -1895,15 +1908,17 @@ impl<'a> Checker<'a> {
         if let Some((_, _, proto)) = candidates.pop() {
             let sig = self.out.fn_infos[proto as usize].sig.clone();
             self.check_args(e.span, &format!("`{}`", name.name), &sig.params[1..], args);
-            self.out.methods.insert(e.id, MethodRes::Proto(proto));
+            self.out
+                .set_lowering(e.id, Lowering::Method(MethodRes::Proto(proto)));
             return sig.ret;
         }
         // 4. Derived clone.
         if name.name == "clone" && self.derives.get(&def).is_some_and(|d| d.clone) {
             self.check_args(e.span, "`clone`", &[], args);
-            self.out
-                .methods
-                .insert(e.id, MethodRes::Builtin(wscript_core::Builtin::DeepClone));
+            self.out.set_lowering(
+                e.id,
+                Lowering::Method(MethodRes::Builtin(wscript_core::Builtin::DeepClone)),
+            );
             return Type::Named(def);
         }
         let ty_name = self.out.defs.name_of(def).to_string();
@@ -1952,9 +1967,10 @@ impl<'a> Checker<'a> {
         };
         let sig = td.methods[slot].1.clone();
         self.check_args(e.span, &format!("`{}`", name.name), &sig.params, args);
-        self.out
-            .methods
-            .insert(e.id, MethodRes::Virtual { slot: slot as u16 });
+        self.out.set_lowering(
+            e.id,
+            Lowering::Method(MethodRes::Virtual { slot: slot as u16 }),
+        );
         sig.ret
     }
 
@@ -1981,7 +1997,8 @@ impl<'a> Checker<'a> {
                     match s.fields.iter().position(|(n, _)| *n == name.name) {
                         Some(idx) => {
                             let ty = s.fields[idx].1.clone();
-                            self.out.fields.insert(e.id, idx as u16);
+                            self.out
+                                .set_lowering(e.id, Lowering::Field { idx: idx as u16 });
                             ty
                         }
                         None => {
@@ -2020,7 +2037,8 @@ impl<'a> Checker<'a> {
                 DefKind::Unit(u) => match u.factor_of(&name.name) {
                     Some(factor) => {
                         let base = u.base.clone();
-                        self.out.unit_convs.insert(e.id, ConvKind::Out { factor });
+                        self.out
+                            .set_lowering(e.id, Lowering::UnitConv(ConvKind::Out { factor }));
                         base
                     }
                     None => {
@@ -2062,12 +2080,13 @@ impl<'a> Checker<'a> {
             Type::List(elem) => {
                 let it = self.check_expr(idx, Some(&Type::Int));
                 self.unify_or_err(&Type::Int, &it, idx.span, "list indices are `int`");
-                self.out.indexes.insert(e.id, IndexKind::List);
+                self.out
+                    .set_lowering(e.id, Lowering::Index(IndexKind::List));
                 (**elem).clone()
             }
             Type::Map(k, v) => {
                 self.check_coerce(idx, &k.clone());
-                self.out.indexes.insert(e.id, IndexKind::Map);
+                self.out.set_lowering(e.id, Lowering::Index(IndexKind::Map));
                 (**v).clone()
             }
             Type::Str => {
@@ -2089,7 +2108,8 @@ impl<'a> Checker<'a> {
                     // sig.params[0] = receiver, [1] = index type.
                     let idx_ty = sig.params.get(1).cloned().unwrap_or(Type::Error);
                     self.check_coerce(idx, &idx_ty);
-                    self.out.indexes.insert(e.id, IndexKind::UserGet { proto });
+                    self.out
+                        .set_lowering(e.id, Lowering::Index(IndexKind::UserGet { proto }));
                     sig.ret
                 } else {
                     let name = self.out.defs.name_of(def).to_string();
@@ -2295,8 +2315,13 @@ impl<'a> Checker<'a> {
                 "every field must be initialized",
             );
         }
-        self.out.struct_lits.insert(e.id, lit_res);
-        self.out.field_orders.insert(e.id, order);
+        self.out.set_lowering(
+            e.id,
+            Lowering::StructLit {
+                res: lit_res,
+                order,
+            },
+        );
         result_ty
     }
 
@@ -2344,7 +2369,7 @@ impl<'a> Checker<'a> {
                 }
             }
         };
-        self.out.for_kinds.insert(e.id, kind);
+        self.out.set_lowering(e.id, Lowering::For(kind));
         self.in_scope(|c| {
             let local = c.declare_local(var, elem_ty);
             c.out.decl_locals.insert(e.id, local);
@@ -2374,7 +2399,7 @@ impl<'a> Checker<'a> {
                          with `match`/`if let`",
                     );
                 }
-                self.out.try_kinds.insert(e.id, TryKind::Option);
+                self.out.set_lowering(e.id, Lowering::Try(TryKind::Option));
                 *payload
             }
             Type::Result(payload, err) => {
@@ -2403,7 +2428,7 @@ impl<'a> Checker<'a> {
                         );
                     }
                 }
-                self.out.try_kinds.insert(e.id, TryKind::Result);
+                self.out.set_lowering(e.id, Lowering::Try(TryKind::Result));
                 *payload
             }
             Type::Error | Type::Never => Type::Error,
@@ -2502,7 +2527,8 @@ impl<'a> Checker<'a> {
             }
         }
 
-        self.out.closures.insert(e.id, super::ClosureRes { proto });
+        self.out
+            .set_lowering(e.id, Lowering::Closure(super::ClosureRes { proto }));
         Type::Fn(Box::new(FnSig::new(param_tys, self.resolve(&ret_ty))))
     }
 }

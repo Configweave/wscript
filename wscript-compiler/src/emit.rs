@@ -418,7 +418,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
     fn emit_value(&mut self, e: &Expr) -> u16 {
         if !self.em.res.dyn_wraps.contains_key(&e.id)
             && let ExprKind::Path(_) = &e.kind
-            && let Some(VarRes::Local(l)) = self.em.res.var_refs.get(&e.id)
+            && let Some(VarRes::Local(l)) = self.em.res.var_ref(e.id)
             && !self.captured.contains(l)
         {
             return self.local_reg(*l);
@@ -442,7 +442,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
         match &e.kind {
             ExprKind::IntLit(n) => self.emit_int(*n, dst),
             // Already folded into base units by the checker.
-            ExprKind::QuantityLit { .. } => match self.em.res.quantity_lits.get(&e.id) {
+            ExprKind::QuantityLit { .. } => match self.em.res.quantity_lit(e.id).as_ref() {
                 Some(Factor::Int(n)) => self.emit_int(*n, dst),
                 Some(Factor::Float(f)) => {
                     let k = self.em.intern_const(Const::Float(*f));
@@ -486,16 +486,16 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
             ExprKind::Field { obj, .. } => {
                 // `d.ms` on a unit value is a constant divide, not a field
                 // read — unit values are plain numbers at runtime.
-                if let Some(&conv) = self.em.res.unit_convs.get(&e.id) {
+                if let Some(&conv) = self.em.res.unit_conv(e.id).as_ref() {
                     self.emit_unit_conv(obj, conv, dst);
                     return;
                 }
                 let o = self.emit_value(obj);
-                let idx = *self.em.res.fields.get(&e.id).unwrap_or(&0);
+                let idx = self.em.res.field_idx(e.id).unwrap_or(0);
                 self.push(Instr::GetField { dst, obj: o, idx });
             }
             ExprKind::Index { obj, idx } => {
-                let kind = self.em.res.indexes.get(&e.id).cloned();
+                let kind = self.em.res.index(e.id).cloned();
                 match kind {
                     Some(IndexKind::List) => {
                         let o = self.emit_value(obj);
@@ -670,8 +670,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
                 let proto = self
                     .em
                     .res
-                    .closures
-                    .get(&e.id)
+                    .closure(e.id)
                     .map(|c| c.proto)
                     .expect("closure resolved");
                 self.em.ensure_proto(proto);
@@ -682,7 +681,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
                 self.emit_into(inner, v);
                 let tag = self.alloc_temp();
                 self.push(Instr::GetTag { dst: tag, obj: v });
-                let propagate_tag = match self.em.res.try_kinds.get(&e.id) {
+                let propagate_tag = match self.em.res.try_kind(e.id) {
                     Some(TryKind::Result) => defs::TAG_ERR,
                     _ => defs::TAG_NONE,
                 };
@@ -717,7 +716,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
     }
 
     fn emit_path(&mut self, e: &Expr, dst: u16) {
-        if let Some(res) = self.em.res.var_refs.get(&e.id) {
+        if let Some(res) = self.em.res.var_ref(e.id) {
             match res {
                 VarRes::Local(l) => {
                     let src = self.local_reg(*l);
@@ -734,7 +733,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
             }
             return;
         }
-        match self.em.res.paths.get(&e.id) {
+        match self.em.res.path_res(e.id) {
             Some(PathRes::FnValue(proto)) => {
                 let proto = *proto;
                 self.em.ensure_proto(proto);
@@ -771,7 +770,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
     }
 
     fn emit_unary(&mut self, e: &Expr, operand: &Expr, dst: u16) {
-        let kind = self.em.res.un_ops.get(&e.id).copied();
+        let kind = self.em.res.un_op(e.id);
         match kind {
             Some(UnOpKind::NegInt) => {
                 let src = self.emit_value(operand);
@@ -803,7 +802,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
 
     fn emit_binary(&mut self, e: &Expr, lhs: &Expr, rhs: &Expr, dst: u16) {
         use crate::ast::BinOp as B;
-        let Some(kind) = self.em.res.bin_ops.get(&e.id).cloned() else {
+        let Some(kind) = self.em.res.bin_op(e.id) else {
             self.push(Instr::LoadUnit { dst });
             return;
         };
@@ -969,7 +968,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
         // under the Assign node's id. The place is evaluated ONCE — read
         // current value, apply the operator, write back.
         let arith = if compound {
-            self.em.res.bin_ops.get(&e.id).cloned()
+            self.em.res.bin_op(e.id)
         } else {
             None
         };
@@ -980,7 +979,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
             return;
         }
         match &target.kind {
-            ExprKind::Path(_) => match self.em.res.var_refs.get(&target.id) {
+            ExprKind::Path(_) => match self.em.res.var_ref(target.id) {
                 Some(VarRes::Local(l)) => {
                     let l = *l;
                     let reg = self.local_reg(l);
@@ -1029,7 +1028,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
             },
             ExprKind::Field { obj, .. } => {
                 let o = self.emit_value(obj);
-                let idx = *self.em.res.fields.get(&target.id).unwrap_or(&0);
+                let idx = self.em.res.field_idx(target.id).unwrap_or(0);
                 let tmp = self.alloc_temp();
                 if let Some(kind) = &arith {
                     let cur = self.alloc_temp();
@@ -1055,7 +1054,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
                 }
             }
             ExprKind::Index { obj, idx } => {
-                let index_kind = self.em.res.indexes.get(&target.id).cloned();
+                let index_kind = self.em.res.index(target.id).cloned();
                 let o = self.emit_value(obj);
                 let i = self.emit_value(idx);
                 let tmp = self.alloc_temp();
@@ -1234,7 +1233,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
     }
 
     fn emit_call(&mut self, e: &Expr, callee: &Expr, args: &[Expr], dst: u16) {
-        let kind = self.em.res.calls.get(&e.id).cloned();
+        let kind = self.em.res.call(e.id).cloned();
         match kind {
             Some(CallKind::Proto(proto)) => {
                 self.em.ensure_proto(proto);
@@ -1264,13 +1263,17 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
                     self.emit_args_call(args, dst, CallTarget::Builtin(builtin));
                 }
             }
-            // `Duration::ms(n)` — scale the one argument inline.
-            Some(CallKind::UnitConv) => match (self.em.res.unit_convs.get(&e.id), args) {
-                (Some(&conv), [arg]) => self.emit_unit_conv(arg, conv, dst),
-                _ => {
-                    self.push(Instr::LoadUnit { dst });
+            // `Duration::ms(n)` — scale the one argument inline. Not a
+            // call at all, so it is its own lowering rather than a
+            // `CallKind` whose factor lived in a second table.
+            None if self.em.res.unit_conv(e.id).is_some() => {
+                match (self.em.res.unit_conv(e.id), args) {
+                    (Some(conv), [arg]) => self.emit_unit_conv(arg, conv, dst),
+                    _ => {
+                        self.push(Instr::LoadUnit { dst });
+                    }
                 }
-            },
+            }
             Some(CallKind::Variant { def, tag }) => {
                 let base = self.alloc_window(args.len() as u16);
                 for (i, a) in args.iter().enumerate() {
@@ -1382,7 +1385,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
     }
 
     fn emit_method_call(&mut self, e: &Expr, recv: &Expr, args: &[Expr], dst: u16) {
-        let Some(res) = self.em.res.methods.get(&e.id).cloned() else {
+        let Some(res) = self.em.res.method(e.id).cloned() else {
             self.push(Instr::LoadUnit { dst });
             return;
         };
@@ -1430,17 +1433,11 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
     }
 
     fn emit_struct_lit(&mut self, e: &Expr, fields: &[(Ident, Expr)], dst: u16) {
-        let Some(res) = self.em.res.struct_lits.get(&e.id).cloned() else {
+        let Some((res, order)) = self.em.res.struct_lit(e.id) else {
             self.push(Instr::LoadUnit { dst });
             return;
         };
-        let order = self
-            .em
-            .res
-            .field_orders
-            .get(&e.id)
-            .cloned()
-            .unwrap_or_default();
+        let (res, order) = (res.clone(), order.to_vec());
         let n_fields = match &res {
             StructLitRes::Struct(def) => self
                 .em
@@ -1559,7 +1556,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
             // Folded to a base-unit constant by the checker; float-backed
             // families never reach here (they cannot be matched on).
             PatternKind::QuantityLit { .. } => {
-                if let Some(&Factor::Int(n)) = self.em.res.quantity_lits.get(&pat.id) {
+                if let Some(&Factor::Int(n)) = self.em.res.pat_quantity_lits.get(&pat.id) {
                     self.emit_int_pattern_test(n, reg, fails);
                 }
             }
@@ -1622,7 +1619,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
                         let order = self
                             .em
                             .res
-                            .field_orders
+                            .pat_field_orders
                             .get(&pat.id)
                             .cloned()
                             .unwrap_or_default();
@@ -1646,7 +1643,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
                 let order = self
                     .em
                     .res
-                    .field_orders
+                    .pat_field_orders
                     .get(&pat.id)
                     .cloned()
                     .unwrap_or_default();
@@ -1705,13 +1702,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
     // --------------------------------------------------------------- for
 
     fn emit_for(&mut self, e: &Expr, iter: &Expr, body: &Block, dst: u16) {
-        let kind = self
-            .em
-            .res
-            .for_kinds
-            .get(&e.id)
-            .copied()
-            .unwrap_or(ForKind::List);
+        let kind = self.em.res.for_kind(e.id).copied().unwrap_or(ForKind::List);
         let var_local = *self
             .em
             .res

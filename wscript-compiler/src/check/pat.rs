@@ -72,7 +72,7 @@ impl<'a> Checker<'a> {
                 };
                 match folded {
                     Factor::Int(_) => {
-                        self.out.quantity_lits.insert(pat.id, folded);
+                        self.out.pat_quantity_lits.insert(pat.id, folded);
                         self.unify_or_err(
                             &Type::Named(def),
                             expected,
@@ -360,7 +360,7 @@ impl<'a> Checker<'a> {
                 );
             }
         }
-        self.out.field_orders.insert(pat.id, order);
+        self.out.pat_field_orders.insert(pat.id, order);
     }
 
     /// Conservative refutability test (used for `if let` / `let else`
@@ -522,7 +522,7 @@ impl<'a> Checker<'a> {
             PatternKind::IntLit(n) => DPat::Ctor(Ctor::Int(*n), vec![]),
             // Unit patterns are erased to their base-unit constant, so they
             // share the int ctor space (and its exhaustiveness rules).
-            PatternKind::QuantityLit { .. } => match self.out.quantity_lits.get(&pat.id) {
+            PatternKind::QuantityLit { .. } => match self.out.pat_quantity_lits.get(&pat.id) {
                 Some(Factor::Int(n)) => DPat::Ctor(Ctor::Int(*n), vec![]),
                 _ => DPat::Wild,
             },
@@ -543,7 +543,7 @@ impl<'a> Checker<'a> {
                         }
                     }
                     VariantPatArgs::Struct { fields, .. } => {
-                        let order = self.out.field_orders.get(&pat.id);
+                        let order = self.out.pat_field_orders.get(&pat.id);
                         for (i, (_, p)) in fields.iter().enumerate() {
                             if let Some(&idx) = order.and_then(|o| o.get(i))
                                 && (idx as usize) < arity
@@ -566,7 +566,7 @@ impl<'a> Checker<'a> {
                     .map(|s| s.fields.len())
                     .unwrap_or(0);
                 let mut sub = vec![DPat::Wild; arity];
-                let order = self.out.field_orders.get(&pat.id);
+                let order = self.out.pat_field_orders.get(&pat.id);
                 for (i, (_, p)) in fields.iter().enumerate() {
                     if let Some(&idx) = order.and_then(|o| o.get(i))
                         && (idx as usize) < arity

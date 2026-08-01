@@ -458,7 +458,7 @@ impl LanguageServer for Backend {
             }
         }
         // Host call info: signature + docs (PRD §9 feature 2).
-        if let Some(wscript_compiler::check::CallKind::Host(idx)) = analysis.check.calls.get(&node)
+        if let Some(wscript_compiler::check::CallKind::Host(idx)) = analysis.check.call(node)
             && let Some((module, name, sig, doc)) = host_fn_info(&registry, *idx)
         {
             lines.push(format!(
@@ -469,8 +469,7 @@ impl LanguageServer for Backend {
                 lines.push(doc);
             }
         }
-        if let Some(wscript_compiler::check::MethodRes::Host(idx)) =
-            analysis.check.methods.get(&node)
+        if let Some(wscript_compiler::check::MethodRes::Host(idx)) = analysis.check.method(node)
             && let Some((ty_name, name, sig, doc)) = host_method_info(&registry, *idx)
         {
             lines.push(format!(
@@ -520,10 +519,7 @@ impl LanguageServer for Backend {
             })));
         }
         // Host symbols jump to the .wscripti entry (PRD §9 feature 3).
-        let target = match (
-            analysis.check.calls.get(&node),
-            analysis.check.methods.get(&node),
-        ) {
+        let target = match (analysis.check.call(node), analysis.check.method(node)) {
             (Some(wscript_compiler::check::CallKind::Host(idx)), _) => {
                 host_fn_info(&registry, *idx).and_then(|(m, n, ..)| {
                     lookup_wscripti(&wscripti, |i| {

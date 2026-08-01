@@ -78,9 +78,6 @@ pub enum CallKind {
     },
     /// Calling a function value: callee is evaluated.
     Value,
-    /// `Duration::ms(n)` — not a call at all: the argument is scaled into
-    /// base units inline. The factor is in `CheckResult::unit_convs`.
-    UnitConv,
 }
 
 #[derive(Debug, Clone)]
@@ -274,6 +271,45 @@ pub struct Derives {
     pub clone: bool,
 }
 
+/// How one expression node lowers to bytecode.
+///
+/// One per node, replacing thirteen parallel `HashMap<NodeId, _>` side
+/// tables. Payloads that used to need a second lookup are inline:
+/// `CallKind::UnitConv` had its factor in `unit_convs`, and `struct_lits`
+/// had its field permutation in `field_orders`.
+///
+/// Adding a language construct adds a variant here, and every consumer
+/// stops compiling until it is handled — which is the point.
+///
+/// Patterns have their own space; see #19.
+#[derive(Debug, Clone)]
+pub enum Lowering {
+    Var(VarRes),
+    Path(PathRes),
+    Call(CallKind),
+    /// `Duration::ms(n)` / `d.ms` — scaled inline; neither a call nor a
+    /// field access at runtime.
+    UnitConv(ConvKind),
+    Method(MethodRes),
+    /// Struct/enum field read → runtime field index.
+    Field {
+        idx: u16,
+    },
+    Index(IndexKind),
+    BinOp(BinOpKind),
+    UnOp(UnOpKind),
+    /// The struct, plus the runtime field index of each field *as written*.
+    StructLit {
+        res: StructLitRes,
+        order: Vec<u16>,
+    },
+    /// A suffixed literal, already folded to a base-unit constant.
+    QuantityLit(Factor),
+    For(ForKind),
+    Try(TryKind),
+    Closure(ClosureRes),
+}
+
 /// Everything the checker learned, keyed by AST node ids.
 #[derive(Default)]
 pub struct CheckResult {
@@ -281,35 +317,23 @@ pub struct CheckResult {
     pub diags: Vec<Diagnostic>,
     /// Type of every expression node (fully resolved).
     pub types: HashMap<NodeId, Type>,
-    /// Variable references (`Path` exprs that name a local or capture).
-    pub var_refs: HashMap<NodeId, VarRes>,
+    /// How each expression node lowers. Private: reach it through
+    /// [`CheckResult::lowering`], so a missing entry surfaces as an
+    /// internal error rather than a silently-wrong instruction.
+    lowerings: HashMap<NodeId, Lowering>,
     /// Local slot for `let` statements, `for` loop variables and pattern
     /// bindings (keyed by stmt id / for-expr id / pattern id).
     pub decl_locals: HashMap<NodeId, LocalId>,
-    pub paths: HashMap<NodeId, PathRes>,
-    pub calls: HashMap<NodeId, CallKind>,
-    pub methods: HashMap<NodeId, MethodRes>,
-    /// Field expr → runtime field index.
-    pub fields: HashMap<NodeId, u16>,
-    /// Unit-family conversions: `d.ms` (field exprs) and `Duration::ms(n)`
-    /// (call exprs) → the constant scale to apply.
-    pub unit_convs: HashMap<NodeId, ConvKind>,
-    /// Suffixed literals (`500ms`), already folded to a base-unit constant.
-    pub quantity_lits: HashMap<NodeId, Factor>,
-    pub struct_lits: HashMap<NodeId, StructLitRes>,
-    /// Struct literal / struct pattern: for each field as written, the
-    /// runtime field index.
-    pub field_orders: HashMap<NodeId, Vec<u16>>,
-    pub indexes: HashMap<NodeId, IndexKind>,
-    pub bin_ops: HashMap<NodeId, BinOpKind>,
-    pub un_ops: HashMap<NodeId, UnOpKind>,
-    pub for_kinds: HashMap<NodeId, ForKind>,
-    pub try_kinds: HashMap<NodeId, TryKind>,
+    /// Suffixed literals in *pattern* position, folded to a base-unit
+    /// constant. The expression form is `Lowering::QuantityLit`.
+    pub pat_quantity_lits: HashMap<NodeId, Factor>,
+    /// Struct *patterns*: for each field as written, the runtime field
+    /// index. The struct-literal form is inline in `Lowering::StructLit`.
+    pub pat_field_orders: HashMap<NodeId, Vec<u16>>,
     /// Variant patterns (and bindings reinterpreted as unit variants).
     pub pattern_variants: HashMap<NodeId, (DefId, u32)>,
     /// Struct patterns → the struct def they destructure.
     pub pattern_structs: HashMap<NodeId, DefId>,
-    pub closures: HashMap<NodeId, ClosureRes>,
     /// Exprs needing a `MakeDyn` wrap after evaluation → vtable id.
     pub dyn_wraps: HashMap<NodeId, u32>,
     pub fn_infos: Vec<FnInfo>,
@@ -415,6 +439,113 @@ pub struct Checker<'a> {
     pub(crate) expr_depth: u32,
     /// E0271 already reported — deeper nodes error silently.
     pub(crate) expr_depth_reported: bool,
+}
+
+impl CheckResult {
+    /// How `node` lowers.
+    ///
+    /// `None` means a checker bug: emit runs only after diagnostics are
+    /// error-free, so every node it reaches was resolved. Consumers report
+    /// that as an internal error rather than lowering something plausible
+    /// — the previous side tables degraded to `LoadUnit` instead, which
+    /// produced a wrong program with no diagnostic.
+    pub fn lowering(&self, node: NodeId) -> Option<&Lowering> {
+        self.lowerings.get(&node)
+    }
+
+    pub(crate) fn set_lowering(&mut self, node: NodeId, lowering: Lowering) {
+        self.lowerings.insert(node, lowering);
+    }
+
+    // Typed projections of [`Lowering`], for consumers that already know
+    // which shape a node must have because they matched its `ExprKind`.
+    // These read one map; the enum remains the single place a lowering is
+    // stored and the single place it is written.
+
+    pub fn var_ref(&self, node: NodeId) -> Option<&VarRes> {
+        match self.lowering(node)? {
+            Lowering::Var(v) => Some(v),
+            _ => None,
+        }
+    }
+    pub fn path_res(&self, node: NodeId) -> Option<&PathRes> {
+        match self.lowering(node)? {
+            Lowering::Path(p) => Some(p),
+            _ => None,
+        }
+    }
+    pub fn call(&self, node: NodeId) -> Option<&CallKind> {
+        match self.lowering(node)? {
+            Lowering::Call(c) => Some(c),
+            _ => None,
+        }
+    }
+    pub fn unit_conv(&self, node: NodeId) -> Option<ConvKind> {
+        match self.lowering(node)? {
+            Lowering::UnitConv(c) => Some(*c),
+            _ => None,
+        }
+    }
+    pub fn method(&self, node: NodeId) -> Option<&MethodRes> {
+        match self.lowering(node)? {
+            Lowering::Method(m) => Some(m),
+            _ => None,
+        }
+    }
+    pub fn field_idx(&self, node: NodeId) -> Option<u16> {
+        match self.lowering(node)? {
+            Lowering::Field { idx } => Some(*idx),
+            _ => None,
+        }
+    }
+    pub fn index(&self, node: NodeId) -> Option<&IndexKind> {
+        match self.lowering(node)? {
+            Lowering::Index(k) => Some(k),
+            _ => None,
+        }
+    }
+    pub fn bin_op(&self, node: NodeId) -> Option<BinOpKind> {
+        match self.lowering(node)? {
+            Lowering::BinOp(k) => Some(*k),
+            _ => None,
+        }
+    }
+    pub fn un_op(&self, node: NodeId) -> Option<UnOpKind> {
+        match self.lowering(node)? {
+            Lowering::UnOp(k) => Some(*k),
+            _ => None,
+        }
+    }
+    pub fn struct_lit(&self, node: NodeId) -> Option<(&StructLitRes, &[u16])> {
+        match self.lowering(node)? {
+            Lowering::StructLit { res, order } => Some((res, order)),
+            _ => None,
+        }
+    }
+    pub fn quantity_lit(&self, node: NodeId) -> Option<Factor> {
+        match self.lowering(node)? {
+            Lowering::QuantityLit(f) => Some(*f),
+            _ => None,
+        }
+    }
+    pub fn for_kind(&self, node: NodeId) -> Option<&ForKind> {
+        match self.lowering(node)? {
+            Lowering::For(k) => Some(k),
+            _ => None,
+        }
+    }
+    pub fn try_kind(&self, node: NodeId) -> Option<&TryKind> {
+        match self.lowering(node)? {
+            Lowering::Try(k) => Some(k),
+            _ => None,
+        }
+    }
+    pub fn closure(&self, node: NodeId) -> Option<&ClosureRes> {
+        match self.lowering(node)? {
+            Lowering::Closure(c) => Some(c),
+            _ => None,
+        }
+    }
 }
 
 pub fn check(file: &SourceFile, registry: &Registry) -> CheckResult {

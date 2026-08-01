@@ -25,7 +25,7 @@ use wscript_core::defs::{self, DefId};
 use wscript_core::span::Span;
 use wscript_core::types::Type;
 
-use super::{BinOpKind, BoundKind, Checker, PrimKind, UnOpKind};
+use super::{BinOpKind, BoundKind, Checker, Lowering, PrimKind, UnOpKind};
 use crate::ast::{BinOp, Expr, NodeId};
 
 // ------------------------------------------------------------------ ops
@@ -152,13 +152,6 @@ impl Operand {
 }
 
 // --------------------------------------------------------------- result
-
-/// How the operator lowers.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Lowering {
-    Bin(BinOpKind),
-    Un(UnOpKind),
-}
 
 /// What the expression evaluates to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -605,7 +598,7 @@ fn mixed_quantity(bin: BinOp, lhs: &Operand, rhs: &Operand) -> Option<Outcome> {
 }
 
 fn arith_prim(bin: BinOp, float: bool) -> Lowering {
-    Lowering::Bin(if float {
+    Lowering::BinOp(if float {
         BinOpKind::FloatArith(bin)
     } else {
         BinOpKind::IntArith(bin)
@@ -617,7 +610,7 @@ fn arith(op: Op, bin: BinOp, a: &Operand) -> Outcome {
         Shape::Int => Outcome::Lower(arith_prim(bin, false), ResultTy::Operand),
         Shape::Float => Outcome::Lower(arith_prim(bin, true), ResultTy::Operand),
         Shape::Str if bin == BinOp::Add => {
-            Outcome::Lower(Lowering::Bin(BinOpKind::Concat), ResultTy::Operand)
+            Outcome::Lower(Lowering::BinOp(BinOpKind::Concat), ResultTy::Operand)
         }
         // Unconstrained operands (a closure parameter used only here)
         // default to int.
@@ -628,7 +621,7 @@ fn arith(op: Op, bin: BinOp, a: &Operand) -> Outcome {
         }
         Shape::Named => match a.proto {
             Some(proto) => Outcome::Lower(
-                Lowering::Bin(BinOpKind::ArithCall { proto }),
+                Lowering::BinOp(BinOpKind::ArithCall { proto }),
                 ResultTy::Operand,
             ),
             None => Outcome::Err {
@@ -659,12 +652,12 @@ fn arith(op: Op, bin: BinOp, a: &Operand) -> Outcome {
 
 fn neg(op: Op, a: &Operand) -> Outcome {
     match a.shape {
-        Shape::Int => Outcome::Lower(Lowering::Un(UnOpKind::NegInt), ResultTy::Operand),
-        Shape::Float => Outcome::Lower(Lowering::Un(UnOpKind::NegFloat), ResultTy::Operand),
-        Shape::Var => Outcome::DefaultInt(Lowering::Un(UnOpKind::NegInt), ResultTy::Operand),
+        Shape::Int => Outcome::Lower(Lowering::UnOp(UnOpKind::NegInt), ResultTy::Operand),
+        Shape::Float => Outcome::Lower(Lowering::UnOp(UnOpKind::NegFloat), ResultTy::Operand),
+        Shape::Var => Outcome::DefaultInt(Lowering::UnOp(UnOpKind::NegInt), ResultTy::Operand),
         // A unit value negates as the number it is stored in.
         Shape::Quantity { float_base, .. } => Outcome::Lower(
-            Lowering::Un(if float_base {
+            Lowering::UnOp(if float_base {
                 UnOpKind::NegFloat
             } else {
                 UnOpKind::NegInt
@@ -672,9 +665,10 @@ fn neg(op: Op, a: &Operand) -> Outcome {
             ResultTy::Operand,
         ),
         Shape::Named => match a.proto {
-            Some(proto) => {
-                Outcome::Lower(Lowering::Un(UnOpKind::NegCall { proto }), ResultTy::Operand)
-            }
+            Some(proto) => Outcome::Lower(
+                Lowering::UnOp(UnOpKind::NegCall { proto }),
+                ResultTy::Operand,
+            ),
             None => Outcome::Err {
                 code: op.code(),
                 msg: Msg::NeedsTrait {
@@ -695,8 +689,8 @@ fn neg(op: Op, a: &Operand) -> Outcome {
 }
 
 fn eq(op: Op, negate: bool, a: &Operand) -> Outcome {
-    let value = Lowering::Bin(BinOpKind::EqValue { negate });
-    let prim = |k: PrimKind| Lowering::Bin(BinOpKind::EqPrim { kind: k, negate });
+    let value = Lowering::BinOp(BinOpKind::EqValue { negate });
+    let prim = |k: PrimKind| Lowering::BinOp(BinOpKind::EqPrim { kind: k, negate });
     match a.shape {
         Shape::Int => Outcome::Lower(prim(PrimKind::Int), ResultTy::Bool),
         Shape::Float => Outcome::Lower(prim(PrimKind::Float), ResultTy::Bool),
@@ -717,7 +711,7 @@ fn eq(op: Op, negate: bool, a: &Operand) -> Outcome {
         Shape::Var => Outcome::Lower(value, ResultTy::Bool),
         Shape::Named => match (a.proto, a.structural) {
             (Some(proto), _) => Outcome::Lower(
-                Lowering::Bin(BinOpKind::EqCall { proto, negate }),
+                Lowering::BinOp(BinOpKind::EqCall { proto, negate }),
                 ResultTy::Bool,
             ),
             (None, true) => Outcome::Lower(value, ResultTy::Bool),
@@ -758,7 +752,7 @@ fn eq(op: Op, negate: bool, a: &Operand) -> Outcome {
 }
 
 fn cmp(op: Op, bin: BinOp, a: &Operand) -> Outcome {
-    let prim = |k: PrimKind| Lowering::Bin(BinOpKind::CmpPrim { kind: k, op: bin });
+    let prim = |k: PrimKind| Lowering::BinOp(BinOpKind::CmpPrim { kind: k, op: bin });
     match a.shape {
         Shape::Int => Outcome::Lower(prim(PrimKind::Int), ResultTy::Bool),
         Shape::Float => Outcome::Lower(prim(PrimKind::Float), ResultTy::Bool),
@@ -775,11 +769,11 @@ fn cmp(op: Op, bin: BinOp, a: &Operand) -> Outcome {
         Shape::Var => Outcome::DefaultInt(prim(PrimKind::Int), ResultTy::Bool),
         Shape::Named => match (a.proto, a.structural) {
             (Some(proto), _) => Outcome::Lower(
-                Lowering::Bin(BinOpKind::CmpCall { proto, op: bin }),
+                Lowering::BinOp(BinOpKind::CmpCall { proto, op: bin }),
                 ResultTy::Bool,
             ),
             (None, true) => Outcome::Lower(
-                Lowering::Bin(BinOpKind::CmpValue { op: bin }),
+                Lowering::BinOp(BinOpKind::CmpValue { op: bin }),
                 ResultTy::Bool,
             ),
             (None, false) => Outcome::Err {
@@ -788,7 +782,7 @@ fn cmp(op: Op, bin: BinOp, a: &Operand) -> Outcome {
             },
         },
         Shape::Param if a.structural => Outcome::Lower(
-            Lowering::Bin(BinOpKind::CmpValue { op: bin }),
+            Lowering::BinOp(BinOpKind::CmpValue { op: bin }),
             ResultTy::Bool,
         ),
         Shape::Param => Outcome::Err {
@@ -908,14 +902,7 @@ impl Checker<'_> {
     }
 
     fn record(&mut self, node: NodeId, lowering: Lowering) {
-        match lowering {
-            Lowering::Bin(kind) => {
-                self.out.bin_ops.insert(node, kind);
-            }
-            Lowering::Un(kind) => {
-                self.out.un_ops.insert(node, kind);
-            }
-        }
+        self.out.set_lowering(node, lowering);
     }
 
     fn result_ty(&mut self, result: ResultTy, lhs_ty: &Type, rhs_ty: Option<&Type>) -> Type {
@@ -1077,13 +1064,13 @@ mod tests {
         assert!(matches!(
             lower(ADD, &op(Shape::Int), Some(&op(Shape::Int))),
             Outcome::Lower(
-                Lowering::Bin(BinOpKind::IntArith(BinOp::Add)),
+                Lowering::BinOp(BinOpKind::IntArith(BinOp::Add)),
                 ResultTy::Operand
             )
         ));
         assert!(matches!(
             lower(ADD, &op(Shape::Float), Some(&op(Shape::Float))),
-            Outcome::Lower(Lowering::Bin(BinOpKind::FloatArith(BinOp::Add)), _)
+            Outcome::Lower(Lowering::BinOp(BinOpKind::FloatArith(BinOp::Add)), _)
         ));
     }
 
@@ -1091,7 +1078,7 @@ mod tests {
     fn string_concatenates_only_with_plus() {
         assert!(matches!(
             lower(ADD, &op(Shape::Str), Some(&op(Shape::Str))),
-            Outcome::Lower(Lowering::Bin(BinOpKind::Concat), _)
+            Outcome::Lower(Lowering::BinOp(BinOpKind::Concat), _)
         ));
         assert!(matches!(
             lower(
@@ -1113,7 +1100,7 @@ mod tests {
         ));
         assert!(matches!(
             lower(EQ, &op(Shape::Var), Some(&op(Shape::Var))),
-            Outcome::Lower(Lowering::Bin(BinOpKind::EqValue { .. }), ResultTy::Bool)
+            Outcome::Lower(Lowering::BinOp(BinOpKind::EqValue { .. }), ResultTy::Bool)
         ));
     }
 
@@ -1121,7 +1108,7 @@ mod tests {
     fn a_named_type_needs_an_operator_impl() {
         assert!(matches!(
             lower(ADD, &with_proto(Shape::Named, 7), Some(&op(Shape::Named))),
-            Outcome::Lower(Lowering::Bin(BinOpKind::ArithCall { proto: 7 }), _)
+            Outcome::Lower(Lowering::BinOp(BinOpKind::ArithCall { proto: 7 }), _)
         ));
         assert!(matches!(
             lower(ADD, &op(Shape::Named), Some(&op(Shape::Named))),
@@ -1167,7 +1154,7 @@ mod tests {
         assert!(matches!(
             lower(ADD, &d, Some(&d)),
             Outcome::Lower(
-                Lowering::Bin(BinOpKind::IntArith(BinOp::Add)),
+                Lowering::BinOp(BinOpKind::IntArith(BinOp::Add)),
                 ResultTy::Operand
             )
         ));
@@ -1286,7 +1273,7 @@ mod tests {
     fn a_poisoned_right_operand_does_not_change_the_lowering() {
         assert!(matches!(
             lower(ADD, &op(Shape::Int), Some(&op(Shape::Poison))),
-            Outcome::Lower(Lowering::Bin(BinOpKind::IntArith(BinOp::Add)), _)
+            Outcome::Lower(Lowering::BinOp(BinOpKind::IntArith(BinOp::Add)), _)
         ));
     }
 
@@ -1296,7 +1283,7 @@ mod tests {
     fn equality_accepts_a_poisoned_operand() {
         assert!(matches!(
             lower(EQ, &op(Shape::Poison), None),
-            Outcome::Lower(Lowering::Bin(BinOpKind::EqValue { .. }), _)
+            Outcome::Lower(Lowering::BinOp(BinOpKind::EqValue { .. }), _)
         ));
     }
 
@@ -1332,7 +1319,7 @@ mod tests {
     fn ordering_needs_ord_not_merely_eq() {
         assert!(matches!(
             lower(LT, &with_proto(Shape::Named, 3), None),
-            Outcome::Lower(Lowering::Bin(BinOpKind::CmpCall { proto: 3, .. }), _)
+            Outcome::Lower(Lowering::BinOp(BinOpKind::CmpCall { proto: 3, .. }), _)
         ));
         assert!(matches!(
             lower(LT, &op(Shape::Named), None),
