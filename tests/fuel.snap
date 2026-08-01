@@ -45,7 +45,7 @@ m2_closures 73 ok
 m2_containers 106 ok
 m2_enums_match 103 ok
 m2_exhaustiveness - compile-error
-m2_for_loops 222 ok
+m2_for_loops 455 ok
 m2_option_result 251 ok
 m2_strings 46 ok
 m2_structs 60 ok
