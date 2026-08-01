@@ -950,12 +950,41 @@ fn multi_file_errors_point_at_the_right_file() {
         .find(|d| d.code == "E0220")
         .expect("type error expected");
     // The error's span lands in helpers.wscript per the source map.
-    let idx = failure
+    let (file, _) = failure
         .source_map
-        .files
-        .partition_point(|f| f.base <= type_err.span.lo)
-        - 1;
-    assert_eq!(failure.source_map.files[idx].path, "helpers.wscript");
+        .local(type_err.span.lo)
+        .expect("span is in some file");
+    assert_eq!(file.path, "helpers.wscript");
+}
+
+/// Derive validation runs once for the whole program, after the per-file
+/// item passes — so its span has to come from where the type was
+/// declared, not from whichever file was loaded last (#23).
+#[test]
+fn multi_file_derive_error_points_at_the_declaration() {
+    const BAD: &str = "#[derive(Eq)]\nstruct Bad { f: fn(int) -> int }\nfn make() -> Bad { Bad { f: |x: int| -> int { x } } }";
+    let resolver = MemResolver([("bad.wscript", BAD), ("last.wscript", "fn noop() {}")].into());
+    let ctx = Context::new();
+    let failure = ctx
+        .compile_entry(
+            "main.wscript",
+            "use bad\nuse last\nfn main() { last::noop() }",
+            &resolver,
+        )
+        .err()
+        .expect("must fail");
+    let derive_err = failure
+        .diags
+        .iter()
+        .find(|d| d.code == "E0209")
+        .expect("derive error expected");
+    let (file, offset) = failure
+        .source_map
+        .local(derive_err.span.lo)
+        .expect("span is in some file");
+    assert_eq!(file.path, "bad.wscript");
+    // The caret is on the type's name, not on the first byte of the file.
+    assert_eq!(offset as usize, BAD.find("Bad").unwrap());
 }
 
 #[test]

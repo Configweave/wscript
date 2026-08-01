@@ -344,8 +344,12 @@ pub struct CheckResult {
     pub impl_maps: ImplMaps,
     pub exports: HashMap<String, (u32, FnSig)>,
     /// Reference → definition span (locals and script functions), for the
-    /// LSP's goto-definition.
+    /// LSP's goto-definition. Keyed by the *use* site.
     pub def_spans: HashMap<NodeId, Span>,
+    /// Def → the span of its own declared name, keyed by the def rather
+    /// than by a use of it. Script defs only: host registrations have no
+    /// source.
+    pub def_decl_spans: HashMap<DefId, Span>,
     /// Script methods per type (inherent + trait impls), for the LSP's
     /// completion.
     pub methods_by_type: HashMap<DefId, Vec<(String, FnSig)>>,
@@ -385,8 +389,12 @@ pub struct Checker<'a> {
     /// All files of the program: (module name, AST). Index 0 is the
     /// entry file; the module name of the entry is unused.
     pub(crate) files: &'a [(String, &'a SourceFile)],
-    /// File whose items/bodies are currently being processed.
-    pub(crate) cur_file: usize,
+    /// File whose items/bodies are currently being processed. Every bare
+    /// name is resolved against it — `file`, `fn_by_name`, `module_ref`
+    /// and `imported` all index by it — so after construction it has
+    /// exactly one writer, [`Checker::in_file`], which restores the
+    /// previous file on exit.
+    cur_file: usize,
     pub(crate) reg: &'a Registry,
     pub(crate) out: CheckResult,
     pub(crate) infer: Infer,
@@ -578,6 +586,7 @@ pub fn check_files<'a>(files: &'a [(String, &'a SourceFile)], registry: &Registr
         .collect();
     let mut checker = Checker {
         files,
+        // Arbitrary: every reader of `cur_file` runs inside `in_file`.
         cur_file: 0,
         reg: registry,
         out: CheckResult {
@@ -633,9 +642,14 @@ impl<'a> Checker<'a> {
         self.infer.resolve(t).display(&self.out.defs)
     }
 
+    /// The AST of one file of the program, by index.
+    pub(crate) fn ast(&self, file: usize) -> &'a SourceFile {
+        self.files[file].1
+    }
+
     /// The file currently being processed.
     pub(crate) fn file(&self) -> &'a SourceFile {
-        self.files[self.cur_file].1
+        self.ast(self.cur_file)
     }
 
     fn run(&mut self) {
@@ -651,8 +665,7 @@ impl<'a> Checker<'a> {
             Checker::collect_fns,
         ] {
             for fi in 0..self.files.len() {
-                self.cur_file = fi;
-                pass(self);
+                self.in_file(fi, pass);
             }
         }
         self.validate_script_imports();
@@ -905,10 +918,9 @@ impl<'a> Checker<'a> {
 
     fn collect_type_names(&mut self) {
         for item in &self.file().items {
-            let (name, span, kind) = match item {
+            let (name, kind) = match item {
                 Item::Struct(s) => (
                     &s.name,
-                    s.span,
                     DefKind::Struct(StructDef {
                         name: s.name.name.clone(),
                         fields: vec![],
@@ -919,7 +931,6 @@ impl<'a> Checker<'a> {
                 ),
                 Item::Enum(e) => (
                     &e.name,
-                    e.span,
                     DefKind::Enum(EnumDef {
                         name: e.name.name.clone(),
                         variants: vec![],
@@ -929,7 +940,6 @@ impl<'a> Checker<'a> {
                 ),
                 Item::Trait(t) => (
                     &t.name,
-                    t.span,
                     DefKind::Trait(TraitDef {
                         name: t.name.name.clone(),
                         methods: vec![],
@@ -938,7 +948,6 @@ impl<'a> Checker<'a> {
                 ),
                 Item::Units(u) => (
                     &u.name,
-                    u.span,
                     DefKind::Unit(UnitDef {
                         name: u.name.name.clone(),
                         base: Type::Int,
@@ -975,8 +984,11 @@ impl<'a> Checker<'a> {
                 );
                 continue;
             }
-            let _ = span;
             let id = self.out.defs.push(kind);
+            // Recorded here, where the declaration is in hand: re-deriving
+            // it later by scanning an AST is how it came to be read out of
+            // the wrong file (#23).
+            self.out.def_decl_spans.insert(id, name.span);
             self.type_names.insert(name.name.clone(), id);
         }
     }
@@ -1824,7 +1836,15 @@ impl<'a> Checker<'a> {
     fn validate_derives(&mut self) {
         let entries: Vec<(DefId, Derives)> = self.derives.iter().map(|(k, v)| (*k, *v)).collect();
         for (id, d) in entries {
-            let span = self.def_decl_span(id);
+            // Derives are recorded only for script structs and enums, so
+            // `collect_type_names` has already captured a span for every
+            // id here. If that ever stops holding, fail loudly in tests
+            // rather than silently reinstate the misplaced caret this map
+            // exists to remove; a release build still reports the error,
+            // because dropping it would let an invalid derive compile.
+            let decl_span = self.out.def_decl_spans.get(&id).copied();
+            debug_assert!(decl_span.is_some(), "no declaration span for def {id:?}");
+            let span = decl_span.unwrap_or(Span::DUMMY);
             if d.eq && !self.fields_satisfy(id, |c, t| c.eq_able(t)) {
                 let name = self.out.defs.name_of(id).to_string();
                 self.error_help(
@@ -1855,21 +1875,6 @@ impl<'a> Checker<'a> {
                 );
             }
         }
-    }
-
-    fn def_decl_span(&self, id: DefId) -> Span {
-        for item in &self.file().items {
-            match item {
-                Item::Struct(s) if self.type_names.get(&s.name.name) == Some(&id) => {
-                    return s.name.span;
-                }
-                Item::Enum(e) if self.type_names.get(&e.name.name) == Some(&id) => {
-                    return e.name.span;
-                }
-                _ => {}
-            }
-        }
-        Span::DUMMY
     }
 
     fn fields_satisfy(&self, id: DefId, pred: impl Fn(&Self, &Type) -> bool) -> bool {
@@ -2228,22 +2233,18 @@ impl<'a> Checker<'a> {
         self.infer.reset();
         self.nodes_this_fn.clear();
         let info = self.out.fn_infos[proto as usize].clone();
-        let source = info.source;
-        let decl = match source {
-            FnSource::Top { file, item } => {
-                self.cur_file = file;
-                match &self.file().items[item] {
-                    Item::Fn(f) => f,
-                    _ => return,
-                }
-            }
-            FnSource::Method { file, item, fn_idx } => {
-                self.cur_file = file;
-                match &self.file().items[item] {
-                    Item::Impl(im) => &im.fns[fn_idx],
-                    _ => return,
-                }
-            }
+        // Bodies are checked after the per-file item passes, so the
+        // declaring file comes from the fn's own source — `cur_file` is
+        // established from it rather than consulted.
+        let (file, decl) = match info.source {
+            FnSource::Top { file, item } => match &self.ast(file).items[item] {
+                Item::Fn(f) => (file, f),
+                _ => return,
+            },
+            FnSource::Method { file, item, fn_idx } => match &self.ast(file).items[item] {
+                Item::Impl(im) => (file, &im.fns[fn_idx]),
+                _ => return,
+            },
             FnSource::Closure { .. } | FnSource::Synthesized => return,
         };
 
@@ -2253,26 +2254,28 @@ impl<'a> Checker<'a> {
         // whole body *and* for `finalize_types`, which reports uninferable
         // parameters by name. Keeping both inside one scope is what makes
         // that ordering lexical rather than remembered.
-        self.with_type_params(info.type_params.clone(), |c| {
-            let (_, frame) = c.in_fn(ret.clone(), |c| {
-                for (i, p) in decl.params.iter().enumerate() {
-                    let ty = param_tys.get(i).cloned().unwrap_or(Type::Error);
-                    c.declare_local(&p.name, ty);
-                }
-                let body_ty = c.check_block(&decl.body, Some(&ret));
-                c.unify_or_err(
-                    &ret,
-                    &body_ty,
-                    last_meaningful_span(&decl.body).unwrap_or(decl.sig_span),
-                    "function body does not match the declared return type",
-                );
-            });
-            let fi = &mut c.out.fn_infos[proto as usize];
-            fi.n_locals = frame.n_locals;
-            fi.captured = frame.captured;
-            fi.pending = false;
+        self.in_file(file, |c| {
+            c.with_type_params(info.type_params.clone(), |c| {
+                let (_, frame) = c.in_fn(ret.clone(), |c| {
+                    for (i, p) in decl.params.iter().enumerate() {
+                        let ty = param_tys.get(i).cloned().unwrap_or(Type::Error);
+                        c.declare_local(&p.name, ty);
+                    }
+                    let body_ty = c.check_block(&decl.body, Some(&ret));
+                    c.unify_or_err(
+                        &ret,
+                        &body_ty,
+                        last_meaningful_span(&decl.body).unwrap_or(decl.sig_span),
+                        "function body does not match the declared return type",
+                    );
+                });
+                let fi = &mut c.out.fn_infos[proto as usize];
+                fi.n_locals = frame.n_locals;
+                fi.captured = frame.captured;
+                fi.pending = false;
 
-            c.finalize_types();
+                c.finalize_types();
+            });
         });
     }
 
@@ -2352,11 +2355,21 @@ impl<'a> Checker<'a> {
         }
     }
 
-    // -------------------------------------------- scopes, frames, loops
+    // ------------------------------------- files, scopes, frames, loops
     //
     // Entry is scoped: the callback receives `&mut Checker`, so the push
-    // and the matching pop cannot drift apart. A guard holding
-    // `&mut self.env` would block the `&mut self` the body needs.
+    // and the matching pop cannot drift apart. A guard cannot be used —
+    // holding `&mut` to the field it saves would block the `&mut self`
+    // the body needs.
+
+    /// Check `f` with `file` as the current file, restoring the previous
+    /// one on exit. The one writer of [`Checker::cur_file`].
+    fn in_file<T>(&mut self, file: usize, f: impl FnOnce(&mut Self) -> T) -> T {
+        let prev = std::mem::replace(&mut self.cur_file, file);
+        let out = f(self);
+        self.cur_file = prev;
+        out
+    }
 
     /// Check `f` inside a fresh lexical scope.
     pub(crate) fn in_scope<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {

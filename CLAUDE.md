@@ -23,7 +23,9 @@ Cargo workspace per PRD §2: `wscript` (umbrella/embedding API), `wscript-core`
 suites consume that corpus — `wscript-cli/tests/scripts.rs` asserts output via
 `// expect:` directives, and `wscript-cli/tests/fuel_snapshot.rs` records what
 each script costs to run in `tests/fuel.snap`, so adding a script means
-regenerating that table too.
+regenerating that table too. Every `.wscript` directly in that directory is
+run as an entry by both, so files that exist only to be `use`d by another
+script live in `tests/scripts/modules/`.
 Docs are authored in wdoc/WCL: `docs/main.wcl` is the landing site and
 `docs/wskills/wscript/` the reference model (language, stdlib, CLI, embedding),
 projected into a book, the committed `.claude/skills/wscript` skill, a deck and
