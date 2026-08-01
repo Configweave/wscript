@@ -14,6 +14,7 @@ use wscript_core::bytecode::{
     Builtin, CallTarget, CaptureSrc, CompiledUnit, Const, FaultCode, FnProto, Instr, VTable,
 };
 use wscript_core::defs::{self, Factor};
+use wscript_core::diag::Diagnostic;
 use wscript_core::span::Span;
 
 use crate::ast::*;
@@ -22,25 +23,29 @@ use crate::check::{
     MethodRes, PathRes, PreludeFn, PrimKind, StructLitRes, TryKind, UnOpKind, VarRes,
 };
 
-pub fn emit(file: &SourceFile, res: &CheckResult) -> CompiledUnit {
-    emit_files(&[file], res)
-}
-
 /// Emit a whole (possibly multi-file) program into one merged unit.
-/// `files` must be in the same order the checker saw them.
-pub fn emit_files(files: &[&SourceFile], res: &CheckResult) -> CompiledUnit {
+///
+/// `files` must be in the same order the checker saw them. The returned
+/// diagnostics are *internal* errors (`E9999`): emit runs only after the
+/// checker reported none, so anything here is a compiler bug rather than a
+/// fault in the script. They are returned instead of panicking because
+/// wscript is an embedding library — a host should survive a compiler bug
+/// with an error, not a crash.
+pub fn emit_files(files: &[&SourceFile], res: &CheckResult) -> (CompiledUnit, Vec<Diagnostic>) {
     let mut em = Emitter {
         files,
         res,
         consts: Vec::new(),
         const_map: HashMap::new(),
         protos: (0..res.fn_infos.len()).map(|_| None).collect(),
+        ices: Vec::new(),
     };
     for proto in 0..res.fn_infos.len() {
         em.ensure_proto(proto as u32);
     }
     static NEXT_UNIT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    CompiledUnit {
+    let ices = std::mem::take(&mut em.ices);
+    let unit = CompiledUnit {
         id: NEXT_UNIT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         protos: em
             .protos
@@ -61,7 +66,8 @@ pub fn emit_files(files: &[&SourceFile], res: &CheckResult) -> CompiledUnit {
         generic_fns: res.generic_fns.clone(),
         // Filled by the compile pipeline (which knows the file layout).
         source_map: Default::default(),
-    }
+    };
+    (unit, ices)
 }
 
 #[derive(PartialEq, Eq, Hash)]
@@ -78,6 +84,9 @@ struct Emitter<'a> {
     consts: Vec<Const>,
     const_map: HashMap<ConstKey, u32>,
     protos: Vec<Option<FnProto>>,
+    /// Internal errors: a node the checker should have resolved but did
+    /// not. See [`emit_files`].
+    ices: Vec<Diagnostic>,
 }
 
 impl<'a> Emitter<'a> {
@@ -186,6 +195,15 @@ impl<'a> Emitter<'a> {
                 })
                 .collect(),
         }
+    }
+
+    /// Record an internal error against `span`.
+    fn ice(&mut self, span: Span, what: &str) {
+        self.ices.push(Diagnostic::error(
+            "E9999",
+            span,
+            format!("internal compiler error: {what} was not resolved"),
+        ));
     }
 
     fn intern_const(&mut self, c: Const) -> u32 {
@@ -491,7 +509,13 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
                     return;
                 }
                 let o = self.emit_value(obj);
-                let idx = self.em.res.field_idx(e.id).unwrap_or(0);
+                let idx = match self.em.res.field_idx(e.id) {
+                    Some(idx) => idx,
+                    None => {
+                        self.em.ice(e.span, "field access");
+                        0
+                    }
+                };
                 self.push(Instr::GetField { dst, obj: o, idx });
             }
             ExprKind::Index { obj, idx } => {
@@ -803,6 +827,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
     fn emit_binary(&mut self, e: &Expr, lhs: &Expr, rhs: &Expr, dst: u16) {
         use crate::ast::BinOp as B;
         let Some(kind) = self.em.res.bin_op(e.id) else {
+            self.em.ice(e.span, "binary operator");
             self.push(Instr::LoadUnit { dst });
             return;
         };
@@ -1386,6 +1411,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
 
     fn emit_method_call(&mut self, e: &Expr, recv: &Expr, args: &[Expr], dst: u16) {
         let Some(res) = self.em.res.method(e.id).cloned() else {
+            self.em.ice(e.span, "method call");
             self.push(Instr::LoadUnit { dst });
             return;
         };
@@ -1434,6 +1460,7 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
 
     fn emit_struct_lit(&mut self, e: &Expr, fields: &[(Ident, Expr)], dst: u16) {
         let Some((res, order)) = self.em.res.struct_lit(e.id) else {
+            self.em.ice(e.span, "struct literal");
             self.push(Instr::LoadUnit { dst });
             return;
         };
@@ -1702,7 +1729,13 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
     // --------------------------------------------------------------- for
 
     fn emit_for(&mut self, e: &Expr, iter: &Expr, body: &Block, dst: u16) {
-        let kind = self.em.res.for_kind(e.id).copied().unwrap_or(ForKind::List);
+        let kind = match self.em.res.for_kind(e.id) {
+            Some(kind) => *kind,
+            None => {
+                self.em.ice(e.span, "`for` loop");
+                ForKind::List
+            }
+        };
         let var_local = *self
             .em
             .res
@@ -1875,4 +1908,37 @@ impl<'e, 'a> FnEmitter<'e, 'a> {
 
 fn pattern_is_trivial(p: &Pattern) -> bool {
     matches!(p.kind, PatternKind::Wildcard)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wscript_core::registry::Registry;
+
+    /// A lowering the checker should have recorded but did not is a
+    /// compiler bug, and must surface as a diagnostic rather than as a
+    /// plausible instruction. The previous side tables lowered `LoadUnit`
+    /// in this case and produced a silently wrong program.
+    #[test]
+    fn a_dropped_lowering_reports_an_internal_error() {
+        let reg = Registry::new();
+        let parsed = crate::parse("fn main() -> int { 1 + 2 }");
+        let refs: Vec<(String, &SourceFile)> = vec![(String::new(), &parsed.file)];
+        let mut checked = crate::check::check_files(&refs, &reg);
+        assert!(checked.diags.is_empty(), "fixture must compile cleanly");
+
+        // Emitting the intact result is silent.
+        let (_, clean) = emit_files(&[&parsed.file], &checked);
+        assert!(clean.is_empty(), "a well-formed unit reports nothing");
+
+        assert!(checked.drop_a_bin_op(), "fixture should have a binary op");
+        let (_, ices) = emit_files(&[&parsed.file], &checked);
+        assert_eq!(ices.len(), 1, "one internal error");
+        assert_eq!(ices[0].code, "E9999");
+        assert!(
+            ices[0].message.contains("binary operator"),
+            "message should name what was missing: {}",
+            ices[0].message
+        );
+    }
 }

@@ -274,7 +274,18 @@ pub fn compile_entry(
             });
         }
         let asts: Vec<&ast::SourceFile> = files.iter().map(|f| &f.parse.file).collect();
-        let mut unit = emit::emit_files(&asts, &checked);
+        let (mut unit, ices) = emit::emit_files(&asts, &checked);
+        // A node the checker should have resolved but did not. The script
+        // is fine; the compiler is not. Surfaced as a diagnostic so an
+        // embedder gets an error rather than a wrong program.
+        if !ices.is_empty() {
+            diags.extend(ices);
+            return Err(CompileFailure {
+                diags,
+                sources: files.into_iter().map(|f| (f.display, f.src)).collect(),
+                source_map,
+            });
+        }
         unit.source_map = source_map;
         Ok(Compiled {
             unit,

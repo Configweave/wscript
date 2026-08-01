@@ -457,6 +457,19 @@ impl CheckResult {
         self.lowerings.insert(node, lowering);
     }
 
+    /// Simulate the checker dropping a resolution, so the emitter's
+    /// internal-error path can be tested. There is no other way to reach
+    /// it: every real path records one.
+    #[cfg(test)]
+    pub(crate) fn drop_a_bin_op(&mut self) -> bool {
+        let node = self
+            .lowerings
+            .iter()
+            .find(|(_, l)| matches!(l, Lowering::BinOp(_)))
+            .map(|(n, _)| *n);
+        node.is_some_and(|n| self.lowerings.remove(&n).is_some())
+    }
+
     // Typed projections of [`Lowering`], for consumers that already know
     // which shape a node must have because they matched its `ExprKind`.
     // These read one map; the enum remains the single place a lowering is
