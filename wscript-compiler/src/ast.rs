@@ -50,6 +50,11 @@ pub struct ModDecl {
 pub struct ConstDecl {
     pub name: Ident,
     pub ty: TypeExpr,
+    /// `= 16` — the value. `const` items exist only in `.wscripti`
+    /// interface files, where the value is what the host registered and
+    /// therefore what `wscript check` must fold; `None` means the
+    /// declaration omitted it, which the loader reports.
+    pub value: Option<Expr>,
     pub doc: Option<String>,
     pub span: Span,
 }

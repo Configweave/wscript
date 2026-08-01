@@ -563,11 +563,13 @@ impl Parser {
         let name = self.expect_ident("constant name after `const`")?;
         self.expect(&TokenKind::Colon, "`:` after the constant name")?;
         let ty = self.type_expr();
-        let span = kw.to(ty.span);
+        let value = self.eat(&TokenKind::Eq).then(|| self.expr());
+        let span = kw.to(value.as_ref().map_or(ty.span, |v| v.span));
         self.terminate_stmt();
         Some(ConstDecl {
             name,
             ty,
+            value,
             doc,
             span,
         })
