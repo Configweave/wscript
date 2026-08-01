@@ -433,11 +433,11 @@ pub struct Checker<'a> {
     /// > rejected there in v1).
     pub(crate) or_depth: u32,
     /// Current `check_expr` recursion depth — capped so a pathologically
-    /// deep AST produces E0271 instead of overflowing the stack (the
+    /// deep AST produces E0114 instead of overflowing the stack (the
     /// parser bounds its own recursion, but builds operator/postfix
     /// chains like `x[0][0]…` iteratively).
     pub(crate) expr_depth: u32,
-    /// E0271 already reported — deeper nodes error silently.
+    /// E0114 already reported — deeper nodes error silently.
     pub(crate) expr_depth_reported: bool,
 }
 

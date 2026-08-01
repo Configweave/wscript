@@ -517,7 +517,7 @@ fn parser_snapshot(fixture: &std::path::Path) -> Result<(), String> {
 #[test]
 fn parser_snapshots() {
     let root = std::path::Path::new("tests/fixtures/parser");
-    let fixtures = common::fixtures(root);
+    let fixtures = common::files(root, "wscript");
     assert!(!fixtures.is_empty(), "no fixtures under {}", root.display());
     let mut failures = Vec::new();
     for fixture in fixtures {
@@ -547,7 +547,7 @@ fn visit_reaches_the_same_nodes_as_the_renderer() {
         }
     }
 
-    for fixture in common::fixtures(std::path::Path::new("tests/fixtures/parser")) {
+    for fixture in common::files(std::path::Path::new("tests/fixtures/parser"), "wscript") {
         let src = std::fs::read_to_string(&fixture).unwrap();
         let parsed = wscript_compiler::parse(&src);
 
@@ -576,7 +576,7 @@ fn visit_reaches_the_same_nodes_as_the_renderer() {
 /// The snapshots render every id, but only a scan proves uniqueness.
 #[test]
 fn node_ids_are_unique() {
-    for fixture in common::fixtures(std::path::Path::new("tests/fixtures/parser")) {
+    for fixture in common::files(std::path::Path::new("tests/fixtures/parser"), "wscript") {
         let src = std::fs::read_to_string(&fixture).unwrap();
         let rendered = render(&src, &wscript_compiler::parse(&src).file);
         let mut seen = std::collections::HashSet::new();

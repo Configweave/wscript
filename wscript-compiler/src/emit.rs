@@ -1940,5 +1940,12 @@ mod tests {
             "message should name what was missing: {}",
             ices[0].message
         );
+        // No script can reach an ICE, so no fixture can show that this one
+        // explains itself. Here is the only place that can.
+        assert!(
+            ices[0].help_text().is_some_and(|h| h.contains("report")),
+            "an ICE must tell the reader it is the compiler's fault and ask \
+             to be reported"
+        );
     }
 }
