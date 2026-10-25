@@ -17,7 +17,7 @@ fn sum(a: string, b: string) -> Result[int, string] {
 
 ## Methods
 
-`Option`: `is_some is_none unwrap unwrap_or expect`. `Result`: `is_ok is_err unwrap unwrap_or unwrap_err expect`. `unwrap()` on the empty case is a trappable [fault](../references/concept_faults.md), not a host panic. See [Option/Result methods](../references/fact_option_result_methods.md).
+`Option`: `is_some is_none unwrap unwrap_or expect`. `Result`: `is_ok is_err unwrap unwrap_or unwrap_err expect`. `unwrap()` on the empty case is a trappable [fault](../references/concept_faults.md), not a host panic. `expect(msg)` faults with `msg` on `None` and with `msg: <err>` on `Err`. See [Option/Result methods](../references/fact_option_result_methods.md).
 
 > [!NOTE]
 > **Prefer Option-returning APIs**

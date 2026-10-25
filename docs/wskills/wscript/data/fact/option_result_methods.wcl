@@ -10,6 +10,6 @@ fact option_result_methods {
         ["`Result[T, E]`", "`is_ok` `is_err` `unwrap` `unwrap_or` `unwrap_err` `expect`"],
       ]
     }
-    p "`?` early-returns the `None`/`Err`. `unwrap()` on the empty case raises a trappable fault (not a host panic)."
+    p "`?` early-returns the `None`/`Err`. `unwrap()` on the empty case raises a trappable fault (not a host panic). `expect(msg)` faults with `msg` on `None`, and with `msg: <err>` on `Err`, so the payload survives."
   }
 }

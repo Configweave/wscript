@@ -853,8 +853,12 @@ impl Vm {
                 if e.tag == wscript_core::defs::TAG_OK {
                     e.fields.borrow()[0].clone()
                 } else {
-                    let msg = str_arg!(1);
-                    return Err(self.fault(msg.to_string()));
+                    // `<msg>: <err>`, as Rust's `Result::expect` reads: the
+                    // message names the step, the `Err` payload says why.
+                    let msg = str_arg!(1).to_string();
+                    let err = e.fields.borrow()[0].clone();
+                    let shown = self.display_value(&err)?;
+                    return Err(self.fault(format!("{msg}: {shown}")));
                 }
             }
         })

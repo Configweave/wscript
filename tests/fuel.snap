@@ -29,6 +29,8 @@ lang_generics_err2 - compile-error
 lang_interpolation 113 ok
 lang_interpolation_err - compile-error
 lang_interpolation_err2 - compile-error
+lang_option_expect_fault 5 fault
+lang_result_expect_fault 7 fault
 lang_units 203 ok
 lang_units_err - compile-error
 lang_units_err2 - compile-error
