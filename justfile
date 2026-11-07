@@ -84,6 +84,12 @@ test: workspace-test
 
 # ---------------------------------------------------------------- check
 
+# Card validation: format, lint, then the tests the changed files affect
+# (TERRARIUM_CHANGED_FILES; unset runs every test and example, like ci::check)
+[group('check')]
+validate: workspace-fmt-check workspace-lint
+	bash .just/affected-tests.sh
+
 # Apply rustfmt to the workspace
 [group('check')]
 workspace-fmt:
