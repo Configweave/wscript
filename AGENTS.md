@@ -8,9 +8,21 @@ pull requests onto `main`), this file wins.
 ## Build and test
 
 The sandbox has no Rust toolchain. Edit and run `git` in the sandbox, and build
-and test on the target `wscript-helios-build`:
+and test on the target `wscript-helios-build`.
 
-    terrarium exec wscript-helios-build -- sh -c 'cd /work/wscript/<agent>/wscript && just validate'
+An agent workspace is not mounted on the target. Push the card branch, then
+check it out on the target under `/tmp/<card-id>/wscript` (the card ID in lower
+case in the branch name, the card ID in upper case in the path):
+
+    terrarium repo checkout wscript --target wscript-helios-build --branch <card-branch> --path /tmp/<card-id>/wscript
+
+Then run `just validate` there, with `TERRARIUM_CHANGED_FILES` computed in the
+sandbox (see Validation):
+
+    terrarium exec wscript-helios-build -- sh -c 'cd /tmp/<card-id>/wscript && TERRARIUM_CHANGED_FILES="<files>" just validate'
+
+`/tmp` is lost when the target is recreated. Everything is pushed, so a new
+checkout restores it.
 
 Do not run `git` on the target.
 
