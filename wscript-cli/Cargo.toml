@@ -4,6 +4,8 @@ description = "wscript command-line interface: run, check, repl, lsp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+readme.workspace = true
 
 [lib]
 name = "wscript_cli"
