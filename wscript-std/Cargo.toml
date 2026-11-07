@@ -4,6 +4,8 @@ description = "wscript standard library modules (capability-style, feature-gated
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+readme.workspace = true
 
 [features]
 default = ["math", "fs", "process", "time", "regex", "json", "toml", "xml"]

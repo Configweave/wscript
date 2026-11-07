@@ -4,6 +4,8 @@ description = "wscript register-based virtual machine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+readme.workspace = true
 
 [dependencies]
 wscript-core.workspace = true

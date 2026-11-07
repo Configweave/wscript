@@ -4,5 +4,7 @@ description = "Shared core types for the wscript scripting language: spans, diag
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+readme.workspace = true
 
 [dependencies]
