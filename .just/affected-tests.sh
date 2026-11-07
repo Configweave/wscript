@@ -7,7 +7,8 @@
 #
 # A file in a crate selects that crate and every workspace crate that depends on
 # it (normal, dev or build edge). tests/ belongs to wscript-cli. examples/ runs
-# the examples. docs/, .claude/ and Markdown files select nothing. Any other path
+# the examples. docs/, .claude/, Markdown files, LICENSE* and .gitignore select
+# nothing. Any other path
 # (Cargo.toml, Cargo.lock, justfile, .just/, .github/, ...) selects the full suite.
 set -euo pipefail
 
@@ -34,7 +35,7 @@ while IFS= read -r f; do
 		wscript-cli/* | tests/*) pkgs+=(wscript-cli) ;;
 		benchmarks/*) pkgs+=(wscript-benchmarks) ;;
 		examples/*) examples=1 ;;
-		docs/* | .claude/* | *.md) ;;
+		docs/* | .claude/* | *.md | LICENSE* | .gitignore) ;;
 		*) full "$f is outside every crate" ;;
 	esac
 done <<< "$changed"
