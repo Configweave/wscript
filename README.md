@@ -110,3 +110,9 @@ The version is the bump implied by the conventional commits since the last `v*`
 tag. A push with neither trailer runs the checks and stops. `just release-stamp
 <version>` is the manifest edit CI makes before building, if you want to
 reproduce a release build locally.
+
+## License
+
+wscript is licensed under the MIT License. See [LICENSE](LICENSE) for the full
+text. The license is set as `license = "MIT"` in `[workspace.package]` in
+`Cargo.toml`.
